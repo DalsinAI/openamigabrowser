@@ -1,0 +1,2341 @@
+diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
+index 0e7fe5b58..bd4af3836 100644
+--- a/Source/JavaScriptCore/CMakeLists.txt
++++ b/Source/JavaScriptCore/CMakeLists.txt
+@@ -350,11 +350,21 @@ add_custom_command(
+     COMMAND ${Ruby_EXECUTABLE} ${JAVASCRIPTCORE_DIR}/offlineasm/generate_settings_extractor.rb -I${JavaScriptCore_DERIVED_SOURCES_DIR}/ ${OFFLINE_ASM_INCLUDE_DIRS} ${JAVASCRIPTCORE_DIR}/llint/LowLevelInterpreter.asm ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntDesiredSettings.h ${OFFLINE_ASM_BACKEND} ${OFFLINE_ASM_ARGS}
+     VERBATIM)
+ 
++if (WTF_OS_AMIGA)
++    # collect-aros emits a relocatable module and discards the data-only magic
++    # table that OfflineASM scans after linking. The pre-link object contains
++    # the exact target ABI data and preserves the table, so scan it directly.
++    set(LLINT_SETTINGS_EXTRACTOR_FILE
++        ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/LLIntSettingsExtractor.dir/llint/LLIntSettingsExtractor.cpp${CMAKE_CXX_OUTPUT_EXTENSION})
++else ()
++    set(LLINT_SETTINGS_EXTRACTOR_FILE $<TARGET_FILE:LLIntSettingsExtractor>)
++endif ()
++
+ add_custom_command(
+     OUTPUT ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntDesiredOffsets.h
+     MAIN_DEPENDENCY ${JAVASCRIPTCORE_DIR}/offlineasm/generate_offset_extractor.rb
+     DEPENDS LLIntSettingsExtractor ${LLINT_ASM} ${OFFLINE_ASM} ${JavaScriptCore_DERIVED_SOURCES_DIR}/InitBytecodes.asm ${JavaScriptCore_DERIVED_SOURCES_DIR}/AirOpcode.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/WasmOps.h
+-    COMMAND ${Ruby_EXECUTABLE} ${JAVASCRIPTCORE_DIR}/offlineasm/generate_offset_extractor.rb -I${JavaScriptCore_DERIVED_SOURCES_DIR}/ ${OFFLINE_ASM_INCLUDE_DIRS} ${JAVASCRIPTCORE_DIR}/llint/LowLevelInterpreter.asm $<TARGET_FILE:LLIntSettingsExtractor> ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntDesiredOffsets.h ${OFFLINE_ASM_BACKEND} ${BUILD_VARIANTS} ${OFFLINE_ASM_ARGS}
++    COMMAND ${Ruby_EXECUTABLE} ${JAVASCRIPTCORE_DIR}/offlineasm/generate_offset_extractor.rb -I${JavaScriptCore_DERIVED_SOURCES_DIR}/ ${OFFLINE_ASM_INCLUDE_DIRS} ${JAVASCRIPTCORE_DIR}/llint/LowLevelInterpreter.asm ${LLINT_SETTINGS_EXTRACTOR_FILE} ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntDesiredOffsets.h ${OFFLINE_ASM_BACKEND} ${BUILD_VARIANTS} ${OFFLINE_ASM_ARGS}
+     VERBATIM)
+ 
+ # JSCBuiltins
+@@ -482,11 +492,18 @@ WEBKIT_EXECUTABLE(LLIntOffsetsExtractor)
+ # after every asm.rb run.
+ set(LLIntOutput LLIntAssembly.h)
+ 
++if (WTF_OS_AMIGA)
++    set(LLINT_OFFSETS_EXTRACTOR_FILE
++        ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/LLIntOffsetsExtractor.dir/llint/LLIntOffsetsExtractor.cpp${CMAKE_CXX_OUTPUT_EXTENSION})
++else ()
++    set(LLINT_OFFSETS_EXTRACTOR_FILE $<TARGET_FILE:LLIntOffsetsExtractor>)
++endif ()
++
+ add_custom_command(
+     OUTPUT ${JavaScriptCore_DERIVED_SOURCES_DIR}/${LLIntOutput}
+     MAIN_DEPENDENCY ${JAVASCRIPTCORE_DIR}/offlineasm/asm.rb
+     DEPENDS LLIntOffsetsExtractor ${LLINT_ASM} ${OFFLINE_ASM} ${JavaScriptCore_DERIVED_SOURCES_DIR}/InitBytecodes.asm
+-    COMMAND ${CMAKE_COMMAND} -E env CMAKE_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID} GCC_OFFLINEASM_SOURCE_MAP=${GCC_OFFLINEASM_SOURCE_MAP} ${Ruby_EXECUTABLE} ${JAVASCRIPTCORE_DIR}/offlineasm/asm.rb -I${JavaScriptCore_DERIVED_SOURCES_DIR}/ ${OFFLINE_ASM_INCLUDE_DIRS} ${JAVASCRIPTCORE_DIR}/llint/LowLevelInterpreter.asm $<TARGET_FILE:LLIntOffsetsExtractor> ${JavaScriptCore_DERIVED_SOURCES_DIR}/${LLIntOutput} ${BUILD_VARIANTS} ${OFFLINE_ASM_ARGS} ${OFFLINE_ASM_FORMAT_ARGS}
++    COMMAND ${CMAKE_COMMAND} -E env CMAKE_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID} GCC_OFFLINEASM_SOURCE_MAP=${GCC_OFFLINEASM_SOURCE_MAP} ${Ruby_EXECUTABLE} ${JAVASCRIPTCORE_DIR}/offlineasm/asm.rb -I${JavaScriptCore_DERIVED_SOURCES_DIR}/ ${OFFLINE_ASM_INCLUDE_DIRS} ${JAVASCRIPTCORE_DIR}/llint/LowLevelInterpreter.asm ${LLINT_OFFSETS_EXTRACTOR_FILE} ${JavaScriptCore_DERIVED_SOURCES_DIR}/${LLIntOutput} ${BUILD_VARIANTS} ${OFFLINE_ASM_ARGS} ${OFFLINE_ASM_FORMAT_ARGS}
+     COMMAND ${CMAKE_COMMAND} -E touch_nocreate ${JavaScriptCore_DERIVED_SOURCES_DIR}/${LLIntOutput}
+     WORKING_DIRECTORY ${JavaScriptCore_DERIVED_SOURCES_DIR}
+     VERBATIM)
+diff --git a/Source/JavaScriptCore/heap/StrongBlock.h b/Source/JavaScriptCore/heap/StrongBlock.h
+index bb2e21c15..792716943 100644
+--- a/Source/JavaScriptCore/heap/StrongBlock.h
++++ b/Source/JavaScriptCore/heap/StrongBlock.h
+@@ -56,7 +56,7 @@ public:
+ 
+     using BlockList = SentinelLinkedList<BlockListNode, BasicRawSentinelNode<BlockListNode>>;
+ 
+-    struct Header {
++    struct alignas(sizeof(JSValue)) Header {
+         uint16_t m_usedCount { 0 };
+         // The used count at or below which a free must notify the owning
+         // StrongSet. Zero means "notify only on empty".
+diff --git a/Source/JavaScriptCore/interpreter/CallFrame.h b/Source/JavaScriptCore/interpreter/CallFrame.h
+index 8111a82c6..0d6602322 100644
+--- a/Source/JavaScriptCore/interpreter/CallFrame.h
++++ b/Source/JavaScriptCore/interpreter/CallFrame.h
+@@ -202,7 +202,7 @@ using JSInstruction = BaseInstruction<JSOpcodeTraits>;
+         CalleeBits callee() const { return CalleeBits(this[static_cast<int>(CallFrameSlot::callee)].unboxedInt64()); }
+         SUPPRESS_ASAN CalleeBits unsafeCallee() const { return CalleeBits(this[static_cast<int>(CallFrameSlot::callee)].asanUnsafeUnboxedInt64()); }
+         CodeBlock* codeBlock() const;
+-        CodeBlock** addressOfCodeBlock() const { return std::bit_cast<CodeBlock**>(this + static_cast<int>(CallFrameSlot::codeBlock)); }
++        CodeBlock** addressOfCodeBlock() const { return std::bit_cast<CodeBlock**>(std::bit_cast<char*>(this + static_cast<int>(CallFrameSlot::codeBlock)) + LowWordOffset); }
+         inline SUPPRESS_ASAN CodeBlock* unsafeCodeBlock() const;
+         inline JSScope* scope(int scopeRegisterOffset) const;
+ 
+diff --git a/Source/JavaScriptCore/interpreter/Register.h b/Source/JavaScriptCore/interpreter/Register.h
+index 78b8a4a36..629db4582 100644
+--- a/Source/JavaScriptCore/interpreter/Register.h
++++ b/Source/JavaScriptCore/interpreter/Register.h
+@@ -37,8 +37,13 @@ namespace JSC {
+ 
+ // A Register is 64 bits wide, but a few call frame slots pack two independent 32-bit values
+ // into one, such as argumentCountIncludingThis together with the CallSiteIndex.
++#if CPU(BIG_ENDIAN) && CPU(ADDRESS32)
++static constexpr ptrdiff_t LowWordOffset = 4;
++static constexpr ptrdiff_t HighWordOffset = 0;
++#else
+ static constexpr ptrdiff_t LowWordOffset = 0;
+ static constexpr ptrdiff_t HighWordOffset = 4;
++#endif
+ 
+     class CallFrame;
+     class CodeBlock;
+@@ -95,14 +100,31 @@ static constexpr ptrdiff_t HighWordOffset = 4;
+     private:
+         union {
+             EncodedJSValue value;
++#if CPU(BIG_ENDIAN) && CPU(ADDRESS32)
++            // Pointers live in the low word, as in the 64-bit value encoding.
++            struct {
++                int32_t unusedHighWordOfCallFrame;
++                CallFrame* callFrame;
++            };
++            struct {
++                int32_t unusedHighWordOfCodeBlock;
++                CodeBlock* codeBlock;
++            };
++#else
+             CallFrame* callFrame;
+             CodeBlock* codeBlock;
++#endif
+             EncodedValueDescriptor encodedValue;
+             double number;
+             int64_t integer;
+             struct {
++#if CPU(BIG_ENDIAN)
++                int32_t highWord;
++                int32_t lowWord;
++#else
+                 int32_t lowWord;
+                 int32_t highWord;
++#endif
+             } words;
+         } u;
+     };
+diff --git a/Source/JavaScriptCore/jit/SIMDInfo.h b/Source/JavaScriptCore/jit/SIMDInfo.h
+index ae015986d..0b64a22cd 100644
+--- a/Source/JavaScriptCore/jit/SIMDInfo.h
++++ b/Source/JavaScriptCore/jit/SIMDInfo.h
+@@ -254,11 +254,18 @@ constexpr unsigned elementByteSize(SIMDLane simdLane)
+     RELEASE_ASSERT_NOT_REACHED();
+ }
+ 
++#if OS(AMIGAOS3)
++// Amiga hunk objects align statics to at most 8 bytes; nothing here does SIMD.
++#define JSC_V128_STATIC_ALIGN alignas(8)
++#else
++#define JSC_V128_STATIC_ALIGN alignas(16)
++#endif
++
+ inline const v128_t* vectorBitmaskTower(SIMDLane lane)
+ {
+-    alignas(16) static constexpr v128_t i32x4 = v128_t::fromU32x4(1, 2, 4, 8);
+-    alignas(16) static constexpr v128_t i16x8 = v128_t::fromU16x8(1, 2, 4, 8, 16, 32, 64, 128);
+-    alignas(16) static constexpr v128_t i8x16 = v128_t::fromU8x16(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128);
++    JSC_V128_STATIC_ALIGN static constexpr v128_t i32x4 = v128_t::fromU32x4(1, 2, 4, 8);
++    JSC_V128_STATIC_ALIGN static constexpr v128_t i16x8 = v128_t::fromU16x8(1, 2, 4, 8, 16, 32, 64, 128);
++    JSC_V128_STATIC_ALIGN static constexpr v128_t i8x16 = v128_t::fromU8x16(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128);
+     switch (lane) {
+     case SIMDLane::i32x4:
+         return &i32x4;
+diff --git a/Source/JavaScriptCore/jsc.cpp b/Source/JavaScriptCore/jsc.cpp
+index 7dc7bd145..2655a4508 100644
+--- a/Source/JavaScriptCore/jsc.cpp
++++ b/Source/JavaScriptCore/jsc.cpp
+@@ -3801,6 +3801,13 @@ int main(int argc, char** argv)
+         WTFLogAlways("Locale not supported by C library.\n\tUsing the fallback 'C' locale.");
+ #endif
+ 
++#if OS(AMIGAOS3)
++    // AmigaOS 3 shells cannot redirect stderr; JSC_STDERR_TO_STDOUT (an ENV:
++    // variable) sends errors to stdout so they reach a redirected log.
++    if (getenv("JSC_STDERR_TO_STDOUT"))
++        dup2(1, 2);
++#endif
++
+     // Need to initialize WTF before we start any threads. Cannot initialize JSC
+     // yet, since that would do somethings that we'd like to defer until after we
+     // have a chance to parse options.
+diff --git a/Source/JavaScriptCore/llint/LLIntData.cpp b/Source/JavaScriptCore/llint/LLIntData.cpp
+index b264cb76d..a3b1d1a2e 100644
+--- a/Source/JavaScriptCore/llint/LLIntData.cpp
++++ b/Source/JavaScriptCore/llint/LLIntData.cpp
+@@ -56,8 +56,13 @@ namespace LLInt {
+ #else
+ #define LLINT_OPCODE_CONFIG_SECTION
+ #endif
++#if OS(AMIGAOS3)
++// Amiga hunk objects align to at most 8 bytes; nothing is page-protected here.
++alignas(8) uint8_t os_script_config_storage[OpcodeConfigSizeToProtect];
++#else
+ alignas(CeilingOnPageSize) uint8_t LLINT_OPCODE_CONFIG_SECTION os_script_config_storage[OpcodeConfigSizeToProtect];
+ #endif
++#endif
+ 
+ static_assert(sizeof(OpcodeConfig) <= OpcodeConfigSizeToProtect);
+ 
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+index 68524de7a..dec4bf9fb 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+@@ -1089,7 +1089,7 @@ macro getFrameRegisterSizeForCodeBlock(codeBlock, size)
+ end
+ 
+ macro restoreStackPointerAfterCall()
+-    loadp CodeBlock[cfr], t2
++    loadp CodeBlock + LowWordOffset[cfr], t2
+     getFrameRegisterSizeForCodeBlock(t2, t2)
+     if ARM64 or ARM64E
+         subp cfr, t2, sp
+@@ -1183,7 +1183,7 @@ macro callTargetFunction(opcodeName, size, opcodeStruct, dispatchAfterCall, valu
+ end
+ 
+ macro prepareForRegularCall(temp1, temp2, temp3, temp4, storeCodeBlock)
+-    storeCodeBlock(CodeBlock - CallerFrameAndPCSize[sp])
++    storeCodeBlock(CodeBlock + LowWordOffset - CallerFrameAndPCSize[sp])
+ end
+ 
+ macro invokeForRegularCall(opcodeName, size, opcodeStruct, valueProfileName, dstVirtualRegister, dispatch, callee, maybeOldCFR, callPtrTag)
+@@ -1204,7 +1204,7 @@ macro prepareForTailCall(temp1, temp2, temp3, temp4, storeCodeBlock)
+     restoreCalleeSavesUsedByLLInt()
+ 
+     loadi LowWordOffset + ArgumentCountIncludingThis[cfr], temp2
+-    loadp CodeBlock[cfr], temp1
++    loadp CodeBlock + LowWordOffset[cfr], temp1
+     loadi CodeBlock::m_numParameters[temp1], temp1
+     bilteq temp1, temp2, .noArityFixup
+     move temp1, temp2
+@@ -1256,7 +1256,7 @@ macro prepareForTailCall(temp1, temp2, temp3, temp4, storeCodeBlock)
+ 
+     move temp1, sp
+ 
+-    storeCodeBlock(CodeBlock - PrologueStackPointerDelta[sp])
++    storeCodeBlock(CodeBlock + LowWordOffset - PrologueStackPointerDelta[sp])
+ end
+ 
+ macro invokeForTailCall(opcodeName, size, opcodeStruct, valueProfileName, dstVirtualRegister, dispatch, callee, maybeOldCFR, callPtrTag)
+@@ -1433,14 +1433,14 @@ macro notifyWrite(set, scratch, slow)
+ end
+ 
+ macro varReadOnlyCheck(slowPath, scratch)
+-    loadp CodeBlock[cfr], scratch
++    loadp CodeBlock + LowWordOffset[cfr], scratch
+     loadp CodeBlock::m_globalObject[scratch], scratch
+     loadp JSGlobalObject::m_varReadOnlyWatchpointSet[scratch], scratch
+     bbeq WatchpointSet::m_state[scratch], IsInvalidated, slowPath
+ end
+ 
+ macro checkSwitchToJIT(increment, action)
+-    loadp CodeBlock[cfr], t0
++    loadp CodeBlock + LowWordOffset[cfr], t0
+     loadp CodeBlock::m_unlinkedCode[t0], t0
+     baddis increment, (UnlinkedCodeBlock::m_llintExecuteCounter + BaselineExecutionCounter::m_counter)[t0], .continue
+     action()
+@@ -1500,7 +1500,7 @@ macro prologue(osrSlowPath, traceSlowPath)
+         callSlowPath(traceSlowPath)
+         addp maxFrameExtentForSlowPathCall, sp
+     end
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     if not C_LOOP
+         loadp CodeBlock::m_unlinkedCode[t1], t0
+         baddis 5, (UnlinkedCodeBlock::m_llintExecuteCounter + BaselineExecutionCounter::m_counter)[t0], .continue
+@@ -1527,7 +1527,7 @@ macro prologue(osrSlowPath, traceSlowPath)
+             jmp r0, JSEntryPtrTag
+         end
+     .recover:
+-        loadp CodeBlock[cfr], t1
++        loadp CodeBlock + LowWordOffset[cfr], t1
+     .continue:
+     end
+ 
+@@ -1579,7 +1579,7 @@ end
+ .stackHeightOKGetCodeBlock:
+     # Stack check slow path returned that the stack was ok.
+     # Since they were clobbered, need to get CodeBlock and new sp
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     getFrameRegisterSizeForCodeBlock(t1, t0)
+     subp cfr, t0, t0
+ 
+@@ -2489,7 +2489,7 @@ end)
+ 
+ 
+ macro checkTraps(dispatch)
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     loadp CodeBlock::m_vm[t1], t1
+     loadi VM::m_threadContext+VMThreadContext::m_traps+VMTraps::m_trapBits[t1], t0
+     andi VMTrapsAsyncEvents, t0
+@@ -2510,7 +2510,7 @@ end)
+ 
+ # Returns the packet pointer in t0.
+ macro acquireShadowChickenPacket(slow)
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     loadp CodeBlock::m_vm[t1], t1
+     loadp VM::m_shadowChicken[t1], t2
+     loadp ShadowChicken::m_logCursor[t2], t0
+@@ -2561,7 +2561,7 @@ commonCallOp(op_call_ignore_result, OpCallIgnoreResult, prepareForRegularCall, i
+ end, dispatchAfterRegularCallIgnoreResult)
+ 
+ macro branchIfException(exceptionTarget)
+-    loadp CodeBlock[cfr], t3
++    loadp CodeBlock + LowWordOffset[cfr], t3
+     loadp CodeBlock::m_vm[t3], t3
+     btpz VM::m_exception[t3], .noException
+     jmp exceptionTarget
+@@ -2669,7 +2669,7 @@ end)
+ 
+ 
+ llintOp(op_debug, OpDebug, macro (unused, unused, dispatch)
+-    loadp CodeBlock[cfr], t0
++    loadp CodeBlock + LowWordOffset[cfr], t0
+     loadi CodeBlock::m_debuggerRequests[t0], t0
+     btiz t0, .opDebugDone
+     callSlowPath(_llint_slow_path_debug)
+@@ -2739,7 +2739,7 @@ macro virtualThunkFor(offsetOfJITCodeWithArityCheck, offsetOfCodeBlock, internal
+     bbneq JSCell::m_type[t5], FunctionExecutableType, .callCode
+     loadp offsetOfCodeBlock[t5], t0
+ .callCode:
+-    storep t0, CodeBlock - PrologueStackPointerDelta[sp]
++    storep t0, CodeBlock + LowWordOffset - PrologueStackPointerDelta[sp]
+     jmp t1, JSEntryPtrTag
+ .notJSFunction:
+     bbneq JSCell::m_type[t0], InternalFunctionType, slowCase
+@@ -2792,7 +2792,7 @@ op(llint_polymorphic_normal_call_trampoline, macro ()
+ .found:
+     loadp CallSlot::m_target[t5], t1
+     loadp CallSlot::m_codeBlock[t5], t5
+-    storep t5, CodeBlock - PrologueStackPointerDelta[sp]
++    storep t5, CodeBlock + LowWordOffset - PrologueStackPointerDelta[sp]
+     jmp t1, JSEntryPtrTag
+ 
+ .slowCase:
+@@ -2822,7 +2822,7 @@ op(llint_polymorphic_closure_call_trampoline, macro ()
+ .found:
+     loadp CallSlot::m_target[t5], t1
+     loadp CallSlot::m_codeBlock[t5], t5
+-    storep t5, CodeBlock - PrologueStackPointerDelta[sp]
++    storep t5, CodeBlock + LowWordOffset - PrologueStackPointerDelta[sp]
+     jmp t1, JSEntryPtrTag
+ 
+ .slowCase:
+@@ -2832,7 +2832,7 @@ end)
+ if JIT
+     macro loadBaselineJITConstantPool()
+         # Baseline uses LLInt's PB register for its JIT constant pool.
+-        loadp CodeBlock[cfr], PB
++        loadp CodeBlock + LowWordOffset[cfr], PB
+         loadp CodeBlock::m_jitData[PB], PB
+     end
+ 
+@@ -2965,7 +2965,7 @@ end
+ 
+ macro updateUnaryArithProfile(size, opcodeStruct, type, scratch1, scratch2)
+     getu(size, opcodeStruct, m_profileIndex, scratch1)
+-    loadp CodeBlock[cfr], scratch2
++    loadp CodeBlock + LowWordOffset[cfr], scratch2
+     loadp CodeBlock::m_unlinkedCode[scratch2], scratch2
+     loadp UnlinkedCodeBlock::m_unaryArithProfiles + UnaryArithProfileFixedVector::m_storage[scratch2], scratch2
+     orh type, (constexpr (UnaryArithProfileFixedVector::Storage::offsetOfData())) + UnaryArithProfile::m_bits[scratch2, scratch1, 2]
+@@ -2973,7 +2973,7 @@ end
+ 
+ macro updateBinaryArithProfile(size, opcodeStruct, type, scratch1, scratch2)
+     getu(size, opcodeStruct, m_profileIndex, scratch1)
+-    loadp CodeBlock[cfr], scratch2
++    loadp CodeBlock + LowWordOffset[cfr], scratch2
+     loadp CodeBlock::m_unlinkedCode[scratch2], scratch2
+     loadp UnlinkedCodeBlock::m_binaryArithProfiles + BinaryArithProfileFixedVector::m_storage[scratch2], scratch2
+     orh type, (constexpr (BinaryArithProfileFixedVector::Storage::offsetOfData())) + BinaryArithProfile::m_bits[scratch2, scratch1, 2]
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+index 0085e39c6..3c3934af8 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+@@ -85,7 +85,7 @@ macro dispatchAfterRegularCall(size, opcodeStruct, valueProfileName, dstVirtualR
+     loadPC()
+     if C_LOOP
+         # On non C_LOOP builds, CSR restore takes care of this.
+-        loadp CodeBlock[cfr], PB
++        loadp CodeBlock + LowWordOffset[cfr], PB
+         loadp CodeBlock::m_instructionsRawPointer[PB], PB
+     end
+     get(size, opcodeStruct, dstVirtualRegister, t1)
+@@ -98,7 +98,7 @@ macro dispatchAfterTailCall(size, opcodeStruct, valueProfileName, dstVirtualRegi
+     loadPC()
+     if C_LOOP
+         # On non C_LOOP builds, CSR restore takes care of this.
+-        loadp CodeBlock[cfr], PB
++        loadp CodeBlock + LowWordOffset[cfr], PB
+         loadp CodeBlock::m_instructionsRawPointer[PB], PB
+     end
+     get(size, opcodeStruct, dstVirtualRegister, t1)
+@@ -111,7 +111,7 @@ macro dispatchAfterRegularCallIgnoreResult(size, opcodeStruct, valueProfileName,
+     loadPC()
+     if C_LOOP
+         # On non C_LOOP builds, CSR restore takes care of this.
+-        loadp CodeBlock[cfr], PB
++        loadp CodeBlock + LowWordOffset[cfr], PB
+         loadp CodeBlock::m_instructionsRawPointer[PB], PB
+     end
+     dispatch()
+@@ -394,7 +394,7 @@ end)
+ 
+ op(llint_get_host_call_return_value, macro ()
+     functionPrologue()
+-    loadp Callee[cfr], t0
++    loadp Callee + LowWordOffset[cfr], t0
+     convertJSCalleeToVM(t0)
+     loadq VM::encodedHostCallReturnValue[t0], t0
+     functionEpilogue()
+@@ -566,19 +566,19 @@ end
+ # Index and value must be different registers. Index may be clobbered.
+ macro loadConstant(size, index, value)
+     macro loadNarrow()
+-        loadp CodeBlock[cfr], value
++        loadp CodeBlock + LowWordOffset[cfr], value
+         loadp CodeBlock::m_constantRegisters + VectorBufferOffset[value], value
+         loadq -(FirstConstantRegisterIndexNarrow * 8)[value, index, 8], value
+     end
+ 
+     macro loadWide16()
+-        loadp CodeBlock[cfr], value
++        loadp CodeBlock + LowWordOffset[cfr], value
+         loadp CodeBlock::m_constantRegisters + VectorBufferOffset[value], value
+         loadq -(FirstConstantRegisterIndexWide16 * 8)[value, index, 8], value
+     end
+ 
+     macro loadWide32()
+-        loadp CodeBlock[cfr], value
++        loadp CodeBlock + LowWordOffset[cfr], value
+         loadp CodeBlock::m_constantRegisters + VectorBufferOffset[value], value
+         subp FirstConstantRegisterIndexWide32, index
+         loadq [value, index, 8], value
+@@ -682,7 +682,7 @@ end
+ macro writeBarrierOnGlobalObject(size, get, valueFieldName)
+     writeBarrierOnGlobal(size, get, valueFieldName,
+         macro(registerToStoreGlobal)
+-            loadp CodeBlock[cfr], registerToStoreGlobal
++            loadp CodeBlock + LowWordOffset[cfr], registerToStoreGlobal
+             loadp CodeBlock::m_globalObject[registerToStoreGlobal], registerToStoreGlobal
+         end)
+ end
+@@ -690,7 +690,7 @@ end
+ macro writeBarrierOnGlobalLexicalEnvironment(size, get, valueFieldName)
+     writeBarrierOnGlobal(size, get, valueFieldName,
+         macro(registerToStoreGlobal)
+-            loadp CodeBlock[cfr], registerToStoreGlobal
++            loadp CodeBlock + LowWordOffset[cfr], registerToStoreGlobal
+             loadp CodeBlock::m_globalObject[registerToStoreGlobal], registerToStoreGlobal
+             loadp JSGlobalObject::m_globalLexicalEnvironment[registerToStoreGlobal], registerToStoreGlobal
+         end)
+@@ -822,7 +822,7 @@ macro functionArityCheck(opcodeName, doneLabel)
+ 
+ .continue:
+     # Reload CodeBlock and reset PC, since the slow_path clobbered them.
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     loadp CodeBlock::m_instructionsRawPointer[t1], PB
+     move 0, PC
+     jmp doneLabel
+@@ -833,7 +833,7 @@ end
+ _llint_op_enter:
+     traceExecution()
+     checkStackPointerAlignment(t2, 0xdead00e1)
+-    loadp CodeBlock[cfr], t2                // t2<CodeBlock> = cfr.CodeBlock
++    loadp CodeBlock + LowWordOffset[cfr], t2                // t2<CodeBlock> = cfr.CodeBlock
+     loadi CodeBlock::m_numVars[t2], t2      // t2<size_t> = t2<CodeBlock>.m_numVars
+     subq CalleeSaveSpaceAsVirtualRegisters, t2
+     move cfr, t1
+@@ -847,7 +847,7 @@ _llint_op_enter:
+     addq 1, t2
+     btqnz t2, .opEnterLoop
+ .opEnterDone:
+-    loadp CodeBlock[cfr], t2
++    loadp CodeBlock + LowWordOffset[cfr], t2
+     loadi CodeBlock::m_numberOfArgumentsToSkipAndCouldBeTainted[t2], t1
+     btis t1, .opEnterSlow
+     loadp CodeBlock::m_vm[t2], t0
+@@ -855,7 +855,7 @@ _llint_op_enter:
+     loadi (constexpr (VM::offsetOfHeapBarrierThreshold()))[t0], t0
+     bibeq t1, t0, .opEnterSlow
+     loadis CodeBlock::m_scopeRegister[t2], t1
+-    loadp Callee[cfr], t0
++    loadp Callee + LowWordOffset[cfr], t0
+     loadp JSCallee::m_scope[t0], t0
+     storeq t0, [cfr, t1, 8]
+ 
+@@ -890,7 +890,7 @@ end)
+ 
+ 
+ llintOpWithReturn(op_get_scope, OpGetScope, macro (size, get, dispatch, return)
+-    loadp Callee[cfr], t0
++    loadp Callee + LowWordOffset[cfr], t0
+     loadp JSCallee::m_scope[t0], t0
+     return(t0)
+ end)
+@@ -972,7 +972,7 @@ macro equalNullComparisonOp(opcodeName, opcodeStruct, fn)
+         jmp .done
+     .masqueradesAsUndefined:
+         loadStructureWithScratch(t0, t2, t1)
+-        loadp CodeBlock[cfr], t0
++        loadp CodeBlock + LowWordOffset[cfr], t0
+         loadp CodeBlock::m_globalObject[t0], t0
+         cpeq Structure::m_realm[t2], t0, t0
+         jmp .done
+@@ -1499,7 +1499,7 @@ llintOpWithReturn(op_typeof_is_undefined, OpTypeofIsUndefined, macro (size, get,
+     return(t1)
+ .masqueradesAsUndefined:
+     loadStructureWithScratch(t0, t3, t1)
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     loadp CodeBlock::m_globalObject[t1], t1
+     cpeq Structure::m_realm[t3], t1, t0
+     orq ValueFalse, t0
+@@ -2184,7 +2184,7 @@ end
+ equalNullJumpOp(jeq_null, OpJeqNull,
+     macro (structure, value, target) 
+         btbz value, MasqueradesAsUndefined, .notMasqueradesAsUndefined
+-        loadp CodeBlock[cfr], t0
++        loadp CodeBlock + LowWordOffset[cfr], t0
+         loadp CodeBlock::m_globalObject[t0], t0
+         bpeq Structure::m_realm[structure], t0, target
+ .notMasqueradesAsUndefined:
+@@ -2195,7 +2195,7 @@ equalNullJumpOp(jeq_null, OpJeqNull,
+ equalNullJumpOp(jneq_null, OpJneqNull,
+     macro (structure, value, target) 
+         btbz value, MasqueradesAsUndefined, target
+-        loadp CodeBlock[cfr], t0
++        loadp CodeBlock + LowWordOffset[cfr], t0
+         loadp CodeBlock::m_globalObject[t0], t0
+         bpneq Structure::m_realm[structure], t0, target
+     end,
+@@ -2389,7 +2389,7 @@ llintOpWithJump(op_switch_imm, OpSwitchImm, macro (size, get, jump, dispatch)
+     get(m_scrutinee, t2)
+     getu(size, OpSwitchImm, m_tableIndex, t3)
+     loadConstantOrVariable(size, t2, t1)
+-    loadp CodeBlock[cfr], t2
++    loadp CodeBlock + LowWordOffset[cfr], t2
+     loadp CodeBlock::m_unlinkedCode[t2], t2
+     loadp UnlinkedCodeBlock::m_rareData[t2], t2
+     muli sizeof UnlinkedSimpleJumpTable, t3
+@@ -2426,7 +2426,7 @@ llintOpWithJump(op_switch_char, OpSwitchChar, macro (size, get, jump, dispatch)
+     get(m_scrutinee, t2)
+     getu(size, OpSwitchChar, m_tableIndex, t3)
+     loadConstantOrVariable(size, t2, t1)
+-    loadp CodeBlock[cfr], t2
++    loadp CodeBlock + LowWordOffset[cfr], t2
+     loadp CodeBlock::m_unlinkedCode[t2], t2
+     loadp UnlinkedCodeBlock::m_rareData[t2], t2
+     muli sizeof UnlinkedSimpleJumpTable, t3
+@@ -2680,7 +2680,7 @@ commonOp(llint_op_catch, macro () end, macro (size)
+     storep 0, VM::callFrameForCatch[t3]
+     restoreStackPointerAfterCall()
+ 
+-    loadp CodeBlock[cfr], PB
++    loadp CodeBlock + LowWordOffset[cfr], PB
+     loadp CodeBlock::m_metadata[PB], metadataTable
+     loadp CodeBlock::m_instructionsRawPointer[PB], PB
+     loadp VM::targetInterpreterPCForThrow[t3], PC
+@@ -2734,8 +2734,8 @@ end)
+ 
+ macro nativeCallTrampoline(executableOffsetToFunction)
+     functionPrologue()
+-    storep 0, CodeBlock[cfr]
+-    loadp Callee[cfr], a0
++    storep 0, CodeBlock + LowWordOffset[cfr]
++    loadp Callee + LowWordOffset[cfr], a0
+     loadp JSFunction::m_executableOrRareData[a0], a2
+     btpz a2, (constexpr JSFunction::rareDataTag), .isExecutable
+     loadp (FunctionRareData::m_executable - (constexpr JSFunction::rareDataTag))[a2], a2
+@@ -2754,7 +2754,7 @@ macro nativeCallTrampoline(executableOffsetToFunction)
+         call executableOffsetToFunction[a2], HostFunctionPtrTag
+     end
+ 
+-    loadp Callee[cfr], t3
++    loadp Callee + LowWordOffset[cfr], t3
+     loadp JSCallee::m_scope[t3], t3
+     loadp JSGlobalObject::m_vm[t3], t3
+ 
+@@ -2770,8 +2770,8 @@ end
+ 
+ macro internalFunctionCallTrampoline(offsetOfFunction)
+     functionPrologue()
+-    storep 0, CodeBlock[cfr]
+-    loadp Callee[cfr], a2
++    storep 0, CodeBlock + LowWordOffset[cfr]
++    loadp Callee + LowWordOffset[cfr], a2
+     loadp InternalFunction::m_globalObject[a2], a0
+     loadp JSGlobalObject::m_vm[a0], a1
+     storep cfr, VM::topCallFrame[a1]
+@@ -2786,7 +2786,7 @@ macro internalFunctionCallTrampoline(offsetOfFunction)
+         call offsetOfFunction[a2], HostFunctionPtrTag
+     end
+ 
+-    loadp Callee[cfr], t3
++    loadp Callee + LowWordOffset[cfr], t3
+     loadp InternalFunction::m_globalObject[t3], t3
+     loadp JSGlobalObject::m_vm[t3], t3
+ 
+@@ -2801,7 +2801,7 @@ macro internalFunctionCallTrampoline(offsetOfFunction)
+ end
+ 
+ macro varInjectionCheck(slowPath, scratch)
+-    loadp CodeBlock[cfr], scratch
++    loadp CodeBlock + LowWordOffset[cfr], scratch
+     loadp CodeBlock::m_globalObject[scratch], scratch
+     loadp JSGlobalObject::m_varInjectionWatchpointSet[scratch], scratch
+     bbeq WatchpointSet::m_state[scratch], IsInvalidated, slowPath
+@@ -3150,7 +3150,7 @@ end)
+ 
+ 
+ llintOpWithMetadata(op_profile_type, OpProfileType, macro (size, get, dispatch, metadata, return)
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     loadp CodeBlock::m_vm[t1], t1
+     # t1 is holding the pointer to the typeProfilerLog.
+     loadp VM::m_typeProfilerLog[t1], t1
+@@ -3213,7 +3213,7 @@ llintOpWithMetadata(op_instanceof, OpInstanceof, macro (size, get, dispatch, met
+ 
+     macro overridesHasInstance(hasInstanceField, constructorField, trueLabel)
+         getAndLoadConstantOrVariable(hasInstanceField, t1, t0)
+-        loadp CodeBlock[cfr], t2
++        loadp CodeBlock + LowWordOffset[cfr], t2
+         loadp CodeBlock::m_globalObject[t2], t2
+         loadp JSGlobalObject::m_functionProtoHasInstanceSymbolFunction[t2], t2
+         bqneq t0, t2, trueLabel
+@@ -3369,7 +3369,7 @@ llintOpWithMetadata(op_iterator_next, OpIteratorNext, macro (size, get, dispatch
+ 
+ .iteratorNextForNonCell:
+     loadVariable(get, m_iterator, t0)
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     loadp CodeBlock::m_vm[t1], t1
+     bpneq t0, VM::m_fastArraySentinel[t1], .iteratorNextNotFastArray
+ 
+@@ -3501,7 +3501,7 @@ end)
+ 
+ llintOpWithMetadata(op_iterator_close_check, OpIteratorCloseCheck, macro (size, get, dispatch, metadata, return)
+     loadVariable(get, m_iterator, t0)
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     loadp CodeBlock::m_vm[t1], t2
+     bpneq t0, VM::m_fastArraySentinel[t2], .iteratorCloseCheckNotFastArray
+     metadata(t5, t3)
+@@ -3797,7 +3797,7 @@ llintOp(op_log_shadow_chicken_prologue, OpLogShadowChickenPrologue, macro (size,
+     storep cfr, ShadowChicken::Packet::frame[t0]
+     loadp CallerFrame[cfr], t1
+     storep t1, ShadowChicken::Packet::callerFrame[t0]
+-    loadp Callee[cfr], t1
++    loadp Callee + LowWordOffset[cfr], t1
+     storep t1, ShadowChicken::Packet::callee[t0]
+     loadVariable(get, m_scope, t1)
+     storep t1, ShadowChicken::Packet::scope[t0]
+@@ -3816,7 +3816,7 @@ llintOp(op_log_shadow_chicken_tail, OpLogShadowChickenTail, macro (size, get, di
+     storep t1, ShadowChicken::Packet::thisValue[t0]
+     loadVariable(get, m_scope, t1)
+     storep t1, ShadowChicken::Packet::scope[t0]
+-    loadp CodeBlock[cfr], t1
++    loadp CodeBlock + LowWordOffset[cfr], t1
+     storep t1, ShadowChicken::Packet::codeBlock[t0]
+     storei PC, ShadowChicken::Packet::callSiteIndex[t0]
+     dispatch()
+@@ -3826,7 +3826,7 @@ llintOp(op_log_shadow_chicken_tail, OpLogShadowChickenTail, macro (size, get, di
+ end)
+ 
+ op(fuzzer_return_early_from_loop_hint, macro ()
+-    loadp CodeBlock[cfr], t0
++    loadp CodeBlock + LowWordOffset[cfr], t0
+     loadp CodeBlock::m_globalObject[t0], t0
+     loadp JSGlobalObject::m_globalThis[t0], t0
+     doReturn()
+diff --git a/Source/JavaScriptCore/runtime/AssertInvariants.cpp b/Source/JavaScriptCore/runtime/AssertInvariants.cpp
+index 9f7a41f0e..6d0a5e932 100644
+--- a/Source/JavaScriptCore/runtime/AssertInvariants.cpp
++++ b/Source/JavaScriptCore/runtime/AssertInvariants.cpp
+@@ -62,8 +62,13 @@ void assertInvariants()
+ 
+         static_assert(CallFrame::argumentOffsetIncludingThis(0) == CallFrameSlot::thisArgument);
+ 
++#if CPU(BIG_ENDIAN) && CPU(ADDRESS32)
++        static_assert(HighWordOffset == 0);
++        static_assert(LowWordOffset == 4);
++#else
+         static_assert(HighWordOffset == 4);
+         static_assert(LowWordOffset == 0);
++#endif
+ 
+ #if ENABLE(C_LOOP)
+         ASSERT(CodeBlock::llintBaselineCalleeSaveSpaceAsVirtualRegisters() == 1);
+diff --git a/Source/JavaScriptCore/runtime/EncodedValueDescriptor.h b/Source/JavaScriptCore/runtime/EncodedValueDescriptor.h
+index 841afbbd1..de616d20d 100644
+--- a/Source/JavaScriptCore/runtime/EncodedValueDescriptor.h
++++ b/Source/JavaScriptCore/runtime/EncodedValueDescriptor.h
+@@ -36,7 +36,16 @@ typedef int64_t EncodedJSValue;
+ 
+ union EncodedValueDescriptor {
+     int64_t asInt64;
++#if CPU(BIG_ENDIAN) && CPU(ADDRESS32)
++    // A cell is encoded as the 64-bit integer value of its pointer, so on a
++    // big-endian 32-bit CPU the pointer is the second (low) word.
++    struct {
++        int32_t unusedHighWord;
++        JSCell* ptr;
++    };
++#else
+     JSCell* ptr;
++#endif
+ };
+ 
+ } // namespace JSC
+diff --git a/Source/JavaScriptCore/runtime/JSCJSValue.h b/Source/JavaScriptCore/runtime/JSCJSValue.h
+index 824135a52..0770063e8 100644
+--- a/Source/JavaScriptCore/runtime/JSCJSValue.h
++++ b/Source/JavaScriptCore/runtime/JSCJSValue.h
+@@ -740,6 +740,11 @@ inline double reinterpretInt64ToDouble(int64_t value)
+ 
+ ALWAYS_INLINE JSValue::JSValue(EncodeAsDoubleTag, double d)
+ {
++#if OS(AMIGA)
++    // m68k-aros libstdc++ uses an impure payload for negative quiet NaN.
++    // JavaScript cannot observe NaN payloads, so canonicalize before tagging.
++    d = purifyNaN(d);
++#endif
+     ASSERT(!isImpureNaN(d));
+     u.asInt64 = reinterpretDoubleToInt64(d) + JSValue::DoubleEncodeOffset;
+ }
+diff --git a/Source/JavaScriptCore/runtime/JSCJSValueInlines.h b/Source/JavaScriptCore/runtime/JSCJSValueInlines.h
+index fcf19957f..cd7403569 100644
+--- a/Source/JavaScriptCore/runtime/JSCJSValueInlines.h
++++ b/Source/JavaScriptCore/runtime/JSCJSValueInlines.h
+@@ -45,6 +45,9 @@ namespace JSC {
+ 
+ inline JSValue jsNumber(double d)
+ {
++#if OS(AMIGA)
++    d = purifyNaN(d);
++#endif
+     ASSERT(JSValue(d).isNumber());
+     ASSERT(!isImpureNaN(d));
+     return JSValue(d);
+diff --git a/Source/JavaScriptCore/runtime/LazyPropertyInlines.h b/Source/JavaScriptCore/runtime/LazyPropertyInlines.h
+index df6a20e89..3c615acde 100644
+--- a/Source/JavaScriptCore/runtime/LazyPropertyInlines.h
++++ b/Source/JavaScriptCore/runtime/LazyPropertyInlines.h
+@@ -49,7 +49,8 @@ void LazyProperty<OwnerType, ElementType>::initLater(const Func&)
+     // may be used for things. We address this problem by indirecting through a global const
+     // variable. The "theFunc" variable is guaranteed to be native-aligned, i.e. at least a
+     // multiple of 4.
+-    static constexpr FuncType theFunc = &callFunc<Func>;
++    // m68k gives pointers 2-byte alignment; the tag bits need 4.
++    alignas(4) static constexpr FuncType theFunc = &callFunc<Func>;
+     m_pointer = lazyTag | std::bit_cast<uintptr_t>(&theFunc);
+ }
+ 
+diff --git a/Source/JavaScriptCore/runtime/Options.cpp b/Source/JavaScriptCore/runtime/Options.cpp
+index f548dec9c..3ef49ba59 100644
+--- a/Source/JavaScriptCore/runtime/Options.cpp
++++ b/Source/JavaScriptCore/runtime/Options.cpp
+@@ -233,7 +233,7 @@ std::optional<OptionsStorage::Unsigned> parse(const char* string)
+     return std::nullopt;
+ }
+ 
+-#if CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU)
++#if CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU) || OS(AMIGA)
+ template<>
+ std::optional<OptionsStorage::Size> parse(const char* string)
+ {
+@@ -242,7 +242,7 @@ std::optional<OptionsStorage::Size> parse(const char* string)
+         return value;
+     return std::nullopt;
+ }
+-#endif // CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU)
++#endif // CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU) || OS(AMIGA)
+ 
+ template<>
+ std::optional<OptionsStorage::Double> parse(const char* string)
+diff --git a/Source/JavaScriptCore/runtime/PureNaN.h b/Source/JavaScriptCore/runtime/PureNaN.h
+index f96f45b1b..8eeac735c 100644
+--- a/Source/JavaScriptCore/runtime/PureNaN.h
++++ b/Source/JavaScriptCore/runtime/PureNaN.h
+@@ -90,7 +90,9 @@ inline constexpr bool isImpureNaN(double value)
+ }
+ 
+ static_assert(!isImpureNaN(std::numeric_limits<double>::quiet_NaN()));
++#if !OS(AMIGA)
+ static_assert(!isImpureNaN(-std::numeric_limits<double>::quiet_NaN()));
++#endif
+ static_assert(!isImpureNaN(PNaN));
+ static_assert(!isImpureNaN(-PNaN));
+ 
+diff --git a/Source/JavaScriptCore/runtime/TypeInfoBlob.h b/Source/JavaScriptCore/runtime/TypeInfoBlob.h
+index 71588628f..f49edca49 100644
+--- a/Source/JavaScriptCore/runtime/TypeInfoBlob.h
++++ b/Source/JavaScriptCore/runtime/TypeInfoBlob.h
+@@ -60,7 +60,12 @@ public:
+ 
+     static constexpr uint32_t typeInfoBlob(IndexingType indexingModeIncludingHistory, JSType type, TypeInfo::InlineTypeFlags inlineTypeFlags)
+     {
++        // Must match the byte order of Data::fields when read through Data::word.
++#if CPU(BIG_ENDIAN)
++        return (static_cast<uint32_t>(indexingModeIncludingHistory) << 24) | (static_cast<uint32_t>(type) << 16) | (static_cast<uint32_t>(inlineTypeFlags) << 8) | (static_cast<uint32_t>(CellState::DefinitelyWhite) << 0);
++#else
+         return (static_cast<uint32_t>(indexingModeIncludingHistory) << 0) | (static_cast<uint32_t>(type) << 8) | (static_cast<uint32_t>(inlineTypeFlags) << 16) | (static_cast<uint32_t>(CellState::DefinitelyWhite) << 24);
++#endif
+     }
+ 
+     uint32_t blob() const { return u.word; }
+diff --git a/Source/WTF/wtf/FileSystem.cpp b/Source/WTF/wtf/FileSystem.cpp
+index 7697db3b5..d54ae0af1 100644
+--- a/Source/WTF/wtf/FileSystem.cpp
++++ b/Source/WTF/wtf/FileSystem.cpp
+@@ -42,7 +42,9 @@
+ 
+ #if !OS(WINDOWS)
+ #include <fcntl.h>
++#if HAVE(MMAP)
+ #include <sys/mman.h>
++#endif
+ #include <sys/param.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
+@@ -320,14 +322,26 @@ bool markPurgeable(const String&)
+ 
+ std::optional<MappedFileData> mapFile(const String& filePath, MappedFileMode mode)
+ {
++#if HAVE(MMAP) || OS(WINDOWS) || OS(AMIGA)
+     auto handle = openFile(filePath, FileSystem::FileOpenMode::Read);
+     if (!handle)
+         return { };
+     return handle.map(mode);
++#else
++    UNUSED_PARAM(filePath);
++    UNUSED_PARAM(mode);
++    return std::nullopt;
++#endif
+ }
+ 
+ MappedFileData createMappedFileData(const String& path, size_t bytesSize, FileHandle* outputHandle)
+ {
++#if !HAVE(MMAP) && !OS(WINDOWS)
++    UNUSED_PARAM(path);
++    UNUSED_PARAM(bytesSize);
++    UNUSED_PARAM(outputHandle);
++    return { };
++#else
+     constexpr bool failIfFileExists = true;
+     auto handle = FileSystem::openFile(path, FileSystem::FileOpenMode::ReadWrite, FileSystem::FileAccessPermission::User, { }, failIfFileExists);
+ 
+@@ -368,10 +382,15 @@ MappedFileData createMappedFileData(const String& path, size_t bytesSize, FileHa
+ 
+     succeeded = true;
+     return WTF::move(*mappedFile);
++#endif
+ }
+ 
+ void finalizeMappedFileData(MappedFileData& mappedFileData, size_t bytesSize)
+ {
++#if !HAVE(MMAP) && !OS(WINDOWS)
++    UNUSED_PARAM(mappedFileData);
++    UNUSED_PARAM(bytesSize);
++#else
+     auto* map = mappedFileData.mutableSpan().data();
+ #if OS(WINDOWS)
+     DWORD oldProtection;
+@@ -384,10 +403,18 @@ void finalizeMappedFileData(MappedFileData& mappedFileData, size_t bytesSize)
+     // Flush (asynchronously) to file, turning this into clean memory.
+     msync(map, bytesSize, MS_ASYNC);
+ #endif
++#endif
+ }
+ 
+ MappedFileData mapToFile(const String& path, size_t bytesSize, NOESCAPE const Function<void(const Function<bool(std::span<const uint8_t>)>&)>& apply, FileHandle* outputHandle)
+ {
++#if !HAVE(MMAP) && !OS(WINDOWS)
++    UNUSED_PARAM(path);
++    UNUSED_PARAM(bytesSize);
++    UNUSED_PARAM(apply);
++    UNUSED_PARAM(outputHandle);
++    return { };
++#else
+     auto mappedFile = createMappedFileData(path, bytesSize, outputHandle);
+     if (!mappedFile)
+         return { };
+@@ -402,6 +429,7 @@ MappedFileData mapToFile(const String& path, size_t bytesSize, NOESCAPE const Fu
+     finalizeMappedFileData(mappedFile, bytesSize);
+ 
+     return mappedFile;
++#endif
+ }
+ 
+ static Salt makeSalt()
+@@ -847,6 +875,20 @@ String createTemporaryDirectory()
+     if (ec)
+         return String();
+ 
++#if OS(AMIGA)
++    // AROS does not provide mkdtemp(). Use create_directory(), which gives us
++    // the same atomic create-if-absent property, with a random suffix.
++    for (unsigned attempt = 0; attempt < 128; ++attempt) {
++        auto suffix = cryptographicallyRandomNumber<uint64_t>();
++        auto candidate = std::filesystem::path(tempDir) / std::filesystem::path(std::to_string(suffix));
++        ec.clear();
++        if (std::filesystem::create_directory(candidate, ec))
++            return fromStdFileSystemPath(candidate);
++        if (ec && ec != std::errc::file_exists)
++            return String();
++    }
++    return String();
++#else
+     std::string newTempDirTemplate = tempDir + "XXXXXXXX";
+ 
+     Vector<char> newTempDir(std::span<const char> { newTempDirTemplate });
+@@ -854,6 +896,7 @@ String createTemporaryDirectory()
+         return String();
+ 
+     return stringFromFileSystemRepresentation(newTempDir.span().data());
++#endif
+ }
+ 
+ #endif // !OS(WINDOWS) && !PLATFORM(COCOA)
+diff --git a/Source/WTF/wtf/LazyRef.h b/Source/WTF/wtf/LazyRef.h
+index 6ba4ca7f5..b3345f46a 100644
+--- a/Source/WTF/wtf/LazyRef.h
++++ b/Source/WTF/wtf/LazyRef.h
+@@ -101,7 +101,7 @@ public:
+         // may be used for things. We address this problem by indirecting through a global const
+         // variable. The "theFunc" variable is guaranteed to be native-aligned, i.e. at least a
+         // multiple of 4.
+-        static constexpr FuncType theFunc = &callFunc<Func>;
++        alignas(4) static constexpr FuncType theFunc = &callFunc<Func>; // m68k: pointers are only 2-aligned
+         m_pointer = lazyTag | std::bit_cast<uintptr_t>(&theFunc);
+     }
+ 
+diff --git a/Source/WTF/wtf/LazyUniqueRef.h b/Source/WTF/wtf/LazyUniqueRef.h
+index d9e10c7d5..68e9946eb 100644
+--- a/Source/WTF/wtf/LazyUniqueRef.h
++++ b/Source/WTF/wtf/LazyUniqueRef.h
+@@ -94,21 +94,30 @@ public:
+     template<typename Func>
+     void initLater(const Func&)
+     {
++#if CPU(M68K)
++        // The m68k ABI gives ordinary types 2-byte alignment, while C++ new
++        // on our GCC 16 AROS target guarantees 4-byte allocation alignment.
++        // LazyUniqueRef needs two free low bits for its pointer tags.
++        static_assert(__STDCPP_DEFAULT_NEW_ALIGNMENT__ >= 4);
++#else
+         static_assert(alignof(T) >= 4);
++#endif
+         static_assert(isStatelessLambda<Func>());
+         // Logically we just want to stuff the function pointer into m_pointer, but then we'd be sad
+         // because a function pointer is not guaranteed to be a multiple of anything. The tag bits
+         // may be used for things. We address this problem by indirecting through a global const
+         // variable. The "theFunc" variable is guaranteed to be native-aligned, i.e. at least a
+         // multiple of 4.
+-        static constexpr FuncType theFunc = &callFunc<Func>;
++        alignas(4) static constexpr FuncType theFunc = &callFunc<Func>;
+         m_pointer = lazyTag | std::bit_cast<uintptr_t>(&theFunc);
+     }
+ 
+     void set(UniqueRef<T>&& ref)
+     {
+         UniqueRef<T> local = WTF::move(ref);
+-        m_pointer = std::bit_cast<uintptr_t>(local.moveToUniquePtr().release());
++        auto pointer = std::bit_cast<uintptr_t>(local.moveToUniquePtr().release());
++        RELEASE_ASSERT(!(pointer & (lazyTag | initializingTag)));
++        m_pointer = pointer;
+     }
+ 
+ private:
+diff --git a/Source/WTF/wtf/MappedFileData.h b/Source/WTF/wtf/MappedFileData.h
+index e05e2074f..af1b54ecd 100644
+--- a/Source/WTF/wtf/MappedFileData.h
++++ b/Source/WTF/wtf/MappedFileData.h
+@@ -30,8 +30,11 @@
+ #include <wtf/Forward.h>
+ #include <wtf/Platform.h>
+ 
+-#if HAVE(MMAP)
++#if HAVE(MMAP) || OS(AMIGA)
+ #include <wtf/MallocSpan.h>
++#endif
++
++#if HAVE(MMAP)
+ #include <wtf/MmapSpan.h>
+ #endif
+ 
+@@ -80,6 +83,12 @@ public:
+     size_t size() const { return m_fileData.size(); }
+     std::span<const uint8_t> span() const LIFETIME_BOUND { return m_fileData; }
+     std::span<uint8_t> mutableSpan() LIFETIME_BOUND { return m_fileData; }
++#elif OS(AMIGA)
++    explicit MappedFileData(MallocSpan<uint8_t>&&);
++
++    size_t size() const { return m_fileData.span().size(); }
++    std::span<const uint8_t> span() const LIFETIME_BOUND { return m_fileData.span(); }
++    std::span<uint8_t> mutableSpan() LIFETIME_BOUND { return m_fileData.mutableSpan(); }
+ #endif
+ 
+ private:
+@@ -88,6 +97,8 @@ private:
+ #elif OS(WINDOWS)
+     std::span<uint8_t> m_fileData;
+     Win32Handle m_fileMapping;
++#elif OS(AMIGA)
++    MallocSpan<uint8_t> m_fileData;
+ #endif
+     bool m_isValid { false };
+ };
+diff --git a/Source/WTF/wtf/PageBlock.cpp b/Source/WTF/wtf/PageBlock.cpp
+index 1e131303d..86e2f5f39 100644
+--- a/Source/WTF/wtf/PageBlock.cpp
++++ b/Source/WTF/wtf/PageBlock.cpp
+@@ -55,6 +55,13 @@ inline size_t systemPageSize()
+     return system_info.dwPageSize;
+ }
+ 
++#elif OS(AMIGA)
++
++inline size_t systemPageSize()
++{
++    return 4096;
++}
++
+ #endif
+ 
+ size_t pageSize()
+diff --git a/Source/WTF/wtf/PageBlock.h b/Source/WTF/wtf/PageBlock.h
+index c4f9a8b1a..f099918ec 100644
+--- a/Source/WTF/wtf/PageBlock.h
++++ b/Source/WTF/wtf/PageBlock.h
+@@ -55,7 +55,7 @@ namespace WTF {
+ constexpr size_t CeilingOnPageSize = 16 * KB;
+ #elif USE(64KB_PAGE_BLOCK) || CPU(PPC) || CPU(PPC64) || CPU(PPC64LE) || CPU(UNKNOWN)
+ constexpr size_t CeilingOnPageSize = 64 * KB;
+-#elif OS(WINDOWS) || CPU(X86) || CPU(X86_64) || CPU(ARM) || CPU(ARM64) || CPU(RISCV64)
++#elif OS(WINDOWS) || CPU(X86) || CPU(X86_64) || CPU(ARM) || CPU(ARM64) || CPU(RISCV64) || CPU(M68K)
+ constexpr size_t CeilingOnPageSize = 4 * KB;
+ #else
+ #error Must set CeilingOnPageSize in PageBlock.h when adding a new CPU architecture!
+diff --git a/Source/WTF/wtf/PlatformCPU.h b/Source/WTF/wtf/PlatformCPU.h
+index 11d30691f..66944df64 100644
+--- a/Source/WTF/wtf/PlatformCPU.h
++++ b/Source/WTF/wtf/PlatformCPU.h
+@@ -55,6 +55,12 @@
+ #define WTF_MIPS_FP64 (defined __mips_fpr && __mips_fpr == 64)
+ #endif
+ 
++/* CPU(M68K) - Motorola 68000 family */
++#if defined(__m68k__) || defined(__mc68000__)
++#define WTF_CPU_M68K 1
++#define WTF_CPU_KNOWN 1
++#endif
++
+ /* CPU(LOONGARCH64) - LOONGARCH64 */
+ #if defined(__loongarch64)
+ #define WTF_CPU_LOONGARCH64 1
+@@ -315,6 +321,6 @@
+ #error "Unknown endian"
+ #endif
+ 
+-#if !CPU(LITTLE_ENDIAN)
++#if !CPU(LITTLE_ENDIAN) && !CPU(M68K)
+ #error "Unsupported endian"
+ #endif
+diff --git a/Source/WTF/wtf/PlatformHave.h b/Source/WTF/wtf/PlatformHave.h
+index 8ea6ff0ba..5310145a8 100644
+--- a/Source/WTF/wtf/PlatformHave.h
++++ b/Source/WTF/wtf/PlatformHave.h
+@@ -437,7 +437,7 @@
+ #define HAVE_STACK_BOUNDS_FOR_NEW_THREAD 1
+ #endif
+ 
+-#if !OS(WINDOWS) && !PLATFORM(PLAYSTATION)
++#if !OS(WINDOWS) && !PLATFORM(PLAYSTATION) && !OS(AMIGA)
+ #define HAVE_MEMMEM 1
+ #endif
+ 
+diff --git a/Source/WTF/wtf/PlatformJSCOnly.cmake b/Source/WTF/wtf/PlatformJSCOnly.cmake
+index bac51400f..076e515ab 100644
+--- a/Source/WTF/wtf/PlatformJSCOnly.cmake
++++ b/Source/WTF/wtf/PlatformJSCOnly.cmake
+@@ -35,7 +35,6 @@ else ()
+     list(APPEND WTF_SOURCES
+         generic/MainThreadGeneric.cpp
+ 
+-        posix/OSAllocatorPOSIX.cpp
+         posix/ThreadingPOSIX.cpp
+ 
+         text/unix/TextBreakIteratorInternalICUUnix.cpp
+@@ -43,10 +42,24 @@ else ()
+         unix/LanguageUnix.cpp
+         unix/LoggingUnix.cpp
+     )
++    if (WTF_OS_AMIGA)
++        list(APPEND WTF_SOURCES
++            aros/OSAllocatorAROS.cpp
++            aros/SignalsAROS.cpp
++        )
++    else ()
++        list(APPEND WTF_SOURCES
++            posix/OSAllocatorPOSIX.cpp
++        )
++    endif ()
+     if (WTF_OS_FUCHSIA)
+         list(APPEND WTF_SOURCES
+             fuchsia/CPUTimeFuchsia.cpp
+         )
++    elseif (WTF_OS_AMIGA)
++        list(APPEND WTF_SOURCES
++            aros/CPUTimeAROS.cpp
++        )
+     else ()
+         list(APPEND WTF_SOURCES
+             posix/CPUTimePOSIX.cpp
+diff --git a/Source/WTF/wtf/PlatformOS.h b/Source/WTF/wtf/PlatformOS.h
+index e3184e90a..cc4d60888 100644
+--- a/Source/WTF/wtf/PlatformOS.h
++++ b/Source/WTF/wtf/PlatformOS.h
+@@ -47,6 +47,21 @@
+ /* ==== OS() - underlying operating system; only to be used for mandated low-level services like
+    virtual memory, not to choose a GUI toolkit ==== */
+ 
++/* OS(AROS) - AROS Research Operating System */
++#if defined(__AROS__) || defined(__AROS) || defined(AROS)
++#define WTF_OS_AROS 1
++#endif
++
++/* OS(AMIGAOS3) - classic AmigaOS 3.x (m68k-amigaos, libnix) */
++#if defined(__amigaos3__) && !defined(__AROS__)
++#define WTF_OS_AMIGAOS3 1
++#endif
++
++/* OS(AMIGA) - AROS or AmigaOS 3.x: exec/dos, no MMU, no mmap */
++#if defined(WTF_OS_AROS) || defined(WTF_OS_AMIGAOS3)
++#define WTF_OS_AMIGA 1
++#endif
++
+ /* OS(AIX) - AIX */
+ #if defined(_AIX)
+ #define WTF_OS_AIX 1
+diff --git a/Source/WTF/wtf/PlatformRegisters.h b/Source/WTF/wtf/PlatformRegisters.h
+index 37efb86df..b97b8d011 100644
+--- a/Source/WTF/wtf/PlatformRegisters.h
++++ b/Source/WTF/wtf/PlatformRegisters.h
+@@ -39,6 +39,8 @@
+ typedef ucontext_t mcontext_t;
+ #elif OS(QNX)
+ #include <ucontext.h>
++#elif OS(AMIGA)
++// AROS/m68k uses the PlatformRegisters stack-pointer fallback below.
+ #else
+ #include <sys/ucontext.h>
+ #endif
+diff --git a/Source/WTF/wtf/PlatformUse.h b/Source/WTF/wtf/PlatformUse.h
+index a49b2f86e..877321309 100644
+--- a/Source/WTF/wtf/PlatformUse.h
++++ b/Source/WTF/wtf/PlatformUse.h
+@@ -119,7 +119,7 @@
+ #define USE_WEB_THREAD 1
+ #endif
+ 
+-#if OS(UNIX)
++#if OS(UNIX) || OS(AMIGA)
+ #define USE_PTHREADS 1
+ #endif
+ 
+diff --git a/Source/WTF/wtf/ProcessID.h b/Source/WTF/wtf/ProcessID.h
+index d3ea6f892..26f0f0a5d 100644
+--- a/Source/WTF/wtf/ProcessID.h
++++ b/Source/WTF/wtf/ProcessID.h
+@@ -27,7 +27,10 @@
+ 
+ #include <wtf/Platform.h>
+ 
+-#if OS(UNIX)
++#if OS(AMIGA)
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#elif OS(UNIX)
+ #include <unistd.h>
+ #endif
+ 
+@@ -37,7 +40,7 @@
+ 
+ namespace WTF {
+ 
+-#if OS(WINDOWS)
++#if OS(WINDOWS) || OS(AMIGA)
+ using ProcessID = int;
+ #else
+ using ProcessID = pid_t;
+@@ -47,6 +50,12 @@ inline ProcessID getCurrentProcessID()
+ {
+ #if OS(WINDOWS)
+     return GetCurrentProcessId();
++#elif OS(AROS)
++    auto* task = FindTask(nullptr);
++    return task ? static_cast<ProcessID>(GetETaskID(task)) : 0;
++#elif OS(AMIGAOS3)
++    // Exec has no process IDs; the Task address is unique while it lives.
++    return static_cast<ProcessID>(reinterpret_cast<uintptr_t>(FindTask(nullptr)));
+ #else
+     return getpid();
+ #endif
+diff --git a/Source/WTF/wtf/RandomDevice.cpp b/Source/WTF/wtf/RandomDevice.cpp
+index 95921fd37..fcf83eb46 100644
+--- a/Source/WTF/wtf/RandomDevice.cpp
++++ b/Source/WTF/wtf/RandomDevice.cpp
+@@ -29,6 +29,15 @@
+ 
+ #include <stdlib.h>
+ 
++#if OS(AROS)
++#include <proto/exec.h>
++#include <resources/entropy.h>
++
++extern "C" void arc4random_buf(void*, size_t);
++#elif OS(AMIGAOS3)
++#include <wtf/amigaos3/RandomAmigaOS3.h>
++#endif
++
+ #if !OS(DARWIN) && !OS(FUCHSIA) && OS(UNIX)
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -63,7 +72,7 @@ NEVER_INLINE NO_RETURN_DUE_TO_CRASH static void crashUnableToReadFromURandom()
+ }
+ #endif
+ 
+-#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS)
++#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS) && !OS(AMIGA)
+ RandomDevice::RandomDevice()
+ {
+     int ret = 0;
+@@ -76,7 +85,9 @@ RandomDevice::RandomDevice()
+ }
+ #endif
+ 
+-#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS)
++
++
++#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS) && !OS(AMIGA)
+ RandomDevice::~RandomDevice()
+ {
+     close(m_fd);
+@@ -91,6 +102,15 @@ void RandomDevice::cryptographicallyRandomValues(std::span<uint8_t> buffer)
+     RELEASE_ASSERT(!CCRandomGenerateBytes(buffer.data(), buffer.size()));
+ #elif OS(FUCHSIA)
+     zx_cprng_draw(buffer.data(), buffer.size());
++#elif OS(AMIGAOS3)
++    amigaOS3RandomBytes(buffer.data(), buffer.size());
++#elif OS(AROS)
++    // AROS stdc normally backs arc4random_buf() with entropy.resource, but it
++    // has a weak fallback when that resource is absent. WTF requires strong
++    // randomness, so refuse to degrade silently.
++    if (!OpenResource(ENTROPYNAME))
++        CRASH();
++    arc4random_buf(buffer.data(), buffer.size());
+ #elif OS(UNIX)
+     ssize_t amountRead = 0;
+     while (static_cast<size_t>(amountRead) < buffer.size()) {
+diff --git a/Source/WTF/wtf/RandomDevice.h b/Source/WTF/wtf/RandomDevice.h
+index ce4af3473..c5ac4716b 100644
+--- a/Source/WTF/wtf/RandomDevice.h
++++ b/Source/WTF/wtf/RandomDevice.h
+@@ -36,7 +36,7 @@ class RandomDevice {
+     WTF_MAKE_NONCOPYABLE(RandomDevice);
+     WTF_DEPRECATED_MAKE_FAST_ALLOCATED(RandomDevice);
+ public:
+-#if OS(DARWIN) || OS(FUCHSIA) || OS(WINDOWS)
++#if OS(DARWIN) || OS(FUCHSIA) || OS(WINDOWS) || OS(AMIGA)
+     RandomDevice() = default;
+ #else
+     RandomDevice();
+@@ -49,7 +49,7 @@ public:
+     void cryptographicallyRandomValues(std::span<uint8_t> buffer);
+ 
+ private:
+-#if OS(DARWIN) || OS(FUCHSIA) || OS(WINDOWS)
++#if OS(DARWIN) || OS(FUCHSIA) || OS(WINDOWS) || OS(AMIGA)
+ #elif OS(UNIX)
+     int m_fd { -1 };
+ #else
+diff --git a/Source/WTF/wtf/RawHex.h b/Source/WTF/wtf/RawHex.h
+index ad348c937..f0a801fb4 100644
+--- a/Source/WTF/wtf/RawHex.h
++++ b/Source/WTF/wtf/RawHex.h
+@@ -51,7 +51,7 @@ public:
+         : RawHex(static_cast<uintptr_t>(value))
+     { }
+ 
+-#if CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU)
++#if CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU) || OS(AMIGA)
+     // These causes build errors for CPU(ADDRESS32) on some ports because int32_t
+     // is already handled by intptr_t, and uint32_t is handled by uintptr_t.
+     explicit RawHex(int32_t value)
+diff --git a/Source/WTF/wtf/StackBounds.cpp b/Source/WTF/wtf/StackBounds.cpp
+index d928bed89..06a009450 100644
+--- a/Source/WTF/wtf/StackBounds.cpp
++++ b/Source/WTF/wtf/StackBounds.cpp
+@@ -29,7 +29,14 @@
+ 
+ #include <windows.h>
+ 
+-#elif OS(UNIX) || OS(HAIKU)
++#elif OS(AMIGAOS3)
++
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#include <utility>
++#include <wtf/StackPointer.h>
++
++#elif OS(UNIX) || OS(HAIKU) || OS(AMIGA)
+ 
+ #include <pthread.h>
+ #if HAVE(PTHREAD_NP_H)
+@@ -93,7 +100,39 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+     return StackBounds { origin, bound };
+ }
+ 
+-#elif OS(UNIX) || OS(HAIKU)
++#elif OS(AMIGAOS3)
++
++// Every AmigaOS task (and every libpthread thread, which is a dos Process)
++// runs on one stack that exec records in tc_SPLower/tc_SPUpper; RunCommand
++// and StackSwap() keep those fields current. Only the calling task's bounds
++// can be read this way.
++static std::pair<void*, void*> currentTaskStackOriginAndBound()
++{
++    struct Task* task = FindTask(nullptr);
++    char* lower = static_cast<char*>(task->tc_SPLower);
++    char* upper = static_cast<char*>(task->tc_SPUpper);
++    char* sp = static_cast<char*>(currentStackPointer());
++    RELEASE_ASSERT(sp > lower && sp <= upper);
++    // Leave a little room below for exec's own use when a task switch happens.
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
++    return { upper, lower + 256 };
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
++}
++
++StackBounds StackBounds::newThreadStackBounds(PlatformThreadHandle)
++{
++    // Called on the new thread itself (HAVE(STACK_BOUNDS_FOR_NEW_THREAD)).
++    auto [origin, bound] = currentTaskStackOriginAndBound();
++    return StackBounds { origin, bound };
++}
++
++StackBounds StackBounds::currentThreadStackBoundsInternal()
++{
++    auto [origin, bound] = currentTaskStackOriginAndBound();
++    return StackBounds { origin, bound };
++}
++
++#elif OS(UNIX) || OS(HAIKU) || OS(AMIGA)
+ 
+ #if OS(OPENBSD)
+ 
+diff --git a/Source/WTF/wtf/Threading.cpp b/Source/WTF/wtf/Threading.cpp
+index 2b12ec1c1..370116d06 100644
+--- a/Source/WTF/wtf/Threading.cpp
++++ b/Source/WTF/wtf/Threading.cpp
+@@ -476,6 +476,9 @@ void initialize()
+ {
+     static std::once_flag onceKey;
+     std::call_once(onceKey, [] {
++#if OS(AMIGAOS3)
++        amigaOS3SetDoublePrecisionFPU();
++#endif
+ #if ENABLE(CONJECTURE_ASSERT)
+         wtfConjectureAssertIsEnabled = !!getenv("ENABLE_WEBKIT_CONJECTURE_ASSERT");
+ #endif
+diff --git a/Source/WTF/wtf/Threading.h b/Source/WTF/wtf/Threading.h
+index 94d2c4b11..dffa06aff 100644
+--- a/Source/WTF/wtf/Threading.h
++++ b/Source/WTF/wtf/Threading.h
+@@ -95,6 +95,10 @@ public:
+     WTF_EXPORT_PRIVATE ~ThreadSuspendLocker();
+ };
+ 
++#if OS(AMIGAOS3)
++WTF_EXPORT_PRIVATE void amigaOS3SetDoublePrecisionFPU();
++#endif
++
+ class WTF_CAPABILITY("is current") Thread : public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<Thread>, ThreadLike {
+ public:
+     friend class ThreadGroup;
+@@ -141,6 +145,12 @@ public:
+ 
+     // Set of all WTF::Thread created threads.
+     WTF_EXPORT_PRIVATE static ThreadSafeWeakHashSet<Thread>& NODELETE allThreads();
++#if OS(AMIGAOS3)
++    // libpthread joins every thread when the process exits, and WTF's helper
++    // threads never return on their own. Cancel them (they run with
++    // asynchronous cancellation) so exit() can finish.
++    WTF_EXPORT_PRIVATE static void cancelOtherThreadsForProcessExit();
++#endif
+ 
+     WTF_EXPORT_PRIVATE unsigned numberOfThreadGroups();
+ 
+@@ -333,7 +343,7 @@ protected:
+     void establishPlatformSpecificHandle(PlatformThreadHandle, ThreadIdentifier);
+ #endif
+ 
+-#if USE(PTHREADS) && !OS(DARWIN)
++#if USE(PTHREADS) && !OS(DARWIN) && !OS(AMIGAOS3)
+     static void signalHandlerSuspendResume(int, siginfo_t*, void* ucontext);
+ #endif
+ 
+diff --git a/Source/WTF/wtf/UniStdExtras.h b/Source/WTF/wtf/UniStdExtras.h
+index cc374bd20..20f3d9129 100644
+--- a/Source/WTF/wtf/UniStdExtras.h
++++ b/Source/WTF/wtf/UniStdExtras.h
+@@ -28,7 +28,7 @@
+ 
+ #include <wtf/Platform.h>
+ 
+-#if OS(UNIX)
++#if OS(UNIX) || OS(AMIGA)
+ 
+ #include <errno.h>
+ #include <unistd.h>
+@@ -65,6 +65,6 @@ using WTF::setCloseOnExec;
+ using WTF::unsetCloseOnExec;
+ using WTF::setNonBlock;
+ 
+-#endif // OS(UNIX)
++#endif // OS(UNIX) || OS(AMIGA)
+ 
+ #endif // UniStdExtras_h
+diff --git a/Source/WTF/wtf/WTFConfig.cpp b/Source/WTF/wtf/WTFConfig.cpp
+index 253b6827e..c84d69d18 100644
+--- a/Source/WTF/wtf/WTFConfig.cpp
++++ b/Source/WTF/wtf/WTFConfig.cpp
+@@ -86,7 +86,12 @@ namespace WebConfig {
+ #define WTF_CONFIG_SECTION
+ #endif
+ 
++#if OS(AMIGAOS3)
++// Amiga hunk objects align to at most 8 bytes; nothing is page-protected here.
++alignas(8) WTF_CONFIG_SECTION Slot g_config[WTF::ConfigSizeToProtect / sizeof(Slot)];
++#else
+ alignas(WTF::ConfigAlignment) WTF_CONFIG_SECTION Slot g_config[WTF::ConfigSizeToProtect / sizeof(Slot)];
++#endif
+ 
+ } // namespace WebConfig
+ 
+diff --git a/Source/WTF/wtf/WTFProcess.cpp b/Source/WTF/wtf/WTFProcess.cpp
+index 7d01fe9cd..5a1871abd 100644
+--- a/Source/WTF/wtf/WTFProcess.cpp
++++ b/Source/WTF/wtf/WTFProcess.cpp
+@@ -26,6 +26,11 @@
+ #include "config.h"
+ #include <wtf/WTFProcess.h>
+ 
++#if OS(AMIGAOS3)
++#include <stdio.h>
++#include <wtf/Threading.h>
++#endif
++
+ #include <stdlib.h>
+ 
+ #if OS(UNIX)
+@@ -58,6 +63,10 @@ void exitProcess(int status)
+     // let the process crash explicitly.
+     CRASH();
+ #else
++#if OS(AMIGAOS3)
++    fflush(nullptr);
++    Thread::cancelOtherThreadsForProcessExit();
++#endif
+     exit(status);
+ #endif
+ }
+@@ -68,6 +77,10 @@ void terminateProcess(int status)
+     // On Windows, exitProcess and terminateProcess do the same thing due to its more complicated main thread handling.
+     // See comment in exitProcess.
+     exitProcess(status);
++#elif OS(AMIGA)
++    // AROS provides the standard C immediate-termination primitive in stdc.
++    // Its POSIX _exit() lives in posixc and is unnecessary here.
++    _Exit(status);
+ #else
+     _exit(status);
+ #endif
+diff --git a/Source/WTF/wtf/amigaos3/RandomAmigaOS3.h b/Source/WTF/wtf/amigaos3/RandomAmigaOS3.h
+new file mode 100644
+index 000000000..0c66a3ece
+--- /dev/null
++++ b/Source/WTF/wtf/amigaos3/RandomAmigaOS3.h
+@@ -0,0 +1,48 @@
++/*
++ * AmigaOS 3.x random bytes for WTF::RandomDevice.
++ *
++ * AmigaOS 3.x has no kernel entropy source. This mixes the clock, the
++ * current Task address and a running counter through splitmix64. It is
++ * good enough for hash seeds in the JSC shell; it is NOT cryptographic and
++ * must be replaced before anything security-sensitive runs on it.
++ */
++
++#pragma once
++
++#include <stddef.h>
++#include <stdint.h>
++#include <time.h>
++#include <proto/exec.h>
++
++namespace WTF {
++
++inline uint64_t amigaOS3SplitMix64(uint64_t& state)
++{
++    uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
++    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
++    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
++    return z ^ (z >> 31);
++}
++
++inline void amigaOS3RandomBytes(uint8_t* buffer, size_t size)
++{
++    static uint64_t state;
++    static bool seeded;
++
++    Forbid();
++    if (!seeded) {
++        state = static_cast<uint64_t>(time(nullptr)) << 32;
++        state ^= static_cast<uint64_t>(clock());
++        state ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(FindTask(nullptr))) << 16;
++        state ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&state));
++        seeded = true;
++    }
++    for (size_t i = 0; i < size; i += 8) {
++        uint64_t value = amigaOS3SplitMix64(state);
++        for (size_t j = 0; j < 8 && i + j < size; ++j)
++            buffer[i + j] = static_cast<uint8_t>(value >> (8 * j));
++    }
++    Permit();
++}
++
++} // namespace WTF
+diff --git a/Source/WTF/wtf/aros/CPUTimeAROS.cpp b/Source/WTF/wtf/aros/CPUTimeAROS.cpp
+new file mode 100644
+index 000000000..a25801a82
+--- /dev/null
++++ b/Source/WTF/wtf/aros/CPUTimeAROS.cpp
+@@ -0,0 +1,24 @@
++/*
++ * AROS CPU-time adapter.
++ *
++ * AROS' current sys/resource.h explicitly does not implement getrusage().
++ * Report CPU accounting as unavailable rather than fabricating process or
++ * per-thread numbers.
++ */
++
++#include "config.h"
++#include <wtf/CPUTime.h>
++
++namespace WTF {
++
++std::optional<CPUTime> CPUTime::get()
++{
++    return std::nullopt;
++}
++
++Seconds CPUTime::forCurrentThread()
++{
++    return 0_s;
++}
++
++} // namespace WTF
+diff --git a/Source/WTF/wtf/aros/OSAllocatorAROS.cpp b/Source/WTF/wtf/aros/OSAllocatorAROS.cpp
+new file mode 100644
+index 000000000..452f64558
+--- /dev/null
++++ b/Source/WTF/wtf/aros/OSAllocatorAROS.cpp
+@@ -0,0 +1,120 @@
++/*
++ * AROS implementation of WTF::OSAllocator for the non-MMU JSC C-loop port.
++ *
++ * AROS 68k does not provide mmap-style virtual address reservations. The
++ * standard C library does provide aligned_alloc(), so reservations are backed
++ * by real, zero-filled memory. Protection/guard-page requests remain explicit
++ * unsupported operations rather than being silently emulated.
++ */
++
++#include "config.h"
++#include <wtf/OSAllocator.h>
++
++#include <limits>
++#include <stdlib.h>
++#include <string.h>
++#include <wtf/Assertions.h>
++#include <wtf/PageBlock.h>
++
++namespace WTF {
++
++static void* tryAllocateAligned(size_t bytes, size_t alignment)
++{
++    if (!bytes)
++        bytes = alignment;
++
++    if (bytes > std::numeric_limits<size_t>::max() - (alignment - 1))
++        return nullptr;
++
++    size_t roundedSize = (bytes + alignment - 1) & ~(alignment - 1);
++    void* result = aligned_alloc(alignment, roundedSize);
++    if (result)
++        memset(result, 0, roundedSize);
++    return result;
++}
++
++void* OSAllocator::tryReserveAndCommitImpl(size_t bytes, Usage, void* address, bool, bool, bool, unsigned numGuardPagesToAddOnEachEnd, bool)
++{
++    // AROS has no mmap-like fixed-address reservation or guard-page facility.
++    if (address || numGuardPagesToAddOnEachEnd)
++        return nullptr;
++    return tryAllocateAligned(bytes, pageSize());
++}
++
++void* OSAllocator::tryReserveAndCommit(size_t bytes, Usage usage, void* address, bool writable, bool executable, bool jitCageEnabled, unsigned numGuardPagesToAddOnEachEnd)
++{
++    return tryReserveAndCommitImpl(bytes, usage, address, writable, executable, jitCageEnabled, numGuardPagesToAddOnEachEnd, false);
++}
++
++void* OSAllocator::reserveAndCommit(size_t bytes, Usage usage, void* address, bool writable, bool executable, bool jitCageEnabled, unsigned numGuardPagesToAddOnEachEnd)
++{
++    void* result = tryReserveAndCommit(bytes, usage, address, writable, executable, jitCageEnabled, numGuardPagesToAddOnEachEnd);
++    RELEASE_ASSERT(result);
++    return result;
++}
++
++void* OSAllocator::tryReserveUncommitted(size_t bytes, Usage usage, void* address, bool writable, bool executable, bool jitCageEnabled, unsigned numGuardPagesToAddOnEachEnd)
++{
++    // There is no reserve-without-commit distinction on classic AROS memory.
++    return tryReserveAndCommitImpl(bytes, usage, address, writable, executable, jitCageEnabled, numGuardPagesToAddOnEachEnd, true);
++}
++
++void* OSAllocator::reserveUncommitted(size_t bytes, Usage usage, void* address, bool writable, bool executable, bool jitCageEnabled, unsigned numGuardPagesToAddOnEachEnd)
++{
++    void* result = tryReserveUncommitted(bytes, usage, address, writable, executable, jitCageEnabled, numGuardPagesToAddOnEachEnd);
++    RELEASE_ASSERT(result);
++    return result;
++}
++
++void* OSAllocator::tryReserveUncommittedAligned(size_t bytes, size_t alignment, Usage, void* address, bool, bool, bool, unsigned numGuardPagesToAddOnEachEnd)
++{
++    if (address || numGuardPagesToAddOnEachEnd)
++        return nullptr;
++    if (!alignment || (alignment & (alignment - 1)))
++        return nullptr;
++    if (alignment < pageSize())
++        alignment = pageSize();
++    return tryAllocateAligned(bytes, alignment);
++}
++
++void OSAllocator::releaseDecommitted(void* address, size_t, unsigned numberOfGuardPagesOnEachEnd)
++{
++    RELEASE_ASSERT(!numberOfGuardPagesOnEachEnd);
++    free(address);
++}
++
++void OSAllocator::commit(void*, size_t, bool, bool)
++{
++    // Reservations are physically committed when allocated.
++}
++
++void OSAllocator::decommit(void* address, size_t bytes)
++{
++    // Keep the reservation but restore the zero-fill guarantee for a later
++    // logical commit.
++    if (address && bytes)
++        memset(address, 0, bytes);
++}
++
++void OSAllocator::hintMemoryNotNeededSoon(void*, size_t)
++{
++}
++
++bool OSAllocator::tryProtect(void*, size_t, bool readable, bool writable)
++{
++    // Classic AROS does not expose page protection on this target. Accept the
++    // normal read/write state only; surface any real protection requirement.
++    return readable && writable;
++}
++
++void OSAllocator::protect(void* address, size_t bytes, bool readable, bool writable)
++{
++    RELEASE_ASSERT(tryProtect(address, bytes, readable, writable));
++}
++
++void OSAllocator::zeroFill(void* address, size_t bytes)
++{
++    memset(address, 0, bytes);
++}
++
++} // namespace WTF
+diff --git a/Source/WTF/wtf/aros/SignalsAROS.cpp b/Source/WTF/wtf/aros/SignalsAROS.cpp
+new file mode 100644
+index 000000000..e392c82cb
+--- /dev/null
++++ b/Source/WTF/wtf/aros/SignalsAROS.cpp
+@@ -0,0 +1,32 @@
++/*
++ * AROS signal lifecycle adapter for JSCOnly C-loop builds.
++ *
++ * Classic AROS does not expose the full POSIX signal surface expected by
++ * WTF's Unix signal backend. JSC's no-JIT path still initializes and freezes
++ * the SignalHandlers state as part of WTFConfig, so preserve that lifecycle
++ * without pretending unsupported Unix signal handling exists.
++ */
++
++#include "config.h"
++#include <wtf/Assertions.h>
++#include <wtf/WTFConfig.h>
++#include <wtf/threads/Signals.h>
++
++namespace WTF {
++
++void SignalHandlers::initialize()
++{
++    SignalHandlers& handlers = g_wtfConfig.signalHandlers;
++    RELEASE_ASSERT(handlers.initState == InitState::Uninitialized);
++    handlers.initState = InitState::Initializing;
++}
++
++void SignalHandlers::finalize()
++{
++    Config::AssertNotFrozenScope assertScope;
++    SignalHandlers& handlers = g_wtfConfig.signalHandlers;
++    RELEASE_ASSERT(handlers.initState == InitState::Initializing);
++    handlers.initState = InitState::Finalized;
++}
++
++} // namespace WTF
+diff --git a/Source/WTF/wtf/posix/FileHandlePOSIX.cpp b/Source/WTF/wtf/posix/FileHandlePOSIX.cpp
+index ae947fe28..76456eb8c 100644
+--- a/Source/WTF/wtf/posix/FileHandlePOSIX.cpp
++++ b/Source/WTF/wtf/posix/FileHandlePOSIX.cpp
+@@ -185,6 +185,56 @@ std::optional<MappedFileData> FileHandle::map(MappedFileMode mapMode, FileOpenMo
+ 
+     return MappedFileData { WTF::move(fileData) };
+ }
++#elif OS(AMIGA)
++std::optional<MappedFileData> FileHandle::map(MappedFileMode mapMode, FileOpenMode openMode)
++{
++    UNUSED_PARAM(mapMode);
++    if (openMode != FileOpenMode::Read)
++        return std::nullopt;
++
++    auto fileSize = size();
++    if (!fileSize)
++        return std::nullopt;
++    if (!*fileSize)
++        return MappedFileData::emptyFile();
++
++    size_t bytesToRead;
++    if (!WTF::convertSafely(*fileSize, bytesToRead))
++        return std::nullopt;
++
++    auto originalPosition = seek(0, FileSeekOrigin::Current);
++    if (!seek(0, FileSeekOrigin::Beginning))
++        return std::nullopt;
++
++    auto fileData = MallocSpan<uint8_t>::tryMalloc(bytesToRead);
++    if (!fileData) {
++        if (originalPosition)
++            seek(*originalPosition, FileSeekOrigin::Beginning);
++        return std::nullopt;
++    }
++
++    size_t totalBytesRead = 0;
++    while (totalBytesRead < bytesToRead) {
++        auto bytesRead = read(fileData.mutableSpan().subspan(totalBytesRead));
++        if (!bytesRead || !*bytesRead)
++            break;
++        totalBytesRead += *bytesRead;
++    }
++
++    if (originalPosition)
++        seek(*originalPosition, FileSeekOrigin::Beginning);
++    if (totalBytesRead != bytesToRead)
++        return std::nullopt;
++
++    return MappedFileData { WTF::move(fileData) };
++}
++#else
++std::optional<MappedFileData> FileHandle::map(MappedFileMode mapMode, FileOpenMode openMode)
++{
++    UNUSED_PARAM(mapMode);
++    UNUSED_PARAM(openMode);
++    return std::nullopt;
++}
+ #endif // HAVE(MMAP)
+ 
+ } // WTF::FileSystemImpl
+diff --git a/Source/WTF/wtf/posix/FileSystemPOSIX.cpp b/Source/WTF/wtf/posix/FileSystemPOSIX.cpp
+index 9ede2415e..40c89c1f1 100644
+--- a/Source/WTF/wtf/posix/FileSystemPOSIX.cpp
++++ b/Source/WTF/wtf/posix/FileSystemPOSIX.cpp
+@@ -52,6 +52,11 @@
+ #include "Path.h"
+ #endif
+ 
++#if OS(AMIGAOS3) && !defined(O_CLOEXEC)
++// libnix runs no exec() of child programs that could inherit descriptors.
++#define O_CLOEXEC 0
++#endif
++
+ namespace WTF {
+ 
+ namespace FileSystemImpl {
+@@ -166,6 +171,10 @@ static const char* temporaryFileDirectory()
+             strlcpy(buffer, "/tmp", sizeof(buffer));
+     });
+     return buffer;
++#elif OS(AMIGA)
++    if (auto* tmpDir = getenv("TMPDIR"))
++        return tmpDir;
++    return "T:";
+ #else
+     if (auto* tmpDir = getenv("TMPDIR"))
+         return tmpDir;
+@@ -184,7 +193,11 @@ std::pair<String, FileHandle> openTemporaryFile(StringView prefix, StringView su
+     // mkostemp overwrites the XXXXXX in place, so this needs to be a mutable buffer.
+     auto path = makeString(directory, '/', prefix, "-XXXXXX"_s).utf8();
+ 
++#if OS(AMIGA)
++    auto handle = FileHandle::adopt(mkstemp(byteCast<char>(path.mutableSpan()).data()));
++#else
+     auto handle = FileHandle::adopt(mkostemp(byteCast<char>(path.mutableSpan()).data(), O_CLOEXEC));
++#endif
+     if (!handle)
+         return { String(), FileHandle() };
+ 
+diff --git a/Source/WTF/wtf/posix/MappedFileDataPOSIX.cpp b/Source/WTF/wtf/posix/MappedFileDataPOSIX.cpp
+index 9744aaf4a..81c884c09 100644
+--- a/Source/WTF/wtf/posix/MappedFileDataPOSIX.cpp
++++ b/Source/WTF/wtf/posix/MappedFileDataPOSIX.cpp
+@@ -33,8 +33,13 @@ MappedFileData::MappedFileData(MmapSpan<uint8_t>&& fileData)
+     : m_fileData(WTF::move(fileData))
+     , m_isValid(true)
+ { }
++#elif OS(AMIGA)
++MappedFileData::MappedFileData(MallocSpan<uint8_t>&& fileData)
++    : m_fileData(WTF::move(fileData))
++    , m_isValid(true)
++{ }
++#endif
+ 
+ MappedFileData::~MappedFileData() = default;
+-#endif
+ 
+ } // namespace WTF::FileSystemImpl
+diff --git a/Source/WTF/wtf/posix/POSIXExtras.h b/Source/WTF/wtf/posix/POSIXExtras.h
+index 0eadcc832..752321557 100644
+--- a/Source/WTF/wtf/posix/POSIXExtras.h
++++ b/Source/WTF/wtf/posix/POSIXExtras.h
+@@ -29,7 +29,7 @@
+ #include <wtf/text/ASCIILiteral.h>
+ #include <wtf/text/UTF8CStringView.h>
+ 
+-#if OS(UNIX)
++#if OS(UNIX) || OS(AMIGA)
+ #include <dirent.h>
+ #include <fcntl.h>
+ #include <stdlib.h>
+@@ -55,7 +55,7 @@ namespace WTF {
+     return fopen(path.utf8(), mode.characters());
+ }
+ 
+-#if OS(UNIX)
++#if OS(UNIX) || OS(AMIGA)
+ 
+ [[nodiscard]] inline int posixOpen(UTF8CStringView path, int flags, mode_t mode = 0)
+ {
+@@ -131,7 +131,7 @@ inline int posixStatx(int directoryFileDescriptor, UTF8CStringView path, int fla
+ }
+ #endif
+ 
+-#if !PLATFORM(PLAYSTATION)
++#if !PLATFORM(PLAYSTATION) && !OS(AMIGA)
+ [[nodiscard]] inline void* posixDlopen(UTF8CStringView path, int mode)
+ {
+     return dlopen(path.utf8(), mode);
+@@ -148,13 +148,13 @@ inline int posixShmUnlink(UTF8CStringView name)
+ }
+ #endif
+ 
+-#endif // OS(UNIX)
++#endif // OS(UNIX) || OS(AMIGA)
+ 
+ } // namespace WTF
+ 
+ using WTF::posixFopen;
+ 
+-#if OS(UNIX)
++#if OS(UNIX) || OS(AMIGA)
+ using WTF::posixAccess;
+ using WTF::posixChmod;
+ using WTF::posixLstat;
+@@ -173,7 +173,7 @@ using WTF::posixChflags;
+ #if OS(LINUX) && HAVE(STATX)
+ using WTF::posixStatx;
+ #endif
+-#if !PLATFORM(PLAYSTATION)
++#if !PLATFORM(PLAYSTATION) && !OS(AMIGA)
+ using WTF::posixDlopen;
+ using WTF::posixShmOpen;
+ using WTF::posixShmUnlink;
+diff --git a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+index 94ecfb0a7..95a2ce892 100644
+--- a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
++++ b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+@@ -73,6 +73,14 @@
+ #endif
+ #endif
+ 
++#if OS(AMIGA)
++#if OS(AMIGAOS3)
++#include <exec/nodes.h> // libpthread's <semaphore.h> uses struct Node without including it
++#endif
++#include <pthread.h>
++#include <semaphore.h>
++#endif
++
+ #if !OS(DARWIN) && OS(UNIX)
+ 
+ #include <semaphore.h>
+@@ -132,6 +140,7 @@ static LazyNeverDestroyed<Semaphore> globalSemaphoreForSuspendResume;
+ 
+ static std::atomic<Thread*> targetThread { nullptr };
+ 
++#if !OS(AMIGAOS3)
+ void Thread::signalHandlerSuspendResume(int, siginfo_t*, void* ucontext)
+ {
+     // Touching a global variable atomic types from signal handlers is allowed.
+@@ -189,6 +198,7 @@ void Thread::signalHandlerSuspendResume(int, siginfo_t*, void* ucontext)
+     // Allow resume caller to see that this thread is resumed.
+     globalSemaphoreForSuspendResume->post();
+ }
++#endif // !OS(AMIGAOS3)
+ 
+ #endif // !OS(DARWIN)
+ 
+@@ -206,7 +216,12 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+     }
+     g_wtfConfig.isThreadSuspendResumeSignalConfigured = true;
+ 
+-#if !OS(DARWIN)
++#if OS(AMIGAOS3)
++    // AmigaOS 3 has no POSIX signal delivery between tasks (libnix has no
++    // sigaction); other threads cannot be suspended. JSC's single-mutator
++    // shell does not need it; suspend() reports failure instead.
++    globalSemaphoreForSuspendResume.construct(0);
++#elif !OS(DARWIN)
+     globalSemaphoreForSuspendResume.construct(0);
+ 
+     // Signal handlers are process global configuration.
+@@ -247,7 +262,7 @@ ThreadIdentifier Thread::currentID()
+ 
+ void Thread::initializeCurrentThreadEvenIfNonWTFCreated()
+ {
+-#if !OS(DARWIN)
++#if !OS(DARWIN) && !OS(AMIGAOS3)
+     RELEASE_ASSERT(g_wtfConfig.isThreadSuspendResumeSignalConfigured);
+     sigset_t mask;
+     sigemptyset(&mask);
+@@ -256,8 +271,37 @@ void Thread::initializeCurrentThreadEvenIfNonWTFCreated()
+ #endif
+ }
+ 
++#if OS(AMIGAOS3)
++void Thread::cancelOtherThreadsForProcessExit()
++{
++    pthread_t self = pthread_self();
++    Vector<pthread_t> handles;
++    allThreads().forEach([&](Thread& thread) {
++        if (thread.m_handle && !pthread_equal(thread.m_handle, self) && !thread.hasExited())
++            handles.append(thread.m_handle);
++    });
++    for (auto handle : handles)
++        pthread_cancel(handle);
++}
++#endif
++
++#if OS(AMIGAOS3)
++// AmigaOS 3 tasks can start with the FPU rounding to single precision
++// (FPCR 0x40); JavaScript needs IEEE double. Round to nearest, extended
++// precision (stores to double round correctly), no FPU exceptions.
++void amigaOS3SetDoublePrecisionFPU()
++{
++    unsigned int fpcr = 0;
++    __asm__ __volatile__("fmove%.l %0,%!" : : "dm"(fpcr));
++}
++#endif
++
+ static void* wtfThreadEntryPoint(void* context)
+ {
++#if OS(AMIGAOS3)
++    amigaOS3SetDoublePrecisionFPU();
++    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, nullptr);
++#endif
+     Thread::entryPoint(reinterpret_cast<Thread::NewThreadContext*>(context));
+     return nullptr;
+ }
+@@ -580,6 +624,8 @@ auto Thread::suspend(const ThreadSuspendLocker&) -> std::expected<void, Platform
+     if (result != KERN_SUCCESS)
+         return makeUnexpected(result);
+     return { };
++#elif OS(AMIGAOS3)
++    return makeUnexpected(ENOTSUP);
+ #else
+     if (!m_suspendCount) {
+         targetThread.store(this);
+@@ -606,6 +652,8 @@ void Thread::resume(const ThreadSuspendLocker&)
+ {
+ #if OS(DARWIN)
+     thread_resume(m_platformThread);
++#elif OS(AMIGAOS3)
++    // suspend() never succeeds on AmigaOS 3, so there is nothing to resume.
+ #else
+     if (m_suspendCount == 1) {
+         // When allowing sigThreadSuspendResume interrupt in the signal handler by sigsuspend and SigThreadSuspendResume is actually issued,
+diff --git a/Source/WTF/wtf/text/FastCharacterComparison.h b/Source/WTF/wtf/text/FastCharacterComparison.h
+index 8e2a30132..bd6f5a76e 100644
+--- a/Source/WTF/wtf/text/FastCharacterComparison.h
++++ b/Source/WTF/wtf/text/FastCharacterComparison.h
+@@ -33,6 +33,17 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
+ namespace WTF {
+ 
++// These pack characters the way a native load of them from memory sees them.
++#if CPU(BIG_ENDIAN)
++#define CHARPAIR_TOUINT16(a, b) \
++((((uint16_t)(a)) << 8) + (uint16_t)(b))
++#define CHARQUAD_TOUINT32(a, b, c, d) \
++    ((((uint32_t)(CHARPAIR_TOUINT16(a, b))) << 16) + CHARPAIR_TOUINT16(c, d))
++#define UCHARPAIR_TOUINT32(a, b) \
++    ((((uint32_t)(a)) << 16) + (uint32_t)(b))
++#define UCHARQUAD_TOUINT64(a, b, c, d) \
++    ((((uint64_t)(UCHARPAIR_TOUINT32(a, b))) << 32) + UCHARPAIR_TOUINT32(c, d))
++#else
+ #define CHARPAIR_TOUINT16(a, b) \
+ ((((uint16_t)(b)) << 8) + (uint16_t)(a))
+ #define CHARQUAD_TOUINT32(a, b, c, d) \
+@@ -41,6 +52,7 @@ namespace WTF {
+     ((((uint32_t)(b)) << 16) + (uint32_t)(a))
+ #define UCHARQUAD_TOUINT64(a, b, c, d) \
+     ((((uint64_t)(UCHARPAIR_TOUINT32(c, d))) << 32) + UCHARPAIR_TOUINT32(a, b))
++#endif
+ 
+ #define COMPARE_2CHARS(address, char1, char2) \
+     ((reinterpret_cast_ptr<const uint16_t*>(address))[0] == CHARPAIR_TOUINT16(char1, char2))
+diff --git a/Source/WTF/wtf/text/RapidHash.h b/Source/WTF/wtf/text/RapidHash.h
+index 4ad93ae56..4775ac51b 100644
+--- a/Source/WTF/wtf/text/RapidHash.h
++++ b/Source/WTF/wtf/text/RapidHash.h
+@@ -53,6 +53,13 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
+ namespace WTF {
+ 
++#if CPU(LITTLE_ENDIAN)
++inline constexpr bool rapidHashNativeLoadsAreLittleEndian = true;
++#else
++inline constexpr bool rapidHashNativeLoadsAreLittleEndian = false;
++#endif
++
++
+ // https://github.com/Nicoshev/rapidhash
+ class RapidHash {
+     WTF_DEPRECATED_MAKE_FAST_ALLOCATED(RapidHash);
+@@ -178,7 +185,9 @@ private:
+         };
+ 
+         auto read64 = [&](size_t off) ALWAYS_INLINE_LAMBDA -> uint64_t {
+-            if (!std::is_constant_evaluated()) {
++            // The algorithm reads little-endian words (as create_hash_table does
++            // at build time); native loads are only right on little-endian CPUs.
++            if (rapidHashNativeLoadsAreLittleEndian && !std::is_constant_evaluated()) {
+                 if constexpr (std::is_same_v<Converter, DefaultConverter>) {
+                     if constexpr (sizeof(T) == 1)
+                         return unalignedLoad<uint64_t>(p + off);
+@@ -202,7 +211,7 @@ private:
+         };
+ 
+         auto read32 = [&](size_t off) ALWAYS_INLINE_LAMBDA -> uint64_t {
+-            if (!std::is_constant_evaluated()) {
++            if (rapidHashNativeLoadsAreLittleEndian && !std::is_constant_evaluated()) {
+                 if constexpr (std::is_same_v<Converter, DefaultConverter>) {
+                     if constexpr (sizeof(T) == 1)
+                         return static_cast<uint64_t>(unalignedLoad<uint32_t>(p + off));
+@@ -246,7 +255,7 @@ private:
+         };
+ 
+         auto read64 = [&](size_t byteOff) ALWAYS_INLINE_LAMBDA -> uint64_t {
+-            if (!std::is_constant_evaluated())
++            if (rapidHashNativeLoadsAreLittleEndian && !std::is_constant_evaluated())
+                 return unalignedLoad<uint64_t>(reinterpret_cast<const uint8_t*>(p) + byteOff);
+             uint64_t r = 0;
+             for (size_t i = 0; i < 8; ++i)
+@@ -255,7 +264,7 @@ private:
+         };
+ 
+         auto read32 = [&](size_t byteOff) ALWAYS_INLINE_LAMBDA -> uint64_t {
+-            if (!std::is_constant_evaluated())
++            if (rapidHashNativeLoadsAreLittleEndian && !std::is_constant_evaluated())
+                 return static_cast<uint64_t>(unalignedLoad<uint32_t>(reinterpret_cast<const uint8_t*>(p) + byteOff));
+             uint64_t r = 0;
+             for (size_t i = 0; i < 4; ++i)
+diff --git a/Source/bmalloc/CMakeLists.txt b/Source/bmalloc/CMakeLists.txt
+index 7e635f939..66f97a797 100644
+--- a/Source/bmalloc/CMakeLists.txt
++++ b/Source/bmalloc/CMakeLists.txt
+@@ -209,6 +209,14 @@ set(bmalloc_C_SOURCES
+     libpas/src/libpas/thingy_heap_config.c
+ )
+ 
++# A system-malloc build does not use libpas. Upstream keeps its sources in the
++# target unconditionally because supported mainstream configurations happen to
++# compile the dead code. That is both unnecessary and invalid on 32-bit m68k.
++if (USE_SYSTEM_MALLOC)
++    list(FILTER bmalloc_SOURCES EXCLUDE REGEX "^libpas/")
++    set(bmalloc_C_SOURCES)
++endif ()
++
+ set(bmalloc_PUBLIC_HEADERS
+     bmalloc/Algorithm.h
+     bmalloc/AllocationCounts.h
+@@ -687,7 +695,9 @@ if (bmalloc_PRIVATE_FRAMEWORK_HEADERS_DIR)
+ endif ()
+ 
+ add_definitions(-D_GNU_SOURCE)
+-add_definitions(-DPAS_BMALLOC=1)
++if (NOT USE_SYSTEM_MALLOC)
++    add_definitions(-DPAS_BMALLOC=1)
++endif ()
+ 
+ if (USE_MIMALLOC)
+     add_definitions(-DUSE_MIMALLOC=1)
+diff --git a/Source/bmalloc/bmalloc/BPlatform.h b/Source/bmalloc/bmalloc/BPlatform.h
+index b56122784..eda412f3e 100644
+--- a/Source/bmalloc/bmalloc/BPlatform.h
++++ b/Source/bmalloc/bmalloc/BPlatform.h
+@@ -66,6 +66,19 @@
+ #define BOS_LINUX 1
+ #endif
+ 
++#if defined(__AROS__) || defined(__AROS) || defined(AROS)
++#define BOS_AROS 1
++#endif
++
++#if defined(__amigaos3__) && !defined(__AROS__)
++#define BOS_AMIGAOS3 1
++#endif
++
++#if defined(BOS_AROS) || defined(BOS_AMIGAOS3)
++#define BOS_AMIGA 1
++#endif
++
++
+ #if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__FreeBSD_kernel__)
+ #define BOS_FREEBSD 1
+ #endif
+@@ -153,6 +166,11 @@
+ /* BCPU() - the target CPU architecture */
+ #define BCPU(_FEATURE) (defined BCPU_##_FEATURE && BCPU_##_FEATURE)
+ 
++/* BCPU(M68K) - Motorola 68000 family */
++#if defined(__m68k__) || defined(__mc68000__)
++#define BCPU_M68K 1
++#endif
++
+ /* BCPU(X86) - i386 / x86 32-bit */
+ #if defined(__i386__) \
+ || defined(i386)     \
+diff --git a/Source/bmalloc/bmalloc/SpinBackoff.h b/Source/bmalloc/bmalloc/SpinBackoff.h
+index 7939429fc..7fd256ad7 100644
+--- a/Source/bmalloc/bmalloc/SpinBackoff.h
++++ b/Source/bmalloc/bmalloc/SpinBackoff.h
+@@ -38,7 +38,7 @@
+ #if BOS(WINDOWS)
+ #include <windows.h>
+ #endif
+-#if BOS(UNIX)
++#if BOS(UNIX) || BOS(AMIGA)
+ #include <time.h>
+ #endif
+ 
+diff --git a/Source/bmalloc/bmalloc/VMAllocate.h b/Source/bmalloc/bmalloc/VMAllocate.h
+index 036636cee..9f4a11b10 100644
+--- a/Source/bmalloc/bmalloc/VMAllocate.h
++++ b/Source/bmalloc/bmalloc/VMAllocate.h
+@@ -39,6 +39,9 @@
+ 
+ #if BOS(WINDOWS)
+ #include <windows.h>
++#elif BOS(AMIGA)
++#include <cstdlib>
++#include <cstring>
+ #else
+ #include <sys/mman.h>
+ #include <unistd.h>
+@@ -164,6 +167,10 @@ inline void* tryVMAllocate(size_t vmAlignment, size_t vmSize, VMTag usage = VMTa
+     vmValidate(vmSize);
+     vmValidate(vmAlignment);
+ 
++#if BOS(AMIGA)
++    BUNUSED_PARAM(usage);
++    return ::aligned_alloc(vmAlignment, vmSize);
++#else
+     size_t mappedSize = vmAlignment + vmSize;
+     if (mappedSize < vmAlignment || mappedSize < vmSize) // Check for overflow
+         return nullptr;
+@@ -185,6 +192,7 @@ inline void* tryVMAllocate(size_t vmAlignment, size_t vmSize, VMTag usage = VMTa
+         vmDeallocate(alignedEnd, rightExtra);
+ 
+     return aligned;
++#endif
+ }
+ 
+ inline void* vmAllocate(size_t vmAlignment, size_t vmSize, VMTag usage = VMTag::Malloc)
+@@ -231,7 +239,60 @@ inline void vmAllocatePhysicalPagesSloppy(void* p, size_t size)
+ }
+ 
+ 
+-#if !BOS(WINDOWS)
++#if BOS(AMIGA)
++// AROS has no mmap-style process virtual-memory API. JSCOnly uses the system
++// allocator on 32-bit m68k, so this layer provides page-aligned backing while
++// deliberately not pretending that reserve/decommit/protection semantics exist.
++inline size_t vmPageSize()
++{
++    return 4096;
++}
++
++inline size_t vmPageSizePhysical()
++{
++    return 4096;
++}
++
++inline void* tryVMAllocate(size_t vmSize, VMTag usage)
++{
++    BUNUSED_PARAM(usage);
++    vmValidate(vmSize);
++    return ::aligned_alloc(vmPageSize(), vmSize);
++}
++
++inline void vmDeallocate(void* p, size_t vmSize)
++{
++    vmValidate(p, vmSize);
++    ::free(p);
++}
++
++inline void vmRevokePermissions(void* p, size_t vmSize)
++{
++    BUNUSED_PARAM(p);
++    BUNUSED_PARAM(vmSize);
++}
++
++inline void vmZeroAndPurge(void* p, size_t vmSize, VMTag usage)
++{
++    BUNUSED_PARAM(usage);
++    vmValidate(p, vmSize);
++    std::memset(p, 0, vmSize);
++}
++
++inline void vmDeallocatePhysicalPages(void* p, size_t vmSize)
++{
++    vmValidatePhysical(p, vmSize);
++    // AROS does not expose a userspace decommit operation. Keep the backing
++    // store resident; correctness is preserved at the cost of scavenging.
++}
++
++inline void vmAllocatePhysicalPages(void* p, size_t vmSize)
++{
++    vmValidatePhysical(p, vmSize);
++    // Matching no-op for vmDeallocatePhysicalPages().
++}
++
++#elif !BOS(WINDOWS)
+ // POSIX
+ inline size_t vmPageSize()
+ {
+diff --git a/Source/cmake/OptionsCommon.cmake b/Source/cmake/OptionsCommon.cmake
+index 121e64b01..3b576e704 100644
+--- a/Source/cmake/OptionsCommon.cmake
++++ b/Source/cmake/OptionsCommon.cmake
+@@ -139,9 +139,16 @@ message(STATUS "Archiver variant in use: ${AR_VARIANT}")
+ message(STATUS "  Archiver supports thin archives - ${AR_SUPPORTS_THIN_ARCHIVES}")
+ 
+ # Remove unused sections to reduce the binary size when supported.
+-if (LD_SUPPORTS_GC_SECTIONS)
++# AmigaOS 3.x: libnix collects constructors in linker sets too, and hunk
++# executables gain nothing from per-function sections, so leave both off.
++if (LD_SUPPORTS_GC_SECTIONS AND NOT CMAKE_SYSTEM_NAME STREQUAL "AmigaOS")
+     WEBKIT_APPEND_GLOBAL_COMPILER_FLAGS(-ffunction-sections -fdata-sections)
+-    add_link_options("LINKER:--gc-sections")
++    # AROS collect-aros records constructors in linker-set sections. GNU ld
++    # --gc-sections discards those records even when the referenced function
++    # is forced in with -u, leaving libraries such as pthread uninitialised.
++    if (NOT CMAKE_SYSTEM_NAME STREQUAL "AROS")
++        add_link_options("LINKER:--gc-sections")
++    endif ()
+ endif ()
+ 
+ # Use --disable-new-dtags to ensure that the rpath set by CMake when building
+diff --git a/Source/cmake/OptionsJSCOnly.cmake b/Source/cmake/OptionsJSCOnly.cmake
+index 28fd648ac..b8e65fe77 100644
+--- a/Source/cmake/OptionsJSCOnly.cmake
++++ b/Source/cmake/OptionsJSCOnly.cmake
+@@ -1,3 +1,8 @@
++if (CMAKE_SYSTEM_NAME MATCHES "^(AROS|AmigaOS)$")
++    # AROS has no libdl. The first-light JSCOnly port does not use a dynamic-loader shim.
++    set(CMAKE_DL_LIBS "")
++endif ()
++
+ find_package(Threads REQUIRED)
+ 
+ if (MSVC)
+diff --git a/Source/cmake/WebKitCommon.cmake b/Source/cmake/WebKitCommon.cmake
+index d0385b2c1..a782854ac 100644
+--- a/Source/cmake/WebKitCommon.cmake
++++ b/Source/cmake/WebKitCommon.cmake
+@@ -199,6 +199,8 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
+         endif ()
+     elseif (LOWERCASE_CMAKE_SYSTEM_PROCESSOR MATCHES "(i[3-6]86|x86)")
+         set(WTF_CPU_X86 1)
++    elseif (LOWERCASE_CMAKE_SYSTEM_PROCESSOR MATCHES "^(m68k|m680[0-9]+|mc680[0-9]+)")
++        set(WTF_CPU_M68K 1)
+     elseif (LOWERCASE_CMAKE_SYSTEM_PROCESSOR MATCHES "(ppc|powerpc)")
+         set(WTF_CPU_PPC 1)
+     elseif (LOWERCASE_CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64")
+@@ -224,6 +226,12 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
+         else ()
+             set(WTF_OS_UNIX 1)
+         endif ()
++    elseif (CMAKE_SYSTEM_NAME MATCHES "AROS")
++        set(WTF_OS_AROS 1)
++        set(WTF_OS_AMIGA 1)
++    elseif (CMAKE_SYSTEM_NAME MATCHES "AmigaOS")
++        set(WTF_OS_AMIGAOS3 1)
++        set(WTF_OS_AMIGA 1)
+     elseif (CMAKE_SYSTEM_NAME MATCHES "Windows")
+         set(WTF_OS_WINDOWS 1)
+     elseif (CMAKE_SYSTEM_NAME MATCHES "Fuchsia")
+@@ -247,7 +255,7 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
+     set(WebKit_LIBRARY_TYPE SHARED)
+     set(WebCoreTestSupport_LIBRARY_TYPE STATIC)
+ 
+-    if (NOT APPLE)
++    if (NOT APPLE AND NOT CMAKE_SYSTEM_NAME MATCHES "^(AROS|AmigaOS)$")
+         # ld on Apple platforms creates position-independent code by default
+         # where it's needed (e.g. main executables), and rejects the linker
+         # flag on other operations such as merging object files.

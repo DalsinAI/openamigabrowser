@@ -1,0 +1,33 @@
+Short:        WebKit JavaScript engine for AmigaOS 3.2
+Author:       Dale Kirkwood (Dalsin Limited)
+Uploader:     UPLOADER-PLACEHOLDER
+Type:         comm/www
+Version:      0.1
+Architecture: m68k-amigaos >= 3.2
+Distribution: Aminet
+
+OpenBrowser is a web browser for AmigaOS 3.2, built on WebKit. This first
+release is its JavaScript engine only: WebKit's JavaScriptCore (JSC), the
+"jsc" shell, ported to AmigaOS 3.2 on the 68020 and up with an FPU.
+
+    jsc -e "print(1+1)"
+    jsc script.js
+
+What works: the C-loop interpreter (no JIT), functions, objects, arrays,
+strings, JSON, RegExp, Date, exceptions and full double-precision maths.
+
+Requirements:
+  - AmigaOS 3.2 or newer
+  - 68020 or better with an FPU (68881/68882/68040/68060)
+  - about 80 MB of free Fast RAM (the program is 71 MB)
+  - Stack 4194304 (4 MB) in the shell before running it
+
+Not yet: web pages. The browser window (GadTools), image support through
+datatypes and page drawing come next.
+
+Licences: OpenBrowser's own parts are MIT, Copyright (c) 2026 Dalsin Limited.
+JavaScriptCore is LGPL-2/BSD and ICU is under the Unicode licence; see
+THIRD_PARTY_NOTICES.md. If you base work on this, please say what it is
+based on.
+
+Source: https://github.com/DalsinAI/openamigabrowser

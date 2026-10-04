@@ -1,0 +1,68 @@
+# OpenBrowser (DalsinAI/openamigabrowser)
+# Copyright (c) 2026 Dalsin Limited. MIT licence, see LICENSE.
+#
+# WebKit JSCOnly cross toolchain for AmigaOS 3.2.x with the os32-gcc16 stove
+# (bebbo amiga-gcc, gcc branch amiga16.2, libnix, libpthread).
+# Environment: OS32_GCC16 = the stove root (holds prefix/ and compat/),
+#              OAB_DEPS   = the folder holding icu78-m68k-amigaos/.
+if (DEFINED ENV{OS32_GCC16})
+    set(AC_OS32_STOVE "$ENV{OS32_GCC16}")
+else ()
+    set(AC_OS32_STOVE "$ENV{HOME}/AmigaChrome/stoves/os32-gcc16")
+endif ()
+if (DEFINED ENV{OAB_DEPS})
+    set(AC_OAB_DEPS "$ENV{OAB_DEPS}")
+else ()
+    set(AC_OAB_DEPS "$ENV{HOME}/openbrowser-deps")
+endif ()
+set(CMAKE_SYSTEM_NAME AmigaOS)
+set(CMAKE_SYSTEM_PROCESSOR m68k)
+
+set(AC_OS32_GCC16 "${AC_OS32_STOVE}/prefix")
+set(CMAKE_C_COMPILER "${AC_OS32_GCC16}/bin/m68k-amigaos-gcc")
+set(CMAKE_CXX_COMPILER "${AC_OS32_GCC16}/bin/m68k-amigaos-g++")
+set(CMAKE_AR "${AC_OS32_GCC16}/bin/m68k-amigaos-ar" CACHE FILEPATH "" FORCE)
+set(CMAKE_RANLIB "${AC_OS32_GCC16}/bin/m68k-amigaos-ranlib" CACHE FILEPATH "" FORCE)
+
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+# libpthread (Szilard Biro's, from amiga-gcc's aros-stuff) is a separate library.
+set(CMAKE_HAVE_LIBC_PTHREAD FALSE CACHE INTERNAL "" FORCE)
+set(CMAKE_HAVE_PTHREADS_CREATE FALSE CACHE INTERNAL "" FORCE)
+set(CMAKE_HAVE_PTHREAD_CREATE TRUE CACHE INTERNAL "" FORCE)
+set(CMAKE_THREAD_LIBS_INIT "-lpthread" CACHE STRING "" FORCE)
+
+set(AC_OS32_CPU_FLAGS "-m68020 -m68881 -mcrt=nix20")
+# WebKit builds with -std=c++23 (strict), which makes newlib hide POSIX and BSD
+# calls; _DEFAULT_SOURCE shows them again. nanosleep() and siginfo_t also need
+# these POSIX options
+# are announced; libnix/libpthread provide what WTF links against.
+set(AC_OS32_POSIX_FLAGS "-D_DEFAULT_SOURCE=1 -D_POSIX_TIMERS=1 -D_POSIX_REALTIME_SIGNALS=1")
+set(CMAKE_C_FLAGS_INIT "${AC_OS32_CPU_FLAGS} ${AC_OS32_POSIX_FLAGS}")
+set(CMAKE_CXX_FLAGS_INIT "${AC_OS32_CPU_FLAGS} ${AC_OS32_POSIX_FLAGS}")
+# libnix has no aligned_alloc(); the stove's compat library supplies one with
+# malloc/free wrapped so free() accepts aligned blocks (os32compat_malloc.c).
+set(AC_OS32_WRAP_FLAGS "-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free -Wl,-u,___wrap_malloc -Wl,-u,___wrap_free -Wl,-u,___wrap_calloc -Wl,-u,___wrap_realloc")
+# WebKit compiles with -fno-exceptions; on amigaos g++ then links a glue
+# operator new (new_op.o) that clashes with libstdc++'s. A final -fexceptions
+# on the link line keeps libstdc++'s own.
+set(CMAKE_EXE_LINKER_FLAGS_INIT "${AC_OS32_CPU_FLAGS} -fexceptions ${AC_OS32_WRAP_FLAGS}")
+# FindICU puts libicudata before libicuuc; list it again so its data symbol resolves.
+set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${AC_OAB_DEPS}/icu78-m68k-amigaos/lib/libicudata.a -lpthread -latomic -lstdc++ -L${AC_OS32_STOVE}/compat -los32compat")
+
+set(AC_WEBKIT_DEPS "${AC_OAB_DEPS}/icu78-m68k-amigaos")
+set(CMAKE_FIND_ROOT_PATH "${AC_WEBKIT_DEPS};${AC_OS32_GCC16}/m68k-amigaos")
+set(CMAKE_PREFIX_PATH "${AC_WEBKIT_DEPS}")
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+
+set(USE_SYSTEM_MALLOC ON CACHE BOOL "" FORCE)
+set(ENABLE_JIT OFF CACHE BOOL "" FORCE)
+set(ENABLE_DFG_JIT OFF CACHE BOOL "" FORCE)
+set(ENABLE_FTL_JIT OFF CACHE BOOL "" FORCE)
+set(ENABLE_WEBASSEMBLY OFF CACHE BOOL "" FORCE)
+set(EVENT_LOOP_TYPE Generic CACHE STRING "" FORCE)
+set(ENABLE_STATIC_JSC ON CACHE BOOL "" FORCE)
+set(ENABLE_API_TESTS OFF CACHE BOOL "" FORCE)

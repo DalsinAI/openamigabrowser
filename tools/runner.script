@@ -1,0 +1,12 @@
+; OpenBrowser probe runner (Copyright (c) 2026 Dalsin Limited, MIT).
+; Put in DH1:Probe/ and start from S:User-Startup with:
+;   Run >NIL: Execute DH1:Probe/runner.script
+; The host drops job.script here; this loop renames it, runs it and waits.
+Lab loop
+IF EXISTS DH1:Probe/job.script
+  Rename DH1:Probe/job.script DH1:Probe/running.script
+  Execute DH1:Probe/running.script
+  Delete DH1:Probe/running.script QUIET
+ENDIF
+Wait 2
+Skip loop BACK

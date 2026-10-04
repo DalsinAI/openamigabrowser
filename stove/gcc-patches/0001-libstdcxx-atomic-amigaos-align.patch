@@ -1,0 +1,17 @@
+diff --git a/libstdc++-v3/src/c++20/atomic.cc b/libstdc++-v3/src/c++20/atomic.cc
+index 3e02f437d..9611eb230 100644
+--- a/libstdc++-v3/src/c++20/atomic.cc
++++ b/libstdc++-v3/src/c++20/atomic.cc
+@@ -291,7 +291,12 @@ namespace
+   {
+     // Don't use std::hardware_destructive_interference_size here because we
+     // don't want the layout of library types to depend on compiler options.
++#ifdef __amigaos__
++    // Amiga hunk/a.out objects cannot align beyond 8 bytes (MAX_OFILE_ALIGNMENT).
++    static constexpr auto _S_align = 8;
++#else
+     static constexpr auto _S_align = 64;
++#endif
+ 
+     // Count of threads blocked waiting on this state.
+     alignas(_S_align) __platform_wait_t _M_waiters = 0;

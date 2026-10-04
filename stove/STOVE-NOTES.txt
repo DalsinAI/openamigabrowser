@@ -1,0 +1,58 @@
+os32-gcc16: GCC 16.2 for AmigaOS 3.x (bebbo amiga-gcc, branch amiga16.2)
+=======================================================================
+OpenBrowser. Copyright (c) 2026 Dalsin Limited. MIT licence for these notes.
+
+Programs it builds are AmigaOS 3.x hunk executables linked with libnix.
+WebKit/JavaScriptCore needs C++23, which GCC 6.5 cannot do.
+
+1. Sources
+   - bebbo's amiga-gcc framework: https://franke.ms/git/bebbo/amiga-gcc
+     with its usual modules (binutils amiga-2.46, libnix, aros-stuff for
+     libpthread, fd2sfd, sfdc, NDK 3.2 from Aminet).
+   - gcc: branch amiga16.2 (built from 1ff531f6e, "16.2.0b"):
+       make branch branch=amiga16.2 mod=gcc
+     or a shallow clone of that branch into projects/gcc.
+
+2. Patches (gcc-patches/, GPL like GCC)
+   0001  libstdc++ c++20/atomic.cc: _S_align 64 -> 8 on __amigaos__
+         (Amiga objects align to at most 8 bytes).
+   0002  gcc/config/m68k/m68kamigaos.h: int32_t/uint32_t are int, not long;
+         and a driver default of -mcrt=nix20 when no -mcrt is given.
+   0003  sys-include/math.h: declare the long double maths on __amigaos__
+         (implemented in compat/ through double).
+   Copy include/fenv.h and include/uchar.h into sys-include as well.
+
+3. Build
+     make -j2 min libpthread ndk ndk13 PREFIX=<stove>/prefix \
+          THREADS=posix NDK=3.2
+   Then rebuild the target libraries (libstdc++ etc.) against libnix, so
+   libstdc++'s configure sees C99 maths, dirent and chdir:
+     cd build-Linux-m68k-amigaos/gcc
+     T=<stove>/prefix/m68k-amigaos
+     FFT="-B$T/bin/ -B$T/lib/ -B$T/libnix/lib/ -isystem $T/include \
+          -isystem $T/libnix/include -isystem $T/ndk-include \
+          -isystem $T/sys-include"
+     (remove m68k-amigaos/*/libstdc++-v3 and every config.cache first)
+     make -j2 all-target FLAGS_FOR_TARGET="$FFT"
+     make install-target FLAGS_FOR_TARGET="$FFT"
+   In the installed c++config.h files, define _GLIBCXX_HAVE_FENV_H,
+   _GLIBCXX_USE_C99_FENV and _GLIBCXX_USE_C99_FENV_TR1 (header-only,
+   backed by include/fenv.h).
+   libnix4.library (shared libnix) fails to link; static programs do not
+   need it.
+
+4. compat/ -> <stove>/compat/libos32compat.a (MIT)
+   Build every .c/.cpp with -O2 -m68020 -m68881 (ldbl/ with -fno-builtin)
+   and archive them. Programs link
+     ... -lpthread -latomic -lstdc++ -L<stove>/compat -los32compat
+   and, for aligned_alloc to pair with free():
+     -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free
+     -Wl,-u,___wrap_malloc -Wl,-u,___wrap_free -Wl,-u,___wrap_calloc
+     -Wl,-u,___wrap_realloc
+
+Flags: -m68020 -m68881 (the hard-float libm020/libm881 multilib).
+-mhard-float alone selects the soft-float libm020 libraries.
+
+Proven on AmigaOS 3.2.3 (AC090 68040): C++23 (span, expected), pthreads
+with std::mutex/condition_variable/call_once, C++ exceptions, libm,
+iostream, std::filesystem, 64-bit atomics (tests/c).
