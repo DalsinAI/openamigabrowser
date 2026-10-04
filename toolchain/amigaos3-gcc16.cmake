@@ -4,7 +4,8 @@
 # WebKit JSCOnly cross toolchain for AmigaOS 3.2.x with the os32-gcc16 stove
 # (bebbo amiga-gcc, gcc branch amiga16.2, libnix, libpthread).
 # Environment: OS32_GCC16 = the stove root (holds prefix/ and compat/),
-#              OAB_DEPS   = the folder holding icu78-m68k-amigaos/.
+#              OAB_DEPS   = the folder holding icu78-m68k-amigaos/ and, for
+#                           WebCore, m68k-amigaos/ (scripts/build-webcore-deps.sh).
 if (DEFINED ENV{OS32_GCC16})
     set(AC_OS32_STOVE "$ENV{OS32_GCC16}")
 else ()
@@ -51,8 +52,9 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT "${AC_OS32_CPU_FLAGS} -fexceptions ${AC_OS32_WRA
 set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${AC_OAB_DEPS}/icu78-m68k-amigaos/lib/libicudata.a -lpthread -latomic -lstdc++ -L${AC_OS32_STOVE}/compat -los32compat")
 
 set(AC_WEBKIT_DEPS "${AC_OAB_DEPS}/icu78-m68k-amigaos")
-set(CMAKE_FIND_ROOT_PATH "${AC_WEBKIT_DEPS};${AC_OS32_GCC16}/m68k-amigaos")
-set(CMAKE_PREFIX_PATH "${AC_WEBKIT_DEPS}")
+set(AC_WEBCORE_DEPS "${AC_OAB_DEPS}/m68k-amigaos")
+set(CMAKE_FIND_ROOT_PATH "${AC_WEBKIT_DEPS};${AC_WEBCORE_DEPS};${AC_OS32_GCC16}/m68k-amigaos")
+set(CMAKE_PREFIX_PATH "${AC_WEBKIT_DEPS};${AC_WEBCORE_DEPS}")
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)

@@ -1,0 +1,359 @@
+/*
+ * OpenBrowser: one web page in a view (see AmigaWebView.h).
+ * MIT, Copyright (c) 2026 Dalsin Limited.
+ */
+#include "config.h"
+#include "AmigaWebView.h"
+
+#include "AmigaBackForwardList.h"
+#include "AmigaCookieJar.h"
+#include "AmigaChromeClient.h"
+#include "AmigaEditorClient.h"
+#include "AmigaFrameLoaderClient.h"
+
+#include <WebCore/DocumentPage.h>
+#include <WebCore/DocumentView.h>
+#include <WebCore/FrameDestructionObserverInlines.h>
+#include <WebCore/NodeDocument.h>
+#include <WebCore/BackForwardController.h>
+#include <WebCore/Document.h>
+#include <WebCore/DocumentLoader.h>
+#include <WebCore/EditorClient.h>
+#include <WebCore/EmptyClients.h>
+#include <WebCore/FocusController.h>
+#include <WebCore/FrameLoadRequest.h>
+#include <WebCore/FrameLoader.h>
+#include <WebCore/GraphicsContextCairo.h>
+#include <WebCore/LocalFrame.h>
+#include <WebCore/LocalFrameInlines.h>
+#include <WebCore/LocalFrameLoaderClient.h>
+#include <WebCore/LocalFrameView.h>
+#include <WebCore/Page.h>
+#include <WebCore/PageConfiguration.h>
+#include <WebCore/ProgressTracker.h>
+#include <WebCore/ProgressTrackerClient.h>
+#include <WebCore/ResourceError.h>
+#include <WebCore/ResourceRequest.h>
+#include <WebCore/ResourceResponse.h>
+#include <WebCore/Settings.h>
+#include <WebCore/SharedBuffer.h>
+#include <WebCore/SubstituteData.h>
+#include <cairo.h>
+#include <wtf/TZoneMallocInlines.h>
+#include <wtf/text/CString.h>
+
+namespace OpenBrowser {
+
+using namespace WebCore;
+
+class AmigaProgressTrackerClient final : public ProgressTrackerClient {
+public:
+    explicit AmigaProgressTrackerClient(WebView& view)
+        : m_view(view)
+    {
+    }
+
+private:
+    void progressStarted(LocalFrame& frame) final { report(frame); }
+    void progressEstimateChanged(LocalFrame& frame) final { report(frame); }
+    void progressFinished(LocalFrame& frame) final { report(frame); }
+
+    void report(LocalFrame& frame)
+    {
+        if (RefPtr page = frame.page())
+            m_view.setProgress(page->progress().estimatedProgress());
+    }
+
+    WebView& m_view;
+};
+
+template<typename UTF8String>
+static const char* cString(const UTF8String& string)
+{
+    return reinterpret_cast<const char*>(string.data());
+}
+
+static void resetFPCR()
+{
+    // ROM math libraries can leave the FPU in single precision; WebCore
+    // lays out and paints with doubles.
+    __asm__ volatile ("fmove.l %0,%%fpcr" : : "d" (0));
+}
+
+WTF_MAKE_TZONE_ALLOCATED_IMPL(WebView);
+
+WebView::WebView(const OBWebViewCallbacks& callbacks, const IntSize& size)
+    : m_callbacks(callbacks)
+    , m_size(size)
+    , m_renderingUpdateTimer([this] { renderingUpdateTimerFired(); })
+{
+    auto configuration = pageConfigurationWithEmptyClients(std::nullopt, PAL::SessionID::defaultSessionID());
+    configuration.chromeClient = createChromeClient(*this);
+    configuration.editorClient = createEditorClient();
+    configuration.progressTrackerClient = makeUniqueRef<AmigaProgressTrackerClient>(*this);
+    if (auto* jar = AmigaCookieJar::shared())
+        configuration.cookieJar = *jar;
+    m_backForwardList = AmigaBackForwardList::create();
+    configuration.backForwardClient = *m_backForwardList;
+    WebView* view = this;
+    configuration.mainFrameCreationParameters = PageConfiguration::LocalMainFrameCreationParameters {
+        CompletionHandler<UniqueRef<LocalFrameLoaderClient>(LocalFrame&, FrameLoader&)> { [view](auto&, auto& frameLoader) {
+            return createFrameLoaderClient(frameLoader, *view);
+        } },
+        SandboxFlags { },
+        ReferrerPolicy::EmptyString
+    };
+
+    m_page = Page::create(WTF::move(configuration));
+    auto& settings = m_page->settings();
+    settings.setScriptEnabled(true);
+    settings.setLoadsImagesAutomatically(true);
+    settings.setAcceleratedCompositingEnabled(false);
+    settings.setStandardFontFamily("Liberation Sans"_s);
+    settings.setSansSerifFontFamily("Liberation Sans"_s);
+    settings.setSerifFontFamily("Liberation Serif"_s);
+    settings.setFixedFontFamily("Liberation Mono"_s);
+    settings.setDefaultFontSize(16);
+    settings.setDefaultFixedFontSize(13);
+    settings.setMinimumLogicalFontSize(9);
+
+    RefPtr frame = m_page->localMainFrame();
+    frame->init();
+    m_page->setIsVisible(true);
+    m_page->setIsInWindow(true);
+    m_page->focusController().setActive(true);
+    m_page->focusController().setFocused(true);
+}
+
+WebView::~WebView()
+{
+    m_renderingUpdateTimer.stop();
+    if (RefPtr frame = mainFrame())
+        frame->loader().detachFromParent();
+    m_page = nullptr;
+}
+
+LocalFrame* WebView::mainFrame() const
+{
+    return m_page ? m_page->localMainFrame() : nullptr;
+}
+
+LocalFrameView* WebView::mainFrameView() const
+{
+    RefPtr frame = mainFrame();
+    return frame ? frame->view() : nullptr;
+}
+
+void WebView::load(const String& urlString)
+{
+    RefPtr frame = mainFrame();
+    if (!frame)
+        return;
+    URL url { urlString };
+    if (!url.isValid())
+        url = URL { makeString("https://"_s, urlString) };
+    frame->loader().load(FrameLoadRequest(*frame, ResourceRequest(WTF::move(url))));
+}
+
+void WebView::loadHTML(const String& html, const String& baseURL)
+{
+    RefPtr frame = mainFrame();
+    if (!frame)
+        return;
+    CString utf8 = html.utf8();
+    URL base { baseURL.isEmpty() ? "about:blank"_s : baseURL };
+    ResourceResponse response(URL { base }, "text/html"_s, utf8.length(), "UTF-8"_s);
+    SubstituteData data(SharedBuffer::create(utf8.span()), URL { }, WTF::move(response), SubstituteData::SessionHistoryVisibility::Hidden);
+    frame->loader().load(FrameLoadRequest(*frame, ResourceRequest(WTF::move(base)), WTF::move(data)));
+}
+
+void WebView::goBack()
+{
+    if (m_page)
+        m_page->backForward().goBack();
+}
+
+void WebView::goForward()
+{
+    if (m_page)
+        m_page->backForward().goForward();
+}
+
+void WebView::reload()
+{
+    if (RefPtr frame = mainFrame())
+        frame->loader().reload();
+}
+
+void WebView::stop()
+{
+    if (RefPtr frame = mainFrame())
+        frame->loader().stopAllLoaders();
+}
+
+bool WebView::canGoBack() const
+{
+    return m_page && m_page->backForward().canGoBackOrForward(-1);
+}
+
+bool WebView::canGoForward() const
+{
+    return m_page && m_page->backForward().canGoBackOrForward(1);
+}
+
+void WebView::resize(const IntSize& size)
+{
+    m_size = size;
+    if (RefPtr view = mainFrameView())
+        view->resize(size);
+    invalidate(IntRect(IntPoint(), size));
+}
+
+void WebView::paint(unsigned char* argb, int stride, const IntRect& rect)
+{
+    RefPtr view = mainFrameView();
+    IntRect area = intersection(rect, IntRect(IntPoint(), m_size));
+    if (area.isEmpty())
+        return;
+    resetFPCR();
+    cairo_surface_t* surface = cairo_image_surface_create_for_data(argb + area.y() * stride + area.x() * 4,
+        CAIRO_FORMAT_ARGB32, area.width(), area.height(), stride);
+    {
+        GraphicsContextCairo context(surface);
+        context.translate(-area.x(), -area.y());
+        context.fillRect(area, Color::white);
+        if (view) {
+            view->updateLayoutAndStyleIfNeededRecursive();
+            view->paint(context, area);
+        }
+    }
+    cairo_surface_flush(surface);
+    cairo_surface_destroy(surface);
+}
+
+IntRect WebView::takeDirtyRect()
+{
+    IntRect dirty = intersection(m_dirtyRect, IntRect(IntPoint(), m_size));
+    m_dirtyRect = { };
+    return dirty;
+}
+
+void WebView::invalidate(const IntRect& rect)
+{
+    m_dirtyRect.unite(rect);
+    if (m_callbacks.invalidate)
+        m_callbacks.invalidate(m_callbacks.context, rect.x(), rect.y(), rect.width(), rect.height());
+}
+
+void WebView::scheduleRenderingUpdate()
+{
+    if (!m_renderingUpdateTimer.isActive())
+        m_renderingUpdateTimer.startOneShot(0_s);
+}
+
+void WebView::renderingUpdateTimerFired()
+{
+    if (!m_page)
+        return;
+    resetFPCR();
+    m_page->updateRendering();
+    m_page->finalizeRenderingUpdate({ });
+}
+
+void WebView::callString(void (*callback)(void*, const char*), const String& text)
+{
+    if (!callback)
+        return;
+    CString utf8 = text.utf8();
+    callback(m_callbacks.context, cString(utf8));
+}
+
+void WebView::setStatusText(const String& text)
+{
+    callString(m_callbacks.status, text);
+}
+
+void WebView::setTitle(const String& title)
+{
+    callString(m_callbacks.title, title);
+}
+
+void WebView::didCommitLoad(const String& url)
+{
+    callString(m_callbacks.url, url);
+}
+
+void WebView::didStartLoad()
+{
+    m_loading = true;
+    if (m_callbacks.loading)
+        m_callbacks.loading(m_callbacks.context, 1, 0);
+}
+
+void WebView::didFinishLoad()
+{
+    m_loading = false;
+    if (m_callbacks.loading)
+        m_callbacks.loading(m_callbacks.context, 0, 100);
+}
+
+void WebView::didFailLoad(const ResourceError& error)
+{
+    m_loading = false;
+    if (m_callbacks.loading)
+        m_callbacks.loading(m_callbacks.context, 0, 100);
+    if (error.isCancellation() || !m_callbacks.failed)
+        return;
+    CString url = error.failingURL().string().utf8();
+    CString description = error.localizedDescription().utf8();
+    m_callbacks.failed(m_callbacks.context, cString(url), cString(description));
+}
+
+void WebView::setProgress(double progress)
+{
+    if (m_callbacks.loading)
+        m_callbacks.loading(m_callbacks.context, m_loading ? 1 : 0, static_cast<int>(progress * 100));
+}
+
+void WebView::contentsSizeChanged(const IntSize&)
+{
+}
+
+void WebView::runAlert(const String& message)
+{
+    callString(m_callbacks.alert, message);
+}
+
+bool WebView::runConfirm(const String& message)
+{
+    if (!m_callbacks.confirm)
+        return true;
+    CString utf8 = message.utf8();
+    return m_callbacks.confirm(m_callbacks.context, cString(utf8));
+}
+
+bool WebView::runPrompt(const String& message, const String& defaultValue, String& result)
+{
+    if (!m_callbacks.prompt)
+        return false;
+    char buffer[1024];
+    CString utf8Message = message.utf8();
+    CString utf8Default = defaultValue.utf8();
+    buffer[0] = 0;
+    if (!m_callbacks.prompt(m_callbacks.context, cString(utf8Message), cString(utf8Default), buffer, sizeof buffer))
+        return false;
+    buffer[sizeof buffer - 1] = 0;
+    result = String::fromUTF8(buffer);
+    return true;
+}
+
+void WebView::consoleMessage(const String& message, unsigned line, const String& source)
+{
+    if (!m_callbacks.console)
+        return;
+    CString utf8Message = message.utf8();
+    CString utf8Source = source.utf8();
+    m_callbacks.console(m_callbacks.context, cString(utf8Message), static_cast<int>(line), cString(utf8Source));
+}
+
+} // namespace OpenBrowser

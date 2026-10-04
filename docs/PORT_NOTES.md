@@ -74,6 +74,7 @@ JIT) on AmigaOS 3.2.3 on a 68040, 4 Oct 2026. Upstream WebKit is pinned at
 | `RapidHash` | Native unaligned loads give different hashes than the build-time (LE) tables | Byte-wise reads on BE |
 | `FastCharacterComparison` | Keyword compares pack characters in LE order | BE packing |
 | `LazyProperty`, `LazyRef`, `LazyUniqueRef` | Pointer tag bits assume 4-byte alignment; m68k gives pointers 2 | `alignas(4)` on the static function pointers |
+| `GetByIdModeMetadata` (LLInt `get_by_id`) | The prototype cache's 64-bit slot overlays the mode and hit-count bytes in its high half, which is the *last* four bytes only on LE. On BE the pointer landed there: the mode read back as garbage and a method found on a prototype (`a.push`, `s.concat`) came back `undefined` from the second cached call on | On BE 32-bit the pointer is stored in the slot's high half (`<< 32`), so the LLInt's pointer load at the slot's offset finds it and the mode bytes stay zero |
 
 ## Test bench notes
 

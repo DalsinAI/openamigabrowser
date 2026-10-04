@@ -1,0 +1,3642 @@
+diff --git a/Source/JavaScriptCore/PlatformAmiga.cmake b/Source/JavaScriptCore/PlatformAmiga.cmake
+new file mode 100644
+index 0000000000..841559f29b
+--- /dev/null
++++ b/Source/JavaScriptCore/PlatformAmiga.cmake
+@@ -0,0 +1,2 @@
++# The Amiga port shares the JSCOnly platform files.
++include(${CMAKE_CURRENT_LIST_DIR}/PlatformJSCOnly.cmake)
+diff --git a/Source/PlatformAmiga.cmake b/Source/PlatformAmiga.cmake
+new file mode 100644
+index 0000000000..b4fddf4d7b
+--- /dev/null
++++ b/Source/PlatformAmiga.cmake
+@@ -0,0 +1,5 @@
++# The browser's own programs (OpenBrowser, DalsinAI/openamigabrowser src/webcore)
++# build inside this tree with WebKit's flags and static libraries.
++if (OPENBROWSER_WEBCORE_DIR)
++    add_subdirectory(${OPENBROWSER_WEBCORE_DIR} ${CMAKE_BINARY_DIR}/OpenBrowser)
++endif ()
+diff --git a/Source/WTF/wtf/PlatformAmiga.cmake b/Source/WTF/wtf/PlatformAmiga.cmake
+new file mode 100644
+index 0000000000..841559f29b
+--- /dev/null
++++ b/Source/WTF/wtf/PlatformAmiga.cmake
+@@ -0,0 +1,2 @@
++# The Amiga port shares the JSCOnly platform files.
++include(${CMAKE_CURRENT_LIST_DIR}/PlatformJSCOnly.cmake)
+diff --git a/Source/WTF/wtf/PlatformJSCOnly.cmake b/Source/WTF/wtf/PlatformJSCOnly.cmake
+index 076e515abb..66a142020b 100644
+--- a/Source/WTF/wtf/PlatformJSCOnly.cmake
++++ b/Source/WTF/wtf/PlatformJSCOnly.cmake
+@@ -45,6 +45,7 @@ else ()
+     if (WTF_OS_AMIGA)
+         list(APPEND WTF_SOURCES
+             aros/OSAllocatorAROS.cpp
++            aros/ProcessIDAmiga.cpp
+             aros/SignalsAROS.cpp
+         )
+     else ()
+diff --git a/Source/WTF/wtf/PlatformLegacy.h b/Source/WTF/wtf/PlatformLegacy.h
+index 14f416e7aa..201acae20d 100644
+--- a/Source/WTF/wtf/PlatformLegacy.h
++++ b/Source/WTF/wtf/PlatformLegacy.h
+@@ -50,6 +50,8 @@
+ #define WTF_PLATFORM_GTK 1
+ #elif defined(BUILDING_HAIKU__)
+ #define WTF_PLATFORM_HAIKU 1
++#elif defined(BUILDING_AMIGA__)
++#define WTF_PLATFORM_AMIGA 1
+ #elif defined(BUILDING_WPE__)
+ #define WTF_PLATFORM_WPE 1
+ #elif defined(BUILDING_JSCONLY__)
+diff --git a/Source/WTF/wtf/ProcessID.h b/Source/WTF/wtf/ProcessID.h
+index 26f0f0a5d2..843492fa5b 100644
+--- a/Source/WTF/wtf/ProcessID.h
++++ b/Source/WTF/wtf/ProcessID.h
+@@ -28,8 +28,7 @@
+ #include <wtf/Platform.h>
+ 
+ #if OS(AMIGA)
+-#include <exec/tasks.h>
+-#include <proto/exec.h>
++#include <wtf/ExportMacros.h>
+ #elif OS(UNIX)
+ #include <unistd.h>
+ #endif
+@@ -46,16 +45,18 @@ using ProcessID = int;
+ using ProcessID = pid_t;
+ #endif
+ 
++#if OS(AMIGA)
++// Out of line: the exec headers define IMPORT, STATIC, VOID and others as
++// macros, which must not reach every file that includes this header.
++WTF_EXPORT_PRIVATE ProcessID amigaCurrentProcessID();
++#endif
++
+ inline ProcessID getCurrentProcessID()
+ {
+ #if OS(WINDOWS)
+     return GetCurrentProcessId();
+-#elif OS(AROS)
+-    auto* task = FindTask(nullptr);
+-    return task ? static_cast<ProcessID>(GetETaskID(task)) : 0;
+-#elif OS(AMIGAOS3)
+-    // Exec has no process IDs; the Task address is unique while it lives.
+-    return static_cast<ProcessID>(reinterpret_cast<uintptr_t>(FindTask(nullptr)));
++#elif OS(AMIGA)
++    return amigaCurrentProcessID();
+ #else
+     return getpid();
+ #endif
+diff --git a/Source/WTF/wtf/SequenceLocked.h b/Source/WTF/wtf/SequenceLocked.h
+index a5b9c8a250..0e8d83e585 100644
+--- a/Source/WTF/wtf/SequenceLocked.h
++++ b/Source/WTF/wtf/SequenceLocked.h
+@@ -44,7 +44,10 @@ namespace WTF {
+ template<typename T>
+ class SequenceLocked {
+ public:
++#if !CPU(M68K)
++    // 68k has no lock-free 64-bit atomics; libatomic's locked ones are correct, only slower.
+     static_assert(std::atomic<uint64_t>::is_always_lock_free);
++#endif
+     static_assert(std::is_trivially_copyable_v<T>);
+ 
+     // Copy T from store and return it, protected as a read-side
+diff --git a/Source/WTF/wtf/aros/ProcessIDAmiga.cpp b/Source/WTF/wtf/aros/ProcessIDAmiga.cpp
+new file mode 100644
+index 0000000000..66afe434ad
+--- /dev/null
++++ b/Source/WTF/wtf/aros/ProcessIDAmiga.cpp
+@@ -0,0 +1,45 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include <wtf/ProcessID.h>
++
++#include <exec/tasks.h>
++#include <proto/exec.h>
++
++namespace WTF {
++
++ProcessID amigaCurrentProcessID()
++{
++#if OS(AROS)
++    auto* task = FindTask(nullptr);
++    return task ? static_cast<ProcessID>(GetETaskID(task)) : 0;
++#else
++    // Exec has no process IDs; the Task address is unique while it lives.
++    return static_cast<ProcessID>(reinterpret_cast<uintptr_t>(FindTask(nullptr)));
++#endif
++}
++
++} // namespace WTF
+diff --git a/Source/WTF/wtf/generic/RunLoopGeneric.cpp b/Source/WTF/wtf/generic/RunLoopGeneric.cpp
+index 1b5a02a921..219dd614b8 100644
+--- a/Source/WTF/wtf/generic/RunLoopGeneric.cpp
++++ b/Source/WTF/wtf/generic/RunLoopGeneric.cpp
+@@ -274,9 +274,35 @@ void RunLoop::wakeUp()
+     wakeUpWithLock();
+ }
+ 
++#if OS(AMIGA)
++// OpenBrowser drives the main run loop from its Intuition event loop: it calls
++// RunLoop::cycle(), then waits on its signals until the next timer is due.
++// The embedder declares this function itself; no WebKit header carries it.
++static std::atomic<double> amigaNextFireTime { std::numeric_limits<double>::infinity() };
++
++double amigaRunLoopNextFireTime()
++{
++    return amigaNextFireTime.load();
++}
++#endif
++
+ RunLoop::CycleResult RunLoop::cycle(RunLoopMode)
+ {
+-    RunLoop::currentSingleton().runImpl(RunMode::Iterate);
++    auto& runLoop = RunLoop::currentSingleton();
++    runLoop.runImpl(RunMode::Iterate);
++#if OS(AMIGA)
++    {
++        // MonotonicTime seconds of the earliest timer: 0 when work is already
++        // waiting, infinity when there is none.
++        Locker locker { runLoop.m_loopLock };
++        double next = std::numeric_limits<double>::infinity();
++        if (runLoop.m_pendingTasks)
++            next = 0;
++        else if (!runLoop.m_schedules.isEmpty())
++            next = runLoop.m_schedules.first()->scheduledTimePoint().secondsSinceEpoch().value();
++        amigaNextFireTime = next;
++    }
++#endif
+     return CycleResult::Continue;
+ }
+ 
+diff --git a/Source/WTF/wtf/persistence/PersistentDecoder.h b/Source/WTF/wtf/persistence/PersistentDecoder.h
+index 7d1d351839..8f2f216915 100644
+--- a/Source/WTF/wtf/persistence/PersistentDecoder.h
++++ b/Source/WTF/wtf/persistence/PersistentDecoder.h
+@@ -59,6 +59,17 @@ public:
+     WTF_EXPORT_PRIVATE Decoder& operator>>(std::optional<int64_t>&);
+     WTF_EXPORT_PRIVATE Decoder& operator>>(std::optional<float>&);
+     WTF_EXPORT_PRIVATE Decoder& operator>>(std::optional<double>&);
++#if OS(AMIGA)
++    // size_t is unsigned long on AmigaOS, read as the uint32_t it was written as.
++    Decoder& operator>>(std::optional<unsigned long>& result)
++    {
++        std::optional<uint32_t> value;
++        *this >> value;
++        if (value)
++            result = *value;
++        return *this;
++    }
++#endif
+ 
+     template<typename T>
+         requires (!std::is_arithmetic_v<typename std::remove_const<T>> && !std::is_enum_v<T>)
+diff --git a/Source/WTF/wtf/persistence/PersistentEncoder.h b/Source/WTF/wtf/persistence/PersistentEncoder.h
+index de339625f9..66844e35ac 100644
+--- a/Source/WTF/wtf/persistence/PersistentEncoder.h
++++ b/Source/WTF/wtf/persistence/PersistentEncoder.h
+@@ -71,6 +71,11 @@ public:
+     WTF_EXPORT_PRIVATE Encoder& operator<<(int64_t);
+     WTF_EXPORT_PRIVATE Encoder& operator<<(float);
+     WTF_EXPORT_PRIVATE Encoder& operator<<(double);
++#if OS(AMIGA)
++    // size_t is unsigned long on AmigaOS, a 32-bit type beside uint32_t
++    // (unsigned int); it is written as uint32_t.
++    Encoder& operator<<(unsigned long value) { return *this << static_cast<uint32_t>(value); }
++#endif
+ 
+     // FIXME: Port call sites to span() and remove.
+     const uint8_t* buffer() const LIFETIME_BOUND { return m_buffer.span().data(); }
+diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
+index 128bf57ae5..81deb8e4fc 100644
+--- a/Source/WebCore/CMakeLists.txt
++++ b/Source/WebCore/CMakeLists.txt
+@@ -2289,6 +2289,8 @@ if (USE_ANGLE_EGL)
+     )
+ elseif (USE_LIBEPOXY)
+     list(APPEND WebCore_LIBRARIES Epoxy::Epoxy)
++elseif (PORT STREQUAL "Amiga")
++    # No OpenGL on the Amiga port: Cairo draws into memory.
+ else ()
+     list(APPEND WebCore_LIBRARIES OpenGL::GLES)
+ 
+diff --git a/Source/WebCore/PAL/pal/PlatformAmiga.cmake b/Source/WebCore/PAL/pal/PlatformAmiga.cmake
+new file mode 100644
+index 0000000000..750d0a925b
+--- /dev/null
++++ b/Source/WebCore/PAL/pal/PlatformAmiga.cmake
+@@ -0,0 +1,8 @@
++list(APPEND PAL_SOURCES
++    crypto/amiga/CryptoDigestAmiga.cpp
++
++    system/ClockGeneric.cpp
++    system/Sound.cpp
++
++    text/KillRing.cpp
++)
+diff --git a/Source/WebCore/PAL/pal/crypto/amiga/CryptoDigestAmiga.cpp b/Source/WebCore/PAL/pal/crypto/amiga/CryptoDigestAmiga.cpp
+new file mode 100644
+index 0000000000..a8d7d1ab7a
+--- /dev/null
++++ b/Source/WebCore/PAL/pal/crypto/amiga/CryptoDigestAmiga.cpp
+@@ -0,0 +1,295 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// SHA-1 (WTF's) and SHA-256/384/512 (FIPS 180-4) without a crypto library, so
++// that digests work on any task: AmiSSL wants InitAmiSSL() in every caller.
++
++#include "config.h"
++#include "CryptoDigest.h"
++
++#include <array>
++#include <wtf/SHA1.h>
++
++namespace PAL::Crypto {
++
++struct CryptoDigestContext {
++    virtual ~CryptoDigestContext() = default;
++    virtual void addBytes(std::span<const uint8_t>) = 0;
++    virtual Vector<uint8_t> computeHash() = 0;
++};
++
++namespace {
++
++struct SHA1Context final : CryptoDigestContext {
++    WTF_DEPRECATED_MAKE_STRUCT_FAST_ALLOCATED(SHA1Context);
++    void addBytes(std::span<const uint8_t> input) final { m_sha1.addBytes(input); }
++    Vector<uint8_t> computeHash() final
++    {
++        SHA1::Digest digest;
++        m_sha1.computeHash(digest);
++        return Vector<uint8_t>(std::span<const uint8_t>(digest));
++    }
++    SHA1 m_sha1;
++};
++
++static inline uint32_t rotr32(uint32_t x, unsigned n) { return (x >> n) | (x << (32 - n)); }
++static inline uint64_t rotr64(uint64_t x, unsigned n) { return (x >> n) | (x << (64 - n)); }
++
++struct SHA256Context final : CryptoDigestContext {
++    WTF_DEPRECATED_MAKE_STRUCT_FAST_ALLOCATED(SHA256Context);
++
++    SHA256Context()
++    {
++        static constexpr uint32_t initial[8] = {
++            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
++        };
++        std::copy(std::begin(initial), std::end(initial), m_state.begin());
++    }
++
++    void addBytes(std::span<const uint8_t> input) final
++    {
++        for (uint8_t byte : input) {
++            m_block[m_used++] = byte;
++            if (m_used == 64) {
++                transform();
++                m_used = 0;
++            }
++        }
++        m_length += input.size();
++    }
++
++    Vector<uint8_t> computeHash() final
++    {
++        uint64_t bits = m_length * 8;
++        m_block[m_used++] = 0x80;
++        if (m_used > 56) {
++            while (m_used < 64)
++                m_block[m_used++] = 0;
++            transform();
++            m_used = 0;
++        }
++        while (m_used < 56)
++            m_block[m_used++] = 0;
++        for (int i = 7; i >= 0; --i)
++            m_block[m_used++] = static_cast<uint8_t>(bits >> (i * 8));
++        transform();
++        Vector<uint8_t> result;
++        result.reserveInitialCapacity(32);
++        for (uint32_t word : m_state) {
++            for (int i = 3; i >= 0; --i)
++                result.append(static_cast<uint8_t>(word >> (i * 8)));
++        }
++        return result;
++    }
++
++private:
++    void transform()
++    {
++        static constexpr uint32_t k[64] = {
++            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
++            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
++            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
++            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
++            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
++            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
++            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
++            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
++        };
++        uint32_t w[64];
++        for (unsigned i = 0; i < 16; ++i)
++            w[i] = (uint32_t(m_block[i * 4]) << 24) | (uint32_t(m_block[i * 4 + 1]) << 16) | (uint32_t(m_block[i * 4 + 2]) << 8) | m_block[i * 4 + 3];
++        for (unsigned i = 16; i < 64; ++i) {
++            uint32_t s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >> 3);
++            uint32_t s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >> 10);
++            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
++        }
++        uint32_t a = m_state[0], b = m_state[1], c = m_state[2], d = m_state[3];
++        uint32_t e = m_state[4], f = m_state[5], g = m_state[6], h = m_state[7];
++        for (unsigned i = 0; i < 64; ++i) {
++            uint32_t t1 = h + (rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)) + ((e & f) ^ (~e & g)) + k[i] + w[i];
++            uint32_t t2 = (rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
++            h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++        }
++        m_state[0] += a; m_state[1] += b; m_state[2] += c; m_state[3] += d;
++        m_state[4] += e; m_state[5] += f; m_state[6] += g; m_state[7] += h;
++    }
++
++    std::array<uint32_t, 8> m_state;
++    std::array<uint8_t, 64> m_block { };
++    unsigned m_used { 0 };
++    uint64_t m_length { 0 };
++};
++
++struct SHA512Context final : CryptoDigestContext {
++    WTF_DEPRECATED_MAKE_STRUCT_FAST_ALLOCATED(SHA512Context);
++
++    explicit SHA512Context(bool is384)
++        : m_digestLength(is384 ? 48 : 64)
++    {
++        static constexpr uint64_t initial512[8] = {
++            0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL, 0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
++            0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL, 0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL
++        };
++        static constexpr uint64_t initial384[8] = {
++            0xcbbb9d5dc1059ed8ULL, 0x629a292a367cd507ULL, 0x9159015a3070dd17ULL, 0x152fecd8f70e5939ULL,
++            0x67332667ffc00b31ULL, 0x8eb44a8768581511ULL, 0xdb0c2e0d64f98fa7ULL, 0x47b5481dbefa4fa4ULL
++        };
++        const uint64_t* initial = is384 ? initial384 : initial512;
++        std::copy(initial, initial + 8, m_state.begin());
++    }
++
++    void addBytes(std::span<const uint8_t> input) final
++    {
++        for (uint8_t byte : input) {
++            m_block[m_used++] = byte;
++            if (m_used == 128) {
++                transform();
++                m_used = 0;
++            }
++        }
++        m_length += input.size();
++    }
++
++    Vector<uint8_t> computeHash() final
++    {
++        uint64_t bits = m_length * 8;
++        m_block[m_used++] = 0x80;
++        if (m_used > 112) {
++            while (m_used < 128)
++                m_block[m_used++] = 0;
++            transform();
++            m_used = 0;
++        }
++        while (m_used < 120)
++            m_block[m_used++] = 0;
++        for (int i = 7; i >= 0; --i)
++            m_block[m_used++] = static_cast<uint8_t>(bits >> (i * 8));
++        transform();
++        Vector<uint8_t> result;
++        result.reserveInitialCapacity(m_digestLength);
++        for (uint64_t word : m_state) {
++            for (int i = 7; i >= 0 && result.size() < m_digestLength; --i)
++                result.append(static_cast<uint8_t>(word >> (i * 8)));
++        }
++        return result;
++    }
++
++private:
++    void transform()
++    {
++        static constexpr uint64_t k[80] = {
++            0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
++            0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL, 0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
++            0xd807aa98a3030242ULL, 0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
++            0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL, 0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL,
++            0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL, 0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL,
++            0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL, 0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
++            0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL, 0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,
++            0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL, 0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
++            0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
++            0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL, 0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,
++            0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL, 0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
++            0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
++            0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL, 0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL,
++            0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL, 0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL,
++            0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL, 0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
++            0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL, 0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL,
++            0xca273eceea26619cULL, 0xd186b8c721c0c207ULL, 0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
++            0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL, 0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
++            0x28db77f523047d84ULL, 0x32caab7b40c72493ULL, 0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
++            0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL
++        };
++        uint64_t w[80];
++        for (unsigned i = 0; i < 16; ++i) {
++            uint64_t word = 0;
++            for (unsigned j = 0; j < 8; ++j)
++                word = (word << 8) | m_block[i * 8 + j];
++            w[i] = word;
++        }
++        for (unsigned i = 16; i < 80; ++i) {
++            uint64_t s0 = rotr64(w[i - 15], 1) ^ rotr64(w[i - 15], 8) ^ (w[i - 15] >> 7);
++            uint64_t s1 = rotr64(w[i - 2], 19) ^ rotr64(w[i - 2], 61) ^ (w[i - 2] >> 6);
++            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
++        }
++        uint64_t a = m_state[0], b = m_state[1], c = m_state[2], d = m_state[3];
++        uint64_t e = m_state[4], f = m_state[5], g = m_state[6], h = m_state[7];
++        for (unsigned i = 0; i < 80; ++i) {
++            uint64_t t1 = h + (rotr64(e, 14) ^ rotr64(e, 18) ^ rotr64(e, 41)) + ((e & f) ^ (~e & g)) + k[i] + w[i];
++            uint64_t t2 = (rotr64(a, 28) ^ rotr64(a, 34) ^ rotr64(a, 39)) + ((a & b) ^ (a & c) ^ (b & c));
++            h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++        }
++        m_state[0] += a; m_state[1] += b; m_state[2] += c; m_state[3] += d;
++        m_state[4] += e; m_state[5] += f; m_state[6] += g; m_state[7] += h;
++    }
++
++    std::array<uint64_t, 8> m_state;
++    std::array<uint8_t, 128> m_block { };
++    unsigned m_used { 0 };
++    uint64_t m_length { 0 };
++    size_t m_digestLength;
++};
++
++} // namespace
++
++CryptoDigest::CryptoDigest() = default;
++
++CryptoDigest::~CryptoDigest() = default;
++
++std::unique_ptr<CryptoDigest> CryptoDigest::create(CryptoDigest::Algorithm algorithm)
++{
++    auto digest = WTF::makeUnique<CryptoDigest>();
++    switch (algorithm) {
++    case CryptoDigest::Algorithm::SHA_1:
++        digest->m_context = makeUnique<SHA1Context>();
++        break;
++    case CryptoDigest::Algorithm::DEPRECATED_SHA_224:
++        RELEASE_ASSERT_NOT_REACHED_WITH_MESSAGE("SHA224 is not supported.");
++        break;
++    case CryptoDigest::Algorithm::SHA_256:
++        digest->m_context = makeUnique<SHA256Context>();
++        break;
++    case CryptoDigest::Algorithm::SHA_384:
++        digest->m_context = makeUnique<SHA512Context>(true);
++        break;
++    case CryptoDigest::Algorithm::SHA_512:
++        digest->m_context = makeUnique<SHA512Context>(false);
++        break;
++    }
++    return digest;
++}
++
++void CryptoDigest::addBytes(std::span<const uint8_t> input)
++{
++    ASSERT(m_context);
++    m_context->addBytes(input);
++}
++
++Vector<uint8_t> CryptoDigest::computeHash()
++{
++    ASSERT(m_context);
++    return m_context->computeHash();
++}
++
++} // namespace PAL::Crypto
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+new file mode 100644
+index 0000000000..ed29f822fe
+--- /dev/null
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -0,0 +1,99 @@
++include(platform/Cairo.cmake)
++include(platform/Curl.cmake)
++include(platform/FreeType.cmake)
++include(platform/OpenSSL.cmake)
++
++# AmiSSL: call OpenSSL through its stub functions (libamisslstubs) rather
++# than the inline library-call macros, which C++ such as ::BIO_new() cannot
++# use. The browser opens AmiSSL (InitAmiSSL) in each task that uses it.
++add_definitions(-DPROTO_AMISSL_H=1)
++
++# Form controls and scrollbars are drawn by the Adwaita theme, which paints
++# with GraphicsContext only; the media controls it also carries are left out.
++list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
++    "${WEBCORE_DIR}/platform/adwaita"
++    "${WEBCORE_DIR}/platform/amiga"
++    "${WEBCORE_DIR}/platform/generic"
++    "${WEBCORE_DIR}/platform/graphics/adwaita"
++    "${WEBCORE_DIR}/platform/graphics/amiga"
++    "${WEBCORE_DIR}/platform/image-decoders"
++    "${WEBCORE_DIR}/platform/image-decoders/amiga"
++    "${WEBCORE_DIR}/platform/mediacapabilities"
++    "${WEBCORE_DIR}/platform/video-codecs"
++    "${WEBCORE_DIR}/rendering/adwaita"
++)
++
++list(APPEND WebCore_UNIFIED_SOURCE_LIST_FILES
++    "platform/SourcesAdwaita.txt"
++)
++
++list(APPEND WebCore_USER_AGENT_STYLE_SHEETS
++    ${WEBCORE_DIR}/css/themeAdwaita.css
++)
++
++set(WebCore_USER_AGENT_SCRIPTS_DEPENDENCIES ${WEBCORE_DIR}/rendering/adwaita/RenderThemeAdwaita.cpp)
++
++list(APPEND WebCore_SOURCES
++    accessibility/playstation/AXObjectCachePlayStation.cpp
++    accessibility/playstation/AccessibilityObjectPlayStation.cpp
++
++    editing/amiga/EditorAmiga.cpp
++
++    platform/amiga/LibCompatAmiga.c
++    platform/amiga/MIMETypeRegistryAmiga.cpp
++    platform/amiga/PasteboardAmiga.cpp
++    platform/amiga/PlatformKeyboardEventAmiga.cpp
++    platform/amiga/PlatformScreenAmiga.cpp
++    platform/amiga/SharedMemoryAmiga.cpp
++    platform/amiga/UserAgentAmiga.cpp
++
++    platform/generic/KeyedDecoderGeneric.cpp
++    platform/generic/KeyedEncoderGeneric.cpp
++
++    platform/graphics/amiga/GraphicsLayerAmiga.cpp
++    platform/graphics/amiga/SystemFontDatabaseAmiga.cpp
++
++    # Pictures in pages are decoded by the system's datatypes.
++    platform/image-decoders/ScalableImageDecoder.cpp
++    platform/image-decoders/ScalableImageDecoderFrame.cpp
++    platform/image-decoders/amiga/DatatypesDecode.c
++    platform/image-decoders/amiga/DatatypesImageDecoder.cpp
++    platform/image-decoders/cairo/ImageBackingStoreCairo.cpp
++
++    platform/network/amiga/CurlSSLHandleAmiga.cpp
++    platform/network/amiga/NetworkStateNotifierAmiga.cpp
++
++    platform/text/Hyphenation.cpp
++    platform/text/LocaleICU.cpp
++
++    platform/unix/LoggingUnix.cpp
++)
++
++list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
++    platform/adwaita/AdwaitaScrollbarPainter.h
++    platform/adwaita/ScrollbarThemeAdwaita.h
++    platform/adwaita/ThemeAdwaita.h
++
++    platform/amiga/PlatformScreenAmiga.h
++
++    platform/graphics/adwaita/Adwaita.h
++    platform/graphics/adwaita/ButtonControlAdwaita.h
++    platform/graphics/adwaita/ControlAdwaita.h
++    platform/graphics/adwaita/ControlFactoryAdwaita.h
++    platform/graphics/adwaita/InnerSpinButtonAdwaita.h
++    platform/graphics/adwaita/MenuListAdwaita.h
++    platform/graphics/adwaita/ProgressBarAdwaita.h
++    platform/graphics/adwaita/SliderThumbAdwaita.h
++    platform/graphics/adwaita/SliderTrackAdwaita.h
++    platform/graphics/adwaita/TextFieldAdwaita.h
++    platform/graphics/adwaita/ToggleButtonAdwaita.h
++
++    rendering/adwaita/RenderThemeAdwaita.h
++)
++
++# libpng only writes PNG (Cairo's encoder, for canvas.toDataURL); reading
++# pictures is the datatypes' job. libamiga has DoMethod().
++list(APPEND WebCore_LIBRARIES
++    PNG::PNG
++    amiga
++)
+diff --git a/Source/WebCore/WebCorePrefix.h b/Source/WebCore/WebCorePrefix.h
+index 7da4d89d2e..9b8479121a 100644
+--- a/Source/WebCore/WebCorePrefix.h
++++ b/Source/WebCore/WebCorePrefix.h
+@@ -45,6 +45,32 @@
+ 
+ #if !OS(WINDOWS)
+ #include <pthread.h>
++#if OS(AMIGA)
++// After pthread.h, so libpthread's cancellation wrappers (read(), close()...
++// as macros) stay off: they break members such as Document::close().
++#include <unistd.h>
++#endif
++
++#if OS(AMIGA)
++// AmiSSL's and curl's headers bring in the NDK's exec/types.h, whose macros
++// (IMPORT, STATIC...) break WebCore and JSC names such as the parser's IMPORT
++// token. Include it first, once, and drop those macros; its include guard
++// keeps them from coming back. VOID and CONST stay: later NDK headers use them.
++#include <exec/types.h>
++#undef GLOBAL
++#undef IMPORT
++#undef STATIC
++#undef REGISTER
++// ntohs() and friends, which Linux declares through other system headers;
++// the NDK has only the __ntohs() forms (no-ops on big-endian 68k).
++#include <machine/endian.h>
++#ifndef ntohs
++#define ntohs(x) __ntohs(x)
++#define htons(x) __htons(x)
++#define ntohl(x) __ntohl(x)
++#define htonl(x) __htonl(x)
++#endif
++#endif
+ #endif // !OS(WINDOWS)
+ 
+ #include <sys/types.h>
+diff --git a/Source/WebCore/accessibility/AXCoreObject.h b/Source/WebCore/accessibility/AXCoreObject.h
+index dfff3182f4..df017e1395 100644
+--- a/Source/WebCore/accessibility/AXCoreObject.h
++++ b/Source/WebCore/accessibility/AXCoreObject.h
+@@ -81,7 +81,7 @@ class AccessibilityObjectAtspi;
+ 
+ typedef WebCore::AccessibilityObjectAtspi AccessibilityObjectWrapper;
+ 
+-#elif PLATFORM(PLAYSTATION) || PLATFORM(HAIKU)
++#elif PLATFORM(PLAYSTATION) || PLATFORM(HAIKU) || PLATFORM(AMIGA)
+ class AccessibilityObjectWrapper : public RefCounted<AccessibilityObjectWrapper> { };
+ #else
+ class AccessibilityObjectWrapper;
+@@ -1533,7 +1533,7 @@ private:
+     RetainPtr<WebAccessibilityObjectWrapper> m_wrapper;
+ #elif PLATFORM(WIN)
+     COMPtr<AccessibilityObjectWrapper> m_wrapper;
+-#elif PLATFORM(PLAYSTATION) || PLATFORM(HAIKU)
++#elif PLATFORM(PLAYSTATION) || PLATFORM(HAIKU) || PLATFORM(AMIGA)
+     RefPtr<AccessibilityObjectWrapper> m_wrapper;
+ #elif USE(ATSPI)
+     RefPtr<AccessibilityObjectAtspi> m_wrapper;
+diff --git a/Source/WebCore/css/CSSProperty.cpp b/Source/WebCore/css/CSSProperty.cpp
+index f6611a994d..6c63f4d3a2 100644
+--- a/Source/WebCore/css/CSSProperty.cpp
++++ b/Source/WebCore/css/CSSProperty.cpp
+@@ -32,7 +32,12 @@ struct SameSizeAsCSSProperty {
+     void* value;
+ };
+ 
++#if CPU(M68K)
++// m68k packs the metadata's bitfields into 16 bits, so CSSProperty is smaller still.
++static_assert(sizeof(CSSProperty) <= sizeof(SameSizeAsCSSProperty), "CSSProperty should stay small");
++#else
+ static_assert(sizeof(CSSProperty) == sizeof(SameSizeAsCSSProperty), "CSSProperty should stay small");
++#endif
+ 
+ CSSPropertyID StylePropertyMetadata::shorthandID() const
+ {
+diff --git a/Source/WebCore/css/CSSRule.cpp b/Source/WebCore/css/CSSRule.cpp
+index 4160e8a2a4..a36729bf55 100644
+--- a/Source/WebCore/css/CSSRule.cpp
++++ b/Source/WebCore/css/CSSRule.cpp
+@@ -37,7 +37,9 @@ struct SameSizeAsCSSRule : public RefCountedAndCanMakeWeakPtr<SameSizeAsCSSRule>
+     void* pointerUnion;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(CSSRule) == sizeof(SameSizeAsCSSRule), "CSSRule should stay small");
++#endif
+ 
+ unsigned short CSSRule::typeForCSSOM() const
+ {
+diff --git a/Source/WebCore/css/CSSSelector.cpp b/Source/WebCore/css/CSSSelector.cpp
+index a8945da1ac..1203ad00a7 100644
+--- a/Source/WebCore/css/CSSSelector.cpp
++++ b/Source/WebCore/css/CSSSelector.cpp
+@@ -59,7 +59,9 @@ struct SameSizeAsCSSSelector {
+ };
+ 
+ static_assert(CSSSelector::Relation::Subselector == static_cast<CSSSelector::Relation>(0u), "Subselector must be 0 for consumeCombinator.");
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(CSSSelector) == sizeof(SameSizeAsCSSSelector), "CSSSelector should remain small.");
++#endif
+ 
+ DEFINE_ALLOCATOR_WITH_HEAP_IDENTIFIER(CSSSelectorRareData);
+ 
+diff --git a/Source/WebCore/css/CSSValue.cpp b/Source/WebCore/css/CSSValue.cpp
+index 15e269de09..3ffe9ab9d5 100644
+--- a/Source/WebCore/css/CSSValue.cpp
++++ b/Source/WebCore/css/CSSValue.cpp
+@@ -123,7 +123,9 @@ struct SameSizeAsCSSValue {
+     uint32_t bitfields;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(CSSValue) == sizeof(SameSizeAsCSSValue), "CSS value should stay small");
++#endif
+ 
+ DEFINE_ALLOCATOR_WITH_HEAP_IDENTIFIER(CSSValue);
+ 
+diff --git a/Source/WebCore/css/StyleProperties.cpp b/Source/WebCore/css/StyleProperties.cpp
+index 190a8609db..e1d40277b9 100644
+--- a/Source/WebCore/css/StyleProperties.cpp
++++ b/Source/WebCore/css/StyleProperties.cpp
+@@ -410,7 +410,9 @@ unsigned StyleProperties::averageSizeInBytes()
+ struct SameSizeAsStyleProperties : public RefCounted<SameSizeAsStyleProperties> {
+     unsigned bitfield;
+ };
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(StyleProperties) == sizeof(SameSizeAsStyleProperties), "style property set should stay small");
++#endif
+ 
+ #ifndef NDEBUG
+ void StyleProperties::showStyle()
+diff --git a/Source/WebCore/css/StyleRule.cpp b/Source/WebCore/css/StyleRule.cpp
+index 9c0759680b..6f81713912 100644
+--- a/Source/WebCore/css/StyleRule.cpp
++++ b/Source/WebCore/css/StyleRule.cpp
+@@ -64,8 +64,10 @@ struct SameSizeAsStyleRuleBase : public WTF::RefCountedBase {
+ };
+ 
+ #if !PLATFORM(WIN)
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(StyleRuleBase) == sizeof(SameSizeAsStyleRuleBase), "StyleRuleBase should stay small");
+ #endif
++#endif
+ 
+ DEFINE_ALLOCATOR_WITH_HEAP_IDENTIFIER(StyleRuleBase);
+ DEFINE_ALLOCATOR_WITH_HEAP_IDENTIFIER(StyleRule);
+diff --git a/Source/WebCore/dom/ContainerNode.cpp b/Source/WebCore/dom/ContainerNode.cpp
+index f47d4ad1de..645fe70392 100644
+--- a/Source/WebCore/dom/ContainerNode.cpp
++++ b/Source/WebCore/dom/ContainerNode.cpp
+@@ -84,7 +84,9 @@ struct SameSizeAsContainerNode : public Node {
+     void* lastChild;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(ContainerNode) == sizeof(SameSizeAsContainerNode), "ContainerNode should stay small");
++#endif
+ 
+ static void dispatchChildInsertionEvents(Node&);
+ static void dispatchChildRemovalEvents(Ref<Node>&);
+diff --git a/Source/WebCore/dom/Element.cpp b/Source/WebCore/dom/Element.cpp
+index 10e9d46308..1e0885b926 100644
+--- a/Source/WebCore/dom/Element.cpp
++++ b/Source/WebCore/dom/Element.cpp
+@@ -213,7 +213,9 @@ struct SameSizeAsElement : public ContainerNode {
+     void* shadowRoot;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(Element) == sizeof(SameSizeAsElement), "Element should stay small");
++#endif
+ 
+ using namespace HTMLNames;
+ using namespace XMLNames;
+diff --git a/Source/WebCore/dom/ElementData.cpp b/Source/WebCore/dom/ElementData.cpp
+index f66e8b581a..c20b7ba610 100644
+--- a/Source/WebCore/dom/ElementData.cpp
++++ b/Source/WebCore/dom/ElementData.cpp
+@@ -64,7 +64,9 @@ struct SameSizeAsElementData : public RefCounted<SameSizeAsElementData> {
+     void* refPtrs[3];
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(ElementData) == sizeof(SameSizeAsElementData), "element attribute data should stay small");
++#endif
+ 
+ static size_t NODELETE sizeForShareableElementDataWithAttributeCount(unsigned count)
+ {
+diff --git a/Source/WebCore/dom/ElementRareData.cpp b/Source/WebCore/dom/ElementRareData.cpp
+index 9029ce4bfc..4b678b34f1 100644
+--- a/Source/WebCore/dom/ElementRareData.cpp
++++ b/Source/WebCore/dom/ElementRareData.cpp
+@@ -55,6 +55,8 @@ struct SameSizeAsElementRareData : NodeRareData {
+     WeakPtr<Element, WeakPtrImplWithEventTargetData> invokedPopoverWeakPtr;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(ElementRareData) == sizeof(SameSizeAsElementRareData), "ElementRareData should stay small");
++#endif
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/dom/EventTarget.cpp b/Source/WebCore/dom/EventTarget.cpp
+index 508b64bf39..46a1fb2f7e 100644
+--- a/Source/WebCore/dom/EventTarget.cpp
++++ b/Source/WebCore/dom/EventTarget.cpp
+@@ -70,7 +70,9 @@ struct SameSizeAsEventTarget : ScriptWrappable, CanMakeWeakPtrWithBitField<Event
+     virtual ~SameSizeAsEventTarget() = default; // Allocate vtable pointer.
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(EventTarget) == sizeof(SameSizeAsEventTarget), "EventTarget should stay small");
++#endif
+ 
+ Ref<EventTarget> EventTarget::create(ScriptExecutionContext& context)
+ {
+diff --git a/Source/WebCore/dom/Node.cpp b/Source/WebCore/dom/Node.cpp
+index 62dd7e7478..6d1438311c 100644
+--- a/Source/WebCore/dom/Node.cpp
++++ b/Source/WebCore/dom/Node.cpp
+@@ -139,7 +139,9 @@ public:
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(SameSizeAsNode);
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(Node) == sizeof(SameSizeAsNode), "Node should stay small");
++#endif
+ 
+ #if DUMP_NODE_STATISTICS
+ static WeakHashSet<Node, WeakPtrImplWithEventTargetData>& liveNodeSet()
+diff --git a/Source/WebCore/dom/NodeRareData.cpp b/Source/WebCore/dom/NodeRareData.cpp
+index 295993fb00..83c1270501 100644
+--- a/Source/WebCore/dom/NodeRareData.cpp
++++ b/Source/WebCore/dom/NodeRareData.cpp
+@@ -44,7 +44,9 @@ struct SameSizeAsNodeRareData {
+     bool m_isElementRareData;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(NodeRareData) == sizeof(SameSizeAsNodeRareData), "NodeRareData should stay small");
++#endif
+ 
+ // Ensure the 10 bits reserved for the m_connectedFrameCount cannot overflow
+ static_assert(Page::maxNumberOfFrames < 1024, "Frame limit should fit in rare data count");
+diff --git a/Source/WebCore/dom/ShadowRoot.cpp b/Source/WebCore/dom/ShadowRoot.cpp
+index 74148ba17d..12b2c16878 100644
+--- a/Source/WebCore/dom/ShadowRoot.cpp
++++ b/Source/WebCore/dom/ShadowRoot.cpp
+@@ -70,7 +70,9 @@ struct SameSizeAsShadowRoot : public DocumentFragment, public TreeScope {
+     AtomString referenceTarget;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(ShadowRoot) == sizeof(SameSizeAsShadowRoot), "shadowroot should stay small");
++#endif
+ #if !ASSERT_ENABLED && ASSERT_WITH_SECURITY_IMPLICATION_DISABLED
+ static_assert(sizeof(WeakPtr<Element, WeakPtrImplWithEventTargetData>) == sizeof(void*), "WeakPtr should be same size as raw pointer");
+ #endif
+diff --git a/Source/WebCore/dom/SlotAssignment.cpp b/Source/WebCore/dom/SlotAssignment.cpp
+index b7cc6b07ca..987ed65a50 100644
+--- a/Source/WebCore/dom/SlotAssignment.cpp
++++ b/Source/WebCore/dom/SlotAssignment.cpp
+@@ -52,7 +52,9 @@ struct SameSizeAsNamedSlotAssignment {
+ #endif
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(NamedSlotAssignment) == sizeof(SameSizeAsNamedSlotAssignment), "NamedSlotAssignment should remain small");
++#endif
+ 
+ static const AtomString& NODELETE slotNameFromAttributeValue(const AtomString& value)
+ {
+diff --git a/Source/WebCore/dom/TreeScope.cpp b/Source/WebCore/dom/TreeScope.cpp
+index bc3df3f47b..d2d01cd99a 100644
+--- a/Source/WebCore/dom/TreeScope.cpp
++++ b/Source/WebCore/dom/TreeScope.cpp
+@@ -76,7 +76,9 @@ struct SameSizeAsTreeScope {
+     void* pointers[13];
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(TreeScope) == sizeof(SameSizeAsTreeScope), "treescope should stay small");
++#endif
+ 
+ using namespace HTMLNames;
+ 
+diff --git a/Source/WebCore/editing/amiga/EditorAmiga.cpp b/Source/WebCore/editing/amiga/EditorAmiga.cpp
+new file mode 100644
+index 0000000000..1dbbd1414b
+--- /dev/null
++++ b/Source/WebCore/editing/amiga/EditorAmiga.cpp
+@@ -0,0 +1,107 @@
++/*
++ * Copyright (C) 2014 Igalia S.L.
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "Editor.h"
++
++#include "DocumentFragment.h"
++#include "FrameDestructionObserverInlines.h"
++#include "LocalFrameInlines.h"
++#include "NotImplemented.h"
++#include "Pasteboard.h"
++#include "SimpleRange.h"
++#include "markup.h"
++
++// The Amiga port's editing glue for copy and paste, after the libwpe port's:
++// a selection goes to the pasteboard as HTML and as plain text, and pasting
++// prefers the HTML.
++
++namespace WebCore {
++
++static RefPtr<DocumentFragment> createFragmentFromPasteboardData(Pasteboard& pasteboard, LocalFrame& frame, const SimpleRange& range, bool allowPlainText, bool& chosePlainText)
++{
++    chosePlainText = false;
++
++    Vector<String> types = pasteboard.typesForLegacyUnsafeBindings();
++    if (types.isEmpty())
++        return nullptr;
++
++    if (types.contains("text/html"_s) && frame.document()) {
++        String markup = pasteboard.readString("text/html"_s);
++        return createFragmentFromMarkup(*frame.document(), markup, emptyString(), { });
++    }
++
++    if (!allowPlainText)
++        return nullptr;
++
++    for (auto type : { "text/plain;charset=utf-8"_s, "text/plain"_s }) {
++        if (types.contains(type)) {
++            chosePlainText = true;
++            return createFragmentFromText(range, pasteboard.readString(type));
++        }
++    }
++
++    return nullptr;
++}
++
++void Editor::writeSelectionToPasteboard(Pasteboard& pasteboard)
++{
++    String markup = serializePreservingVisualAppearance(document().selection().selection(), ResolveURLs::YesExcludingURLsForPrivacy, SerializeComposedTree::Yes, IgnoreUserSelectNone::Yes);
++    pasteboard.clear();
++    pasteboard.writeMarkup(markup);
++    pasteboard.writePlainText(selectedTextForDataTransfer(), canSmartCopyOrDelete() ? Pasteboard::CanSmartReplace : Pasteboard::CannotSmartReplace);
++}
++
++void Editor::writeImageToPasteboard(Pasteboard&, Element&, const URL&, const String&)
++{
++    notImplemented();
++}
++
++void Editor::pasteWithPasteboard(Pasteboard* pasteboard, OptionSet<PasteOption> options)
++{
++    auto range = selectedRange();
++    if (!range)
++        return;
++
++    bool chosePlainText;
++    auto fragment = createFragmentFromPasteboardData(*pasteboard, *document().frame(), *range, options.contains(PasteOption::AllowPlainText), chosePlainText);
++
++    if (fragment && options.contains(PasteOption::AsQuotation))
++        quoteFragmentForPasting(*fragment);
++
++    if (fragment && shouldInsertFragment(*fragment, *range, EditorInsertAction::Pasted))
++        pasteAsFragment(*fragment, canSmartReplaceWithPasteboard(*pasteboard), chosePlainText, options.contains(PasteOption::IgnoreMailBlockquote) ? MailBlockquoteHandling::IgnoreBlockquote : MailBlockquoteHandling::RespectBlockquote);
++}
++
++void Editor::platformCopyFont()
++{
++}
++
++void Editor::platformPasteFont()
++{
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/layout/formattingContexts/inline/InlineItem.cpp b/Source/WebCore/layout/formattingContexts/inline/InlineItem.cpp
+index 587cfb9d9f..f900972b90 100644
+--- a/Source/WebCore/layout/formattingContexts/inline/InlineItem.cpp
++++ b/Source/WebCore/layout/formattingContexts/inline/InlineItem.cpp
+@@ -47,7 +47,9 @@ struct SameSizeAsInlineItem {
+     uint8_t glyphBottomOverflow : 3;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(InlineItem) == sizeof(SameSizeAsInlineItem));
++#endif
+ 
+ }
+ }
+diff --git a/Source/WebCore/loader/EmptyClients.h b/Source/WebCore/loader/EmptyClients.h
+index 2e4aeaaffa..82cae8f21a 100644
+--- a/Source/WebCore/loader/EmptyClients.h
++++ b/Source/WebCore/loader/EmptyClients.h
+@@ -175,7 +175,7 @@ class EmptyChromeClient : public ChromeClient {
+     void AXFinishFrameLoad() final { }
+ #endif
+ 
+-#if PLATFORM(PLAYSTATION) || PLATFORM(HAIKU)
++#if PLATFORM(PLAYSTATION) || PLATFORM(HAIKU) || PLATFORM(AMIGA)
+     void postAccessibilityNotification(AccessibilityObject&, AXNotification) final { }
+     void postAccessibilityNodeTextChangeNotification(AccessibilityObject*, AXTextChange, unsigned, const String&) final { }
+     void postAccessibilityFrameLoadingEventNotification(AccessibilityObject*, AXLoadingEvent) final { }
+diff --git a/Source/WebCore/page/ChromeClient.h b/Source/WebCore/page/ChromeClient.h
+index d802cd2c4c..981f475b05 100644
+--- a/Source/WebCore/page/ChromeClient.h
++++ b/Source/WebCore/page/ChromeClient.h
+@@ -620,7 +620,7 @@ public:
+     virtual void AXFinishFrameLoad() = 0;
+ #endif
+ 
+-#if PLATFORM(PLAYSTATION) || PLATFORM(HAIKU)
++#if PLATFORM(PLAYSTATION) || PLATFORM(HAIKU) || PLATFORM(AMIGA)
+     virtual void postAccessibilityNotification(AccessibilityObject&, AXNotification) = 0;
+     virtual void postAccessibilityNodeTextChangeNotification(AccessibilityObject*, AXTextChange, unsigned, const String&) = 0;
+     virtual void postAccessibilityFrameLoadingEventNotification(AccessibilityObject*, AXLoadingEvent) = 0;
+diff --git a/Source/WebCore/platform/PlatformKeyboardEvent.cpp b/Source/WebCore/platform/PlatformKeyboardEvent.cpp
+index 8666d1cfe5..ac3f33df95 100644
+--- a/Source/WebCore/platform/PlatformKeyboardEvent.cpp
++++ b/Source/WebCore/platform/PlatformKeyboardEvent.cpp
+@@ -60,7 +60,7 @@ void PlatformKeyboardEvent::setCurrentModifierState(OptionSet<Modifier> modifier
+     s_currentModifiers = modifiers;
+ }
+ 
+-#if PLATFORM(GTK) || USE(LIBWPE) || ENABLE(WPE_PLATFORM)
++#if PLATFORM(GTK) || USE(LIBWPE) || ENABLE(WPE_PLATFORM) || PLATFORM(AMIGA)
+ OptionSet<PlatformEvent::Modifier> PlatformKeyboardEvent::currentStateOfModifierKeys()
+ {
+     if (s_currentModifiers)
+diff --git a/Source/WebCore/platform/ScrollableArea.cpp b/Source/WebCore/platform/ScrollableArea.cpp
+index 1b9e76991f..34b46d4a40 100644
+--- a/Source/WebCore/platform/ScrollableArea.cpp
++++ b/Source/WebCore/platform/ScrollableArea.cpp
+@@ -69,8 +69,10 @@ struct SameSizeAsScrollableArea : public CanMakeWeakPtr<SameSizeAsScrollableArea
+ };
+ 
+ #if CPU(ADDRESS64)
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(ScrollableArea) == sizeof(SameSizeAsScrollableArea), "ScrollableArea should stay small");
+ #endif
++#endif
+ 
+ ScrollableArea::ScrollableArea() = default;
+ ScrollableArea::~ScrollableArea() = default;
+diff --git a/Source/WebCore/platform/SharedMemory.h b/Source/WebCore/platform/SharedMemory.h
+index 68f798ab3b..9ec349589f 100644
+--- a/Source/WebCore/platform/SharedMemory.h
++++ b/Source/WebCore/platform/SharedMemory.h
+@@ -68,6 +68,8 @@ public:
+         MachSendRight;
+ #elif OS(WINDOWS)
+         Win32Handle;
++#elif OS(AMIGA)
++        uintptr_t; // one address space: the handle is the memory's address
+ #endif
+ 
+     // Note: this function should not be used to share writable arbitrary malloc memory to
+diff --git a/Source/WebCore/platform/Timer.cpp b/Source/WebCore/platform/Timer.cpp
+index bd18b47595..1734acab31 100644
+--- a/Source/WebCore/platform/Timer.cpp
++++ b/Source/WebCore/platform/Timer.cpp
+@@ -270,13 +270,17 @@ struct SameSizeAsTimer {
+ #endif
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(Timer) == sizeof(SameSizeAsTimer), "Timer should stay small");
++#endif
+ 
+ struct SameSizeAsDeferrableOneShotTimer : public SameSizeAsTimer {
+     double delay;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(DeferrableOneShotTimer) == sizeof(SameSizeAsDeferrableOneShotTimer), "DeferrableOneShotTimer should stay small");
++#endif
+ 
+ TimerBase::TimerBase()
+ {
+diff --git a/Source/WebCore/platform/amiga/LibCompatAmiga.c b/Source/WebCore/platform/amiga/LibCompatAmiga.c
+new file mode 100644
+index 0000000000..d275897b23
+--- /dev/null
++++ b/Source/WebCore/platform/amiga/LibCompatAmiga.c
+@@ -0,0 +1,50 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/*
++ * C library pieces libnix lacks, for WebCore on AmigaOS 3.x.
++ */
++#include <math.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <proto/bsdsocket.h>
++
++double exp2(double x)
++{
++    return pow(2.0, x);
++}
++
++float exp2f(float x)
++{
++    return (float)pow(2.0, x);
++}
++
++/* bsdsocket.library's select() takes a sixth argument, the signals to wait
++ * for as well; WebCore's socket code waits for sockets only. The program
++ * opens bsdsocket.library (SocketBase) in the task that uses sockets. */
++int select(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, struct timeval* timeout)
++{
++    return WaitSelect(nfds, readfds, writefds, exceptfds, timeout, NULL);
++}
+diff --git a/Source/WebCore/platform/amiga/MIMETypeRegistryAmiga.cpp b/Source/WebCore/platform/amiga/MIMETypeRegistryAmiga.cpp
+new file mode 100644
+index 0000000000..241c15fc11
+--- /dev/null
++++ b/Source/WebCore/platform/amiga/MIMETypeRegistryAmiga.cpp
+@@ -0,0 +1,96 @@
++/*
++ * Copyright (C) 2018 Sony Interactive Entertainment Inc.
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "MIMETypeRegistry.h"
++
++namespace WebCore {
++
++static const std::initializer_list<TypeExtensionPair>& platformMediaTypes()
++{
++    static std::initializer_list<TypeExtensionPair> platformMediaTypes = {
++        { "image/bmp"_s, "bmp"_s },
++        { "text/css"_s, "css"_s },
++        { "image/gif"_s, "gif"_s },
++        { "text/html"_s, "htm"_s },
++        { "text/html"_s, "html"_s },
++        { "image/x-icon"_s, "ico"_s },
++        { "image/x-ilbm"_s, "iff"_s },
++        { "image/x-ilbm"_s, "ilbm"_s },
++        { "image/jpeg"_s, "jpeg"_s },
++        { "image/jpeg"_s, "jpg"_s },
++        { "text/javascript"_s, "js"_s },
++        { "text/javascript"_s, "mjs"_s },
++        { "application/json"_s, "json"_s },
++        { "application/pdf"_s, "pdf"_s },
++        { "image/png"_s, "png"_s },
++        { "application/rss+xml"_s, "rss"_s },
++        { "image/svg+xml"_s, "svg"_s },
++        { "text/plain"_s, "text"_s },
++        { "text/plain"_s, "txt"_s },
++        { "image/webp"_s, "webp"_s },
++        { "font/woff"_s, "woff"_s },
++        { "font/woff2"_s, "woff2"_s },
++        { "font/ttf"_s, "ttf"_s },
++        { "font/otf"_s, "otf"_s },
++        { "image/x-xbitmap"_s, "xbm"_s },
++        { "application/xhtml+xml"_s, "xhtml"_s },
++        { "text/xml"_s, "xml"_s },
++        { "text/xsl"_s, "xsl"_s },
++    };
++    return platformMediaTypes;
++}
++
++String MIMETypeRegistry::mimeTypeForExtension(StringView extension)
++{
++    for (auto& entry : platformMediaTypes()) {
++        if (equalIgnoringASCIICase(extension, entry.extension))
++            return entry.type;
++    }
++    return emptyString();
++}
++
++bool MIMETypeRegistry::isApplicationPluginMIMEType(const String&)
++{
++    return false;
++}
++
++String MIMETypeRegistry::preferredExtensionForMIMEType(const String& mimeType)
++{
++    for (auto& entry : platformMediaTypes()) {
++        if (equalIgnoringASCIICase(mimeType, entry.type))
++            return entry.extension;
++    }
++    return emptyString();
++}
++
++Vector<String> MIMETypeRegistry::extensionsForMIMEType(const String&)
++{
++    ASSERT_NOT_IMPLEMENTED_YET();
++    return { };
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/amiga/PasteboardAmiga.cpp b/Source/WebCore/platform/amiga/PasteboardAmiga.cpp
+new file mode 100644
+index 0000000000..d3d18bd209
+--- /dev/null
++++ b/Source/WebCore/platform/amiga/PasteboardAmiga.cpp
+@@ -0,0 +1,166 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// The pasteboard inside OpenBrowser: text copied in one page can be pasted
++// in another. The Amiga clipboard (clipboard.device, IFF FTXT) comes later.
++
++#include "config.h"
++#include "Pasteboard.h"
++
++#include "NotImplemented.h"
++#include <wtf/HashMap.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/text/StringHash.h>
++
++namespace WebCore {
++
++static HashMap<String, String>& amigaPasteboard()
++{
++    static NeverDestroyed<HashMap<String, String>> pasteboard;
++    return pasteboard;
++}
++
++static constexpr auto plainTextType = "text/plain;charset=utf-8"_s;
++
++std::unique_ptr<Pasteboard> Pasteboard::createForCopyAndPaste(std::unique_ptr<PasteboardContext>&& context)
++{
++    return makeUnique<Pasteboard>(WTF::move(context));
++}
++
++Pasteboard::Pasteboard(std::unique_ptr<PasteboardContext>&& context)
++    : m_context(WTF::move(context))
++{
++}
++
++bool Pasteboard::hasData()
++{
++    return !amigaPasteboard().isEmpty();
++}
++
++Vector<String> Pasteboard::typesSafeForBindings(const String&)
++{
++    return copyToVector(amigaPasteboard().keys());
++}
++
++Vector<String> Pasteboard::typesForLegacyUnsafeBindings()
++{
++    return copyToVector(amigaPasteboard().keys());
++}
++
++String Pasteboard::readOrigin()
++{
++    return { };
++}
++
++String Pasteboard::readString(const String& type)
++{
++    return amigaPasteboard().get(type);
++}
++
++String Pasteboard::readStringInCustomData(const String&)
++{
++    return { };
++}
++
++void Pasteboard::writeString(const String& type, const String& text)
++{
++    amigaPasteboard().set(type, text);
++}
++
++void Pasteboard::clear()
++{
++    amigaPasteboard().clear();
++}
++
++void Pasteboard::clear(const String& type)
++{
++    amigaPasteboard().remove(type);
++}
++
++void Pasteboard::read(PasteboardPlainText& text, PlainTextURLReadingPolicy, std::optional<size_t>)
++{
++    text.text = amigaPasteboard().get(plainTextType);
++}
++
++void Pasteboard::read(PasteboardWebContentReader&, WebContentReadingPolicy, std::optional<size_t>)
++{
++    notImplemented();
++}
++
++void Pasteboard::read(PasteboardFileReader&, std::optional<size_t>)
++{
++}
++
++void Pasteboard::write(const PasteboardURL& url)
++{
++    writeString(plainTextType, url.url.string());
++}
++
++void Pasteboard::writeTrustworthyWebURLsPboardType(const PasteboardURL&)
++{
++}
++
++void Pasteboard::write(const PasteboardImage&)
++{
++}
++
++void Pasteboard::write(const PasteboardBuffer&)
++{
++}
++
++void Pasteboard::write(const PasteboardWebContent&)
++{
++    notImplemented();
++}
++
++Pasteboard::FileContentState Pasteboard::fileContentState()
++{
++    return FileContentState::NoFileOrImageData;
++}
++
++bool Pasteboard::canSmartReplace()
++{
++    return false;
++}
++
++void Pasteboard::writeMarkup(const String& markup)
++{
++    writeString("text/html"_s, markup);
++}
++
++void Pasteboard::writePlainText(const String& text, SmartReplaceOption)
++{
++    writeString(plainTextType, text);
++}
++
++void Pasteboard::writeCustomData(const Vector<PasteboardCustomData>&, PasteboardWriteType)
++{
++}
++
++void Pasteboard::write(const Color&)
++{
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/amiga/PlatformKeyboardEventAmiga.cpp b/Source/WebCore/platform/amiga/PlatformKeyboardEventAmiga.cpp
+new file mode 100644
+index 0000000000..c3cb2cec4f
+--- /dev/null
++++ b/Source/WebCore/platform/amiga/PlatformKeyboardEventAmiga.cpp
+@@ -0,0 +1,47 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "PlatformKeyboardEvent.h"
++
++namespace WebCore {
++
++// The browser makes KeyDown events from Intuition's IDCMP_RAWKEY (and the
++// text from MapRawKey()); WebCore splits them into RawKeyDown and KeyPress.
++void PlatformKeyboardEvent::disambiguateKeyDownEvent(Type type, bool backwardsCompatibility)
++{
++    ASSERT(m_type == PlatformEvent::Type::KeyDown);
++    m_type = type;
++    if (backwardsCompatibility)
++        return;
++
++    if (type == PlatformEvent::Type::RawKeyDown) {
++        m_text = String();
++        m_unmodifiedText = String();
++    } else
++        m_keyIdentifier = String();
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/amiga/PlatformScreenAmiga.cpp b/Source/WebCore/platform/amiga/PlatformScreenAmiga.cpp
+new file mode 100644
+index 0000000000..548237af56
+--- /dev/null
++++ b/Source/WebCore/platform/amiga/PlatformScreenAmiga.cpp
+@@ -0,0 +1,86 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "PlatformScreen.h"
++
++#include "ColorSpace.h"
++#include "FloatRect.h"
++#include "PlatformScreenAmiga.h"
++
++namespace WebCore {
++
++static int s_screenWidth = 800;
++static int s_screenHeight = 600;
++static int s_screenDepth = 24;
++
++void setAmigaScreenGeometry(int width, int height, int depth)
++{
++    s_screenWidth = width;
++    s_screenHeight = height;
++    s_screenDepth = depth;
++}
++
++int screenDepth(Widget*)
++{
++    return s_screenDepth;
++}
++
++int screenDepthPerComponent(Widget*)
++{
++    return s_screenDepth >= 24 ? 8 : s_screenDepth >= 15 ? 5 : 2;
++}
++
++bool screenIsMonochrome(Widget*)
++{
++    return s_screenDepth == 1;
++}
++
++bool screenHasInvertedColors()
++{
++    return false;
++}
++
++FloatRect screenRect(Widget*)
++{
++    return { 0, 0, static_cast<float>(s_screenWidth), static_cast<float>(s_screenHeight) };
++}
++
++FloatRect screenAvailableRect(Widget* widget)
++{
++    return screenRect(widget);
++}
++
++bool screenSupportsExtendedColor(Widget*)
++{
++    return false;
++}
++
++ColorSpace screenColorSpace(Widget*)
++{
++    return ColorSpace::SRGB();
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/amiga/PlatformScreenAmiga.h b/Source/WebCore/platform/amiga/PlatformScreenAmiga.h
+new file mode 100644
+index 0000000000..c1bd4cbeba
+--- /dev/null
++++ b/Source/WebCore/platform/amiga/PlatformScreenAmiga.h
+@@ -0,0 +1,34 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++namespace WebCore {
++
++// The browser tells WebCore what screen its window is on (Intuition's
++// screen size and depth); before that, an 800 x 600 24-bit screen is assumed.
++WEBCORE_EXPORT void setAmigaScreenGeometry(int width, int height, int depth);
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/amiga/SharedMemoryAmiga.cpp b/Source/WebCore/platform/amiga/SharedMemoryAmiga.cpp
+new file mode 100644
+index 0000000000..ae24d86553
+--- /dev/null
++++ b/Source/WebCore/platform/amiga/SharedMemoryAmiga.cpp
+@@ -0,0 +1,63 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// AmigaOS has one address space and no separate WebKit processes, so shared
++// memory is ordinary memory. Handles (for passing memory between processes)
++// are not made.
++
++#include "config.h"
++#include "SharedMemory.h"
++
++#include <wtf/FastMalloc.h>
++
++namespace WebCore {
++
++RefPtr<SharedMemory> SharedMemory::allocate(size_t size)
++{
++    void* data = nullptr;
++    if (!tryFastZeroedMalloc(size).getValue(data) || !data)
++        return nullptr;
++    auto memory = adoptRef(*new SharedMemory);
++    memory->m_size = size;
++    memory->m_data = data;
++    return memory;
++}
++
++RefPtr<SharedMemory> SharedMemory::map(Handle&&, Protection, CopyOnWrite)
++{
++    return nullptr;
++}
++
++SharedMemory::~SharedMemory()
++{
++    fastFree(m_data);
++}
++
++auto SharedMemory::createHandle(Protection) -> std::optional<Handle>
++{
++    return std::nullopt;
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/amiga/UserAgentAmiga.cpp b/Source/WebCore/platform/amiga/UserAgentAmiga.cpp
+new file mode 100644
+index 0000000000..e5df540e33
+--- /dev/null
++++ b/Source/WebCore/platform/amiga/UserAgentAmiga.cpp
+@@ -0,0 +1,64 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "UserAgent.h"
++
++#include <wtf/NeverDestroyed.h>
++#include <wtf/URL.h>
++#include <wtf/text/MakeString.h>
++
++// The user agent is fragile: sites decide what to send from it. This one
++// names the Amiga and keeps the Safari form ("Version/X Safari/Y") that
++// sites test for WebKit browsers; see UserAgentGLib.cpp's history.
++
++namespace WebCore {
++
++static constexpr ASCIILiteral versionForUAString()
++{
++    // https://bugs.webkit.org/show_bug.cgi?id=180365
++    return "605.1.15"_s;
++}
++
++static const String& standardUserAgentStatic()
++{
++    static NeverDestroyed<String> userAgent(makeString("Mozilla/5.0 (Amiga; AmigaOS 3.2; m68k) AppleWebKit/"_s,
++        versionForUAString(), " (KHTML, like Gecko) Version/18.0 Safari/"_s, versionForUAString()));
++    return userAgent;
++}
++
++String standardUserAgent(const String& applicationName, const String& applicationVersion)
++{
++    if (applicationName.isEmpty())
++        return standardUserAgentStatic();
++    return makeString(standardUserAgentStatic(), ' ', applicationName, '/', applicationVersion.isEmpty() ? String(versionForUAString()) : applicationVersion);
++}
++
++String standardUserAgentForURL(const URL&)
++{
++    return standardUserAgentStatic();
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/graphics/FontCascadeDescription.cpp b/Source/WebCore/platform/graphics/FontCascadeDescription.cpp
+index 7f5b46d180..469265e29b 100644
+--- a/Source/WebCore/platform/graphics/FontCascadeDescription.cpp
++++ b/Source/WebCore/platform/graphics/FontCascadeDescription.cpp
+@@ -59,7 +59,9 @@ struct SameSizeAsFontCascadeDescription {
+     float size2;
+     unsigned bitfields3 : 10;
+ };
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(FontCascadeDescription) == sizeof(SameSizeAsFontCascadeDescription), "FontCascadeDescription should stay small");
++#endif
+ 
+ FontCascadeDescription::FontCascadeDescription()
+     : m_families(RefCountedFixedVector<FontFamily>::create(1))
+diff --git a/Source/WebCore/platform/graphics/amiga/GraphicsLayerAmiga.cpp b/Source/WebCore/platform/graphics/amiga/GraphicsLayerAmiga.cpp
+new file mode 100644
+index 0000000000..f5861b790c
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/amiga/GraphicsLayerAmiga.cpp
+@@ -0,0 +1,56 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "GraphicsLayer.h"
++
++#include "GraphicsLayerFactory.h"
++
++namespace WebCore {
++
++// The Amiga port draws without accelerated compositing: pages paint
++// straight into the window's bitmap. WebCore still makes a few layers (for
++// page overlays, for one); these keep their properties and draw nothing of
++// their own.
++class GraphicsLayerAmiga final : public GraphicsLayer {
++public:
++    GraphicsLayerAmiga(Type layerType, GraphicsLayerClient& client)
++        : GraphicsLayer(layerType, client)
++    {
++    }
++
++private:
++    void setNeedsDisplay() final { }
++    void setNeedsDisplayInRect(const FloatRect&, ShouldClipToLayer) final { }
++};
++
++Ref<GraphicsLayer> GraphicsLayer::create(GraphicsLayerFactory* factory, GraphicsLayerClient& client, Type layerType)
++{
++    if (factory)
++        return factory->createGraphicsLayer(layerType, client);
++    return adoptRef(*new GraphicsLayerAmiga(layerType, client));
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/graphics/amiga/SystemFontDatabaseAmiga.cpp b/Source/WebCore/platform/graphics/amiga/SystemFontDatabaseAmiga.cpp
+new file mode 100644
+index 0000000000..f4c94c75c9
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/amiga/SystemFontDatabaseAmiga.cpp
+@@ -0,0 +1,53 @@
++/*
++ * Copyright (C) 2018 Sony Interactive Entertainment Inc.
++ * Copyright (C) 2022 Apple Inc. All rights reserved.
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "SystemFontDatabase.h"
++
++#include "NotImplemented.h"
++#include "WebKitFontFamilyNames.h"
++#include <wtf/NeverDestroyed.h>
++
++namespace WebCore {
++
++SystemFontDatabase& SystemFontDatabase::singleton()
++{
++    static NeverDestroyed<SystemFontDatabase> database = SystemFontDatabase();
++    return database.get();
++}
++
++auto SystemFontDatabase::platformSystemFontShorthandInfo(FontShorthand) -> SystemFontShorthandInfo
++{
++    notImplemented();
++    return { WebKitFontFamilyNames::standardFamily, 16, normalWeightValue() };
++}
++
++void SystemFontDatabase::platformInvalidate()
++{
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/image-decoders/ScalableImageDecoder.cpp b/Source/WebCore/platform/image-decoders/ScalableImageDecoder.cpp
+index 3f46090c1c..53f21428d4 100644
+--- a/Source/WebCore/platform/image-decoders/ScalableImageDecoder.cpp
++++ b/Source/WebCore/platform/image-decoders/ScalableImageDecoder.cpp
+@@ -27,7 +27,7 @@
+ #include "SharedBuffer.h"
+ #include <wtf/TZoneMallocInlines.h>
+ 
+-#if !PLATFORM(COCOA)
++#if !PLATFORM(COCOA) && !PLATFORM(AMIGA)
+ #include "BMPImageDecoder.h"
+ #include "GIFImageDecoder.h"
+ #include "ICOImageDecoder.h"
+@@ -42,6 +42,9 @@
+ #include "JPEGXLImageDecoder.h"
+ #endif
+ 
++#if PLATFORM(AMIGA)
++#include "DatatypesImageDecoder.h"
++#endif
+ #if USE(CG)
+ #include "ImageDecoderCG.h"
+ #include <ImageIO/ImageIO.h>
+@@ -62,7 +65,7 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(ScalableImageDecoder);
+ 
+ namespace {
+ 
+-#if !PLATFORM(COCOA)
++#if !PLATFORM(COCOA) && !PLATFORM(AMIGA)
+ static bool matchesGIFSignature(std::span<const uint8_t> contents)
+ {
+     return spanHasPrefix(contents, "GIF87a"_span) || spanHasPrefix(contents, "GIF89a"_span);
+@@ -140,8 +143,13 @@ RefPtr<ScalableImageDecoder> ScalableImageDecoder::create(FragmentedSharedBuffer
+     data.copyTo(std::span { contents });
+ 
+     std::span contentsSpan { contents };
++#if PLATFORM(AMIGA)
++    // The system's datatypes decide which formats can be shown.
++    UNUSED_PARAM(contentsSpan);
++    return DatatypesImageDecoder::create(alphaOption, gammaAndColorProfileOption);
++#endif
+ 
+-#if !PLATFORM(COCOA)
++#if !PLATFORM(COCOA) && !PLATFORM(AMIGA)
+     if (matchesGIFSignature(contentsSpan))
+         return GIFImageDecoder::create(alphaOption, gammaAndColorProfileOption);
+ 
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+new file mode 100644
+index 0000000000..6dc4b99184
+--- /dev/null
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+@@ -0,0 +1,210 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "DatatypesDecode.h"
++
++#include <exec/types.h>
++#include <datatypes/datatypes.h>
++#include <datatypes/datatypesclass.h>
++#include <datatypes/pictureclass.h>
++#include <intuition/classusr.h>
++#include <dos/dos.h>
++#include <proto/exec.h>
++#include <proto/dos.h>
++#include <proto/datatypes.h>
++#include <clib/alib_protos.h>
++
++#include <pthread.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++/* Every thread decodes through the one library base; datatypes.library is
++ * a shared library, safe to call from any process. */
++struct Library* DataTypesBase;
++static pthread_once_t s_openOnce = PTHREAD_ONCE_INIT;
++
++/* ROM mathieeesingbas.library puts the FPU in single precision (FPCR $40) in
++ * the task that opens it, and a datatype may open it while it loads; WebKit's
++ * doubles (and cairo's fixed-point maths) need FPCR 0. */
++static void resetFPCR(void)
++{
++    __asm__ volatile ("fmove.l %0,%%fpcr" : : "d" (0));
++}
++
++static void closeDataTypes(void)
++{
++    if (DataTypesBase) {
++        CloseLibrary(DataTypesBase);
++        DataTypesBase = NULL;
++    }
++}
++
++static void openDataTypes(void)
++{
++    /* V43: the picture class's V43 mode and pixel arrays; OS 3.2 has V47. */
++    DataTypesBase = OpenLibrary((CONST_STRPTR)"datatypes.library", 43);
++    if (DataTypesBase)
++        atexit(closeDataTypes);
++    resetFPCR();
++}
++
++static void disposePicture(Object* object, const char* fileName)
++{
++    DisposeDTObject(object);
++    DeleteFile((CONST_STRPTR)fileName);
++    resetFPCR();
++}
++
++/* OS 3.2's picture datatypes read files, not memory (DTST_MEMORY gives
++ * ERROR_OBJECT_WRONG_TYPE), so the picture goes through a file in T:. */
++static int writeTemporaryFile(const void* data, unsigned long size, char* name, size_t nameSize)
++{
++    static unsigned long s_counter;
++    static pthread_mutex_t s_counterLock = PTHREAD_MUTEX_INITIALIZER;
++    unsigned long serial;
++    BPTR file;
++    LONG written;
++
++    pthread_mutex_lock(&s_counterLock);
++    serial = ++s_counter;
++    pthread_mutex_unlock(&s_counterLock);
++    snprintf(name, nameSize, "T:OpenBrowser-%08lx-%lu.img", (unsigned long)FindTask(NULL), serial);
++    file = Open((CONST_STRPTR)name, MODE_NEWFILE);
++    if (!file)
++        return 0;
++    written = Write(file, (APTR)data, (LONG)size);
++    Close(file);
++    if (written != (LONG)size) {
++        DeleteFile((CONST_STRPTR)name);
++        return 0;
++    }
++    return 1;
++}
++
++int obdt_decode(const void* data, unsigned long size, OBDTImage* out)
++{
++    char fileName[64];
++    Object* object;
++    struct BitMapHeader* header = NULL;
++    ULONG alphaChannel = FALSE;
++    ULONG width, height, count, i;
++    unsigned char* pixels;
++
++    memset(out, 0, sizeof *out);
++    pthread_once(&s_openOnce, openDataTypes);
++    if (!DataTypesBase || !data || !size)
++        return 0;
++
++    if (!writeTemporaryFile(data, size, fileName, sizeof fileName))
++        return 0;
++    object = NewDTObject((APTR)fileName,
++        DTA_GroupID, GID_PICTURE,
++        PDTA_DestMode, PMODE_V43,
++        PDTA_Remap, FALSE,
++        TAG_DONE);
++    if (!object) {
++        DeleteFile((CONST_STRPTR)fileName);
++        resetFPCR();
++        return 0;
++    }
++
++    GetDTAttrs(object, PDTA_BitMapHeader, (ULONG)&header, TAG_DONE);
++    GetDTAttrs(object, PDTA_AlphaChannel, (ULONG)&alphaChannel, TAG_DONE);
++    if (!header || !header->bmh_Width || !header->bmh_Height) {
++        disposePicture(object, fileName);
++        return 0;
++    }
++    width = header->bmh_Width;
++    height = header->bmh_Height;
++    count = width * height;
++
++    /* The subclass finishes reading the picture in the layout method. */
++    DoDTMethod(object, NULL, NULL, DTM_PROCLAYOUT, NULL, TRUE);
++
++    pixels = (unsigned char*)malloc(count * 4);
++    if (!pixels) {
++        disposePicture(object, fileName);
++        return 0;
++    }
++
++    if (header->bmh_Masking == mskHasTransparentColor && header->bmh_Depth <= 8) {
++        /* A palette picture with a transparent colour (GIF): read the colour
++         * indices so that colour can become alpha 0. */
++        struct ColorRegister* colors = NULL;
++        ULONG numColors = 0;
++        unsigned char* indices = (unsigned char*)malloc(count);
++        if (!indices) {
++            free(pixels);
++            disposePicture(object, fileName);
++            return 0;
++        }
++        GetDTAttrs(object, PDTA_ColorRegisters, (ULONG)&colors, PDTA_NumColors, (ULONG)&numColors, TAG_DONE);
++        if (!colors || !DoMethod(object, PDTM_READPIXELARRAY, (ULONG)indices, PBPAFMT_LUT8, width, 0, 0, width, height)) {
++            free(indices);
++            free(pixels);
++            disposePicture(object, fileName);
++            return 0;
++        }
++        for (i = 0; i < count; i++) {
++            unsigned index = indices[i];
++            unsigned char* pixel = pixels + i * 4;
++            if (index == header->bmh_Transparent || index >= numColors) {
++                pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
++                continue;
++            }
++            pixel[0] = 0xff;
++            pixel[1] = colors[index].red;
++            pixel[2] = colors[index].green;
++            pixel[3] = colors[index].blue;
++        }
++        free(indices);
++        out->hasAlpha = 1;
++    } else {
++        if (!DoMethod(object, PDTM_READPIXELARRAY, (ULONG)pixels, PBPAFMT_ARGB, width * 4, 0, 0, width, height)) {
++            free(pixels);
++            disposePicture(object, fileName);
++            return 0;
++        }
++        out->hasAlpha = alphaChannel || header->bmh_Masking == mskHasAlpha;
++        if (!out->hasAlpha) {
++            /* Without an alpha channel the alpha bytes are not defined. */
++            for (i = 0; i < count; i++)
++                pixels[i * 4] = 0xff;
++        }
++    }
++
++    disposePicture(object, fileName);
++    out->width = width;
++    out->height = height;
++    out->pixels = pixels;
++    return 1;
++}
++
++void obdt_free(OBDTImage* image)
++{
++    free(image->pixels);
++    image->pixels = NULL;
++}
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
+new file mode 100644
+index 0000000000..ed95e2e66e
+--- /dev/null
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
+@@ -0,0 +1,55 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/* Decoding a picture through the system's datatypes (datatypes.library and
++ * picture.datatype V43 mode). Plain C, so that AmigaOS headers and their
++ * macros stay out of WebCore's C++. */
++
++#ifndef DatatypesDecode_h
++#define DatatypesDecode_h
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct {
++    unsigned width;
++    unsigned height;
++    int hasAlpha;
++    /* width * height pixels, 4 bytes each: alpha, red, green, blue, with the
++     * alpha not premultiplied. Free it with obdt_free(). */
++    unsigned char* pixels;
++} OBDTImage;
++
++/* 1 when the system's datatypes can read the picture in data; 0 when no
++ * datatype recognised it, it was damaged, or memory ran out. */
++int obdt_decode(const void* data, unsigned long size, OBDTImage* out);
++void obdt_free(OBDTImage*);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* DatatypesDecode_h */
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.cpp b/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.cpp
+new file mode 100644
+index 0000000000..5a76532d09
+--- /dev/null
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.cpp
+@@ -0,0 +1,177 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "DatatypesImageDecoder.h"
++
++#include "DatatypesDecode.h"
++#include <cstdlib>
++
++namespace WebCore {
++
++DatatypesImageDecoder::DatatypesImageDecoder(AlphaOption alphaOption, GammaAndColorProfileOption gammaAndColorProfileOption)
++    : ScalableImageDecoder(alphaOption, gammaAndColorProfileOption)
++{
++}
++
++static inline unsigned readBigEndian16(std::span<const uint8_t> data, size_t offset)
++{
++    return (data[offset] << 8) | data[offset + 1];
++}
++
++static inline unsigned readLittleEndian16(std::span<const uint8_t> data, size_t offset)
++{
++    return data[offset] | (data[offset + 1] << 8);
++}
++
++static inline uint32_t readBigEndian32(std::span<const uint8_t> data, size_t offset)
++{
++    return (uint32_t(data[offset]) << 24) | (uint32_t(data[offset + 1]) << 16) | (uint32_t(data[offset + 2]) << 8) | data[offset + 3];
++}
++
++static inline int32_t readLittleEndian32(std::span<const uint8_t> data, size_t offset)
++{
++    return static_cast<int32_t>(data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (uint32_t(data[offset + 3]) << 24));
++}
++
++// The picture's size from the start of the file, before it is all in, so
++// layout need not wait for the whole picture. Unknown formats wait for the
++// datatype.
++static std::optional<IntSize> sizeFromHeader(std::span<const uint8_t> data)
++{
++    // PNG: the IHDR chunk follows the 8-byte signature.
++    if (data.size() >= 24 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G')
++        return IntSize(readBigEndian32(data, 16), readBigEndian32(data, 20));
++    // GIF: the logical screen size.
++    if (data.size() >= 10 && data[0] == 'G' && data[1] == 'I' && data[2] == 'F')
++        return IntSize(readLittleEndian16(data, 6), readLittleEndian16(data, 8));
++    // BMP: the info header after the 14-byte file header.
++    if (data.size() >= 26 && data[0] == 'B' && data[1] == 'M')
++        return IntSize(std::abs(readLittleEndian32(data, 18)), std::abs(readLittleEndian32(data, 22)));
++    // JPEG: the first start-of-frame marker.
++    if (data.size() >= 4 && data[0] == 0xff && data[1] == 0xd8) {
++        size_t offset = 2;
++        while (offset + 9 < data.size()) {
++            if (data[offset] != 0xff) {
++                ++offset;
++                continue;
++            }
++            uint8_t marker = data[offset + 1];
++            if (marker == 0xff) {
++                ++offset;
++                continue;
++            }
++            bool startOfFrame = marker >= 0xc0 && marker <= 0xcf && marker != 0xc4 && marker != 0xc8 && marker != 0xcc;
++            if (startOfFrame)
++                return IntSize(readBigEndian16(data, offset + 7), readBigEndian16(data, offset + 5));
++            if (marker == 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker == 0x01) {
++                offset += 2;
++                continue;
++            }
++            offset += 2 + readBigEndian16(data, offset + 2);
++        }
++        return std::nullopt;
++    }
++    // IFF ILBM: the BMHD chunk.
++    if (data.size() >= 24 && data[0] == 'F' && data[1] == 'O' && data[2] == 'R' && data[3] == 'M'
++        && data[8] == 'I' && data[9] == 'L' && data[10] == 'B' && data[11] == 'M'
++        && data[12] == 'B' && data[13] == 'M' && data[14] == 'H' && data[15] == 'D')
++        return IntSize(readBigEndian16(data, 20), readBigEndian16(data, 22));
++    return std::nullopt;
++}
++
++void DatatypesImageDecoder::tryDecodeSize(bool allDataReceived)
++{
++    // ScalableImageDecoder::setData() calls this with m_lock held.
++    assertIsHeld(m_lock);
++    if (!m_data)
++        return;
++    if (auto size = sizeFromHeader(m_data->span()); size && !size->isEmpty()) {
++        setSize(*size);
++        return;
++    }
++    if (!allDataReceived)
++        return;
++    // A format the header test does not know: let the datatype find the size.
++    decodeAll();
++}
++
++bool DatatypesImageDecoder::decodeAll()
++{
++    assertIsHeld(m_lock);
++    if (m_decodeAttempted)
++        return !m_frameBufferCache.isEmpty() && m_frameBufferCache.first().isComplete();
++    m_decodeAttempted = true;
++
++    auto data = m_data->span();
++    OBDTImage image;
++    if (!obdt_decode(data.data(), data.size(), &image))
++        return setFailed();
++
++    IntSize imageSize(image.width, image.height);
++    if (size() != imageSize) {
++        // Only before the size is known: once all the data is in, setSize()
++        // would take the decoder back to SizeAvailable.
++        if (isSizeAvailable() || !setSize(imageSize)) {
++            obdt_free(&image);
++            return setFailed();
++        }
++    }
++
++    if (m_frameBufferCache.isEmpty())
++        m_frameBufferCache.grow(1);
++    auto& buffer = m_frameBufferCache.first();
++    if (!buffer.initialize(imageSize, premultiplyAlpha())) {
++        obdt_free(&image);
++        return setFailed();
++    }
++
++    auto* backingStore = buffer.backingStore();
++    const uint8_t* pixel = image.pixels;
++    for (unsigned y = 0; y < image.height; ++y) {
++        for (unsigned x = 0; x < image.width; ++x, pixel += 4)
++            backingStore->setPixel(x, y, pixel[1], pixel[2], pixel[3], pixel[0]);
++    }
++    obdt_free(&image);
++
++    buffer.setHasAlpha(image.hasAlpha);
++    buffer.setDecodingStatus(DecodingStatus::Complete);
++    return true;
++}
++
++ScalableImageDecoderFrame* DatatypesImageDecoder::frameBufferAtIndex(size_t index)
++{
++    assertIsHeld(m_lock);
++    if (index)
++        return nullptr;
++    if (m_frameBufferCache.isEmpty())
++        m_frameBufferCache.grow(1);
++    auto* buffer = &m_frameBufferCache.first();
++    if (!buffer->isComplete() && isAllDataReceived())
++        decodeAll();
++    return buffer;
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.h b/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.h
+new file mode 100644
+index 0000000000..0badda8003
+--- /dev/null
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.h
+@@ -0,0 +1,56 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include "ScalableImageDecoder.h"
++
++namespace WebCore {
++
++// Every bitmap image in a page is decoded by the system's datatypes, so the
++// formats a page can show are the ones the user has datatypes for: OS 3.2
++// ships PNG, JPEG, GIF, BMP and ILBM. The size comes from the file's header
++// as soon as it arrives; the pixels when all of the file is in.
++class DatatypesImageDecoder final : public ScalableImageDecoder {
++public:
++    static Ref<ScalableImageDecoder> create(AlphaOption alphaOption, GammaAndColorProfileOption gammaAndColorProfileOption)
++    {
++        return adoptRef(*new DatatypesImageDecoder(alphaOption, gammaAndColorProfileOption));
++    }
++
++    String filenameExtension() const final { return "dt"_s; }
++
++private:
++    DatatypesImageDecoder(AlphaOption, GammaAndColorProfileOption);
++
++    void tryDecodeSize(bool allDataReceived) final;
++    ScalableImageDecoderFrame* frameBufferAtIndex(size_t) final WTF_REQUIRES_LOCK(m_lock);
++
++    bool decodeAll() WTF_REQUIRES_LOCK(m_lock);
++
++    bool m_decodeAttempted { false };
++};
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/network/DNS.h b/Source/WebCore/platform/network/DNS.h
+index 3860b30d0d..d4bde294b9 100644
+--- a/Source/WebCore/platform/network/DNS.h
++++ b/Source/WebCore/platform/network/DNS.h
+@@ -35,6 +35,9 @@
+ #include <ws2tcpip.h>
+ #else
+ #include <netinet/in.h>
++#if OS(AMIGA) && !defined(INADDR_LOOPBACK)
++#define INADDR_LOOPBACK 0x7f000001 // the NDK's netinet/in.h has no INADDR_LOOPBACK
++#endif
+ #endif
+ 
+ namespace WebCore {
+diff --git a/Source/WebCore/platform/network/ResourceHandle.cpp b/Source/WebCore/platform/network/ResourceHandle.cpp
+index 06497167b7..9ace8c5723 100644
+--- a/Source/WebCore/platform/network/ResourceHandle.cpp
++++ b/Source/WebCore/platform/network/ResourceHandle.cpp
+@@ -309,7 +309,7 @@ void ResourceHandle::setDefersLoading(bool defers)
+     platformSetDefersLoading(defers);
+ }
+ 
+-#if USE(SOUP) || USE(CURL)
++#if (USE(SOUP) || USE(CURL)) && !PLATFORM(AMIGA)
+ ResourceHandleInternal::~ResourceHandleInternal() = default;
+ 
+ ResourceHandle::~ResourceHandle()
+diff --git a/Source/WebCore/platform/network/ResourceHandle.h b/Source/WebCore/platform/network/ResourceHandle.h
+index 345b32ee76..8da2e54cd4 100644
+--- a/Source/WebCore/platform/network/ResourceHandle.h
++++ b/Source/WebCore/platform/network/ResourceHandle.h
+@@ -64,6 +64,11 @@ template<typename T> class MessageQueue;
+ 
+ namespace WebCore {
+ 
++#if PLATFORM(AMIGA)
++class CurlRequest;
++class CurlResponse;
++#endif
++
+ class AuthenticationChallenge;
+ class Credential;
+ class LocalFrame;
+@@ -187,6 +192,12 @@ private:
+     void scheduleFailure(FailureType);
+ 
+     bool start();
++#if PLATFORM(AMIGA)
++    friend class ResourceHandleCurlDelegate;
++    void amigaStartCurlRequest(ResourceRequest&&);
++    void amigaLoadFile();
++    void amigaDidReceiveResponse(CurlRequest&, CurlResponse&&);
++#endif
+     static void platformLoadResourceSynchronously(NetworkingContext*, const ResourceRequest&, StoredCredentialsPolicy, SecurityOrigin*, ResourceError&, ResourceResponse&, Vector<uint8_t>& data);
+ 
+ #if PLATFORM(COCOA)
+diff --git a/Source/WebCore/platform/network/ResourceHandleInternal.h b/Source/WebCore/platform/network/ResourceHandleInternal.h
+index 4f56aac50a..fd5bea46a1 100644
+--- a/Source/WebCore/platform/network/ResourceHandleInternal.h
++++ b/Source/WebCore/platform/network/ResourceHandleInternal.h
+@@ -46,8 +46,16 @@ typedef const struct __CFURLStorageSession* CFURLStorageSessionRef;
+ // Cocoa-exception-free (either simple Foundation classes or
+ // WebCoreResourceLoaderImp which avoids doing work in dealloc).
+ 
++#if PLATFORM(AMIGA)
++#include "CurlRequest.h"
++#endif
++
+ namespace WebCore {
+ 
++#if PLATFORM(AMIGA)
++class ResourceHandleCurlDelegate;
++#endif
++
+ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(ResourceHandleInternal);
+ class ResourceHandleInternal {
+     WTF_MAKE_NONCOPYABLE(ResourceHandleInternal);
+@@ -97,6 +105,10 @@ public:
+     // We need to keep a reference to the original challenge to be able to cancel it.
+     // It is almost identical to m_currentWebChallenge.nsURLAuthenticationChallenge(), but has a different sender.
+     WeakObjCPtr<NSURLAuthenticationChallenge> m_currentMacChallenge;
++#endif
++#if PLATFORM(AMIGA)
++    RefPtr<CurlRequest> m_curlRequest;
++    RefPtr<ResourceHandleCurlDelegate> m_curlDelegate;
+ #endif
+     Box<NetworkLoadMetrics> m_networkLoadMetrics;
+     MonotonicTime m_startTime;
+diff --git a/Source/WebCore/platform/network/amiga/AmigaNetwork.h b/Source/WebCore/platform/network/amiga/AmigaNetwork.h
+new file mode 100644
+index 0000000000..458bb27436
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/AmigaNetwork.h
+@@ -0,0 +1,55 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <wtf/Function.h>
++#include <wtf/URL.h>
++#include <wtf/text/WTFString.h>
++
++namespace WebCore {
++
++// The browser's cookie jar, as the network layer sees it: the Cookie header
++// for a request, and each Set-Cookie header of a response.
++struct AmigaCookieHooks {
++    Function<String(const URL& firstParty, const URL&)> cookieHeader;
++    Function<void(const URL& firstParty, const URL&, const String& setCookie)> storeFromResponse;
++};
++
++WEBCORE_EXPORT void setAmigaCookieHooks(AmigaCookieHooks&&);
++
++// The network thread's start and end. On AmigaOS each task opens its own
++// bsdsocket.library and joins AmiSSL itself, so the browser does that in
++// these two functions, which run on the network thread.
++struct AmigaNetworkThreadHooks {
++    void (*started)() { nullptr };
++    void (*finished)() { nullptr };
++};
++
++WEBCORE_EXPORT void setAmigaNetworkThreadHooks(const AmigaNetworkThreadHooks&);
++void amigaNetworkThreadStarted();
++void amigaNetworkThreadFinished();
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/network/amiga/CurlSSLHandleAmiga.cpp b/Source/WebCore/platform/network/amiga/CurlSSLHandleAmiga.cpp
+new file mode 100644
+index 0000000000..a36ad9e717
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/CurlSSLHandleAmiga.cpp
+@@ -0,0 +1,58 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "CurlSSLHandle.h"
++
++namespace WebCore {
++
++// AmiSSL keeps its trusted root certificates in AmiSSL:Certs, OpenSSL's
++// default verify paths, which curl uses when no CA file is given. The cipher
++// list prefers ciphers that are cheap on a 68k without AES instructions.
++void CurlSSLHandle::platformInitialize()
++{
++    constexpr auto cipherList =
++        "TLS_CHACHA20_POLY1305_SHA256:"
++        "TLS_AES_128_GCM_SHA256:"
++        "TLS_AES_256_GCM_SHA384:"
++        "ECDHE-ECDSA-CHACHA20-POLY1305:"
++        "ECDHE-RSA-CHACHA20-POLY1305:"
++        "ECDHE-ECDSA-AES128-GCM-SHA256:"
++        "ECDHE-RSA-AES128-GCM-SHA256:"
++        "ECDHE-ECDSA-AES256-GCM-SHA384:"
++        "ECDHE-RSA-AES256-GCM-SHA384:"
++        "ECDHE-ECDSA-AES128-SHA:"
++        "ECDHE-RSA-AES128-SHA:"
++        "AES128-GCM-SHA256:"
++        "AES128-SHA"_s;
++    constexpr auto ecCurves =
++        "X25519:"
++        "P-256:"
++        "P-384"_s;
++    setCipherList(cipherList);
++    setECCurves(ecCurves);
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/network/amiga/NetworkStateNotifierAmiga.cpp b/Source/WebCore/platform/network/amiga/NetworkStateNotifierAmiga.cpp
+new file mode 100644
+index 0000000000..12981f41c6
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/NetworkStateNotifierAmiga.cpp
+@@ -0,0 +1,46 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "NetworkStateNotifier.h"
++
++namespace WebCore {
++
++// bsdsocket.library has no network-change events; the browser reports the
++// network as up and lets each load find out otherwise.
++void NetworkStateNotifier::updateStateWithoutNotifying()
++{
++    m_isOnLine = true;
++}
++
++void NetworkStateNotifier::startObserving()
++{
++}
++
++} // namespace WebCore
++
++// The Amiga ResourceHandle is built with this file: adding a file to the
++// build list would rebuild all of WebCore.
++#include "ResourceHandleAmiga.cpp"
+diff --git a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+new file mode 100644
+index 0000000000..4e7ad1cb17
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+@@ -0,0 +1,380 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// ResourceHandle for the single-process Amiga port: http and https through
++// WebCore's curl backend (CurlRequest), local files read directly. The
++// redirect and cookie handling follows WebKit's NetworkDataTaskCurl.
++
++#include "config.h"
++#include "ResourceHandle.h"
++
++#include "AmigaNetwork.h"
++#include "CurlRequest.h"
++#include "CurlRequestClient.h"
++#include "CurlResponse.h"
++#include "HTTPParsers.h"
++#include "MIMETypeRegistry.h"
++#include "OriginAccessPatterns.h"
++#include "NetworkLoadMetrics.h"
++#include "ResourceError.h"
++#include "ResourceHandleClient.h"
++#include "ResourceHandleInternal.h"
++#include "ResourceResponse.h"
++#include "SecurityOrigin.h"
++#include "SharedBuffer.h"
++#include <wtf/FileSystem.h>
++#include <wtf/RunLoop.h>
++#include <wtf/text/MakeString.h>
++
++namespace WebCore {
++
++static AmigaCookieHooks& cookieHooks()
++{
++    static NeverDestroyed<AmigaCookieHooks> hooks;
++    return hooks;
++}
++
++void setAmigaCookieHooks(AmigaCookieHooks&& hooks)
++{
++    cookieHooks() = WTF::move(hooks);
++}
++
++static AmigaNetworkThreadHooks networkThreadHooks;
++
++void setAmigaNetworkThreadHooks(const AmigaNetworkThreadHooks& hooks)
++{
++    networkThreadHooks = hooks;
++}
++
++void amigaNetworkThreadStarted()
++{
++    if (networkThreadHooks.started)
++        networkThreadHooks.started();
++}
++
++void amigaNetworkThreadFinished()
++{
++    if (networkThreadHooks.finished)
++        networkThreadHooks.finished();
++}
++
++// Receives CurlRequest's callbacks (on the main thread) for one handle.
++class ResourceHandleCurlDelegate final : public CurlRequestClient, public RefCounted<ResourceHandleCurlDelegate> {
++public:
++    static Ref<ResourceHandleCurlDelegate> create(ResourceHandle& handle) { return adoptRef(*new ResourceHandleCurlDelegate(handle)); }
++
++    void ref() const final { RefCounted::ref(); }
++    void deref() const final { RefCounted::deref(); }
++
++    void releaseHandle() { m_handle = nullptr; }
++
++    void curlDidSendData(CurlRequest&, unsigned long long sent, unsigned long long total) final
++    {
++        if (RefPtr handle = m_handle; handle && handle->client())
++            handle->client()->didSendData(handle.get(), sent, total);
++    }
++
++    void curlDidReceiveResponse(CurlRequest& request, CurlResponse&& response) final
++    {
++        if (RefPtr handle = m_handle)
++            handle->amigaDidReceiveResponse(request, WTF::move(response));
++    }
++
++    void curlDidReceiveData(CurlRequest&, Ref<SharedBuffer>&& buffer) final
++    {
++        if (RefPtr handle = m_handle; handle && handle->client())
++            handle->client()->didReceiveBuffer(handle.get(), buffer.get(), buffer->size());
++    }
++
++    void curlDidComplete(CurlRequest&, NetworkLoadMetrics&& metrics) final
++    {
++        if (RefPtr handle = m_handle; handle && handle->client())
++            handle->client()->didFinishLoading(handle.get(), metrics);
++    }
++
++    void curlDidFailWithError(CurlRequest&, ResourceError&& error, CertificateInfo&&) final
++    {
++        if (RefPtr handle = m_handle; handle && handle->client())
++            handle->client()->didFail(handle.get(), error);
++    }
++
++private:
++    explicit ResourceHandleCurlDelegate(ResourceHandle& handle)
++        : m_handle(&handle)
++    {
++    }
++
++    ResourceHandle* m_handle;
++};
++
++ResourceHandleInternal::~ResourceHandleInternal()
++{
++    if (m_curlDelegate)
++        m_curlDelegate->releaseHandle();
++    if (m_curlRequest)
++        m_curlRequest->invalidateClient();
++}
++
++ResourceHandle::~ResourceHandle() = default;
++
++static void appendCookieHeader(ResourceRequest& request)
++{
++    if (!cookieHooks().cookieHeader)
++        return;
++    auto cookies = cookieHooks().cookieHeader(request.firstPartyForCookies(), request.url());
++    if (!cookies.isEmpty())
++        request.setHTTPHeaderField(HTTPHeaderName::Cookie, cookies);
++}
++
++void ResourceHandle::amigaStartCurlRequest(ResourceRequest&& request)
++{
++    appendCookieHeader(request);
++    if (!d->m_curlDelegate)
++        d->m_curlDelegate = ResourceHandleCurlDelegate::create(*this);
++    d->m_curlRequest = CurlRequest::create(request, *d->m_curlDelegate);
++    if (!d->m_user.isEmpty() || !d->m_password.isEmpty()) {
++        d->m_curlRequest->setUserPass(d->m_user, d->m_password);
++        d->m_curlRequest->setAuthenticationScheme(ProtectionSpace::AuthenticationScheme::HTTPBasic);
++    }
++    d->m_curlRequest->resume();
++}
++
++// file: URLs: curl is built for http and https only, so files are read here
++// and handed over from the run loop, as a network load would be.
++void ResourceHandle::amigaLoadFile()
++{
++    auto url = d->m_firstRequest.url();
++    RunLoop::mainSingleton().dispatch([protectedThis = Ref { *this }, url = WTF::move(url)] {
++        auto& handle = protectedThis.get();
++        auto* client = handle.client();
++        if (!client)
++            return;
++        auto contents = FileSystem::readEntireFile(url.fileSystemPath());
++        if (!contents) {
++            client->didFail(&handle, ResourceError("NSURLErrorDomain"_s, -1100, url, "The file does not exist."_s));
++            return;
++        }
++        auto mimeType = MIMETypeRegistry::mimeTypeForPath(url.fileSystemPath());
++        if (mimeType.isEmpty())
++            mimeType = "application/octet-stream"_s;
++        ResourceResponse response(URL { url }, String { mimeType }, contents->size(), String());
++        response.setHTTPStatusCode(200);
++        client->didReceiveResponseAsync(&handle, WTF::move(response), [protectedThis = Ref { handle }, data = WTF::move(*contents)]() mutable {
++            auto& handle = protectedThis.get();
++            if (!handle.client())
++                return;
++            if (!data.isEmpty()) {
++                auto size = data.size();
++                handle.client()->didReceiveBuffer(&handle, SharedBuffer::create(WTF::move(data)), size);
++            }
++            if (handle.client())
++                handle.client()->didFinishLoading(&handle, NetworkLoadMetrics { });
++        });
++    });
++}
++
++bool ResourceHandle::start()
++{
++    if (d->m_context && !d->m_context->isValid())
++        return false;
++
++    ResourceRequest request = d->m_firstRequest;
++    if (request.url().protocolIsFile()) {
++        amigaLoadFile();
++        return true;
++    }
++    amigaStartCurlRequest(WTF::move(request));
++    return true;
++}
++
++void ResourceHandle::cancel()
++{
++    if (d->m_curlRequest)
++        d->m_curlRequest->cancel();
++}
++
++void ResourceHandle::platformSetDefersLoading(bool)
++{
++}
++
++static bool shouldStartHTTPRedirection(const ResourceResponse& response)
++{
++    auto statusCode = response.httpStatusCode();
++    if (statusCode < 300 || statusCode >= 400)
++        return false;
++    if (statusCode == 300 || statusCode == 304 || statusCode == 305 || statusCode == 306)
++        return false;
++    return !response.httpHeaderField(HTTPHeaderName::Location).isEmpty();
++}
++
++static bool shouldRedirectAsGET(const ResourceRequest& request, const ResourceResponse& response, bool crossOrigin)
++{
++    if (request.httpMethod() == "GET"_s || request.httpMethod() == "HEAD"_s)
++        return false;
++    if (!request.url().protocolIsInHTTPFamily())
++        return true;
++    if (response.isSeeOther())
++        return true;
++    if ((response.isMovedPermanently() || response.isFound()) && request.httpMethod() == "POST"_s)
++        return true;
++    if (crossOrigin && request.httpMethod() == "DELETE"_s)
++        return true;
++    return false;
++}
++
++void ResourceHandle::amigaDidReceiveResponse(CurlRequest& curlRequest, CurlResponse&& curlResponse)
++{
++    if (!client())
++        return;
++
++    // Cookies first, so a redirect's request already carries them.
++    static constexpr auto setCookieHeader = "set-cookie: "_s;
++    if (cookieHooks().storeFromResponse) {
++        for (auto& header : curlResponse.headers) {
++            if (header.startsWithIgnoringASCIICase(setCookieHeader))
++                cookieHooks().storeFromResponse(curlRequest.resourceRequest().firstPartyForCookies(), curlResponse.url, header.substring(setCookieHeader.length()));
++        }
++    }
++
++    ResourceResponse response(curlResponse);
++
++    if (shouldStartHTTPRedirection(response)) {
++        static constexpr unsigned maxRedirects = 20;
++        if (d->m_redirectCount++ > maxRedirects) {
++            client()->didFail(this, ResourceError(CURLE_TOO_MANY_REDIRECTS, response.url()));
++            return;
++        }
++
++        URL redirectedURL { response.url(), response.httpHeaderField(HTTPHeaderName::Location) };
++        if (redirectedURL.protocolIsFile()) {
++            client()->didFail(this, ResourceError(CURLE_FILE_COULDNT_READ_FILE, response.url()));
++            return;
++        }
++
++        ResourceRequest request = curlRequest.resourceRequest();
++        if (!redirectedURL.hasFragmentIdentifier() && request.url().hasFragmentIdentifier())
++            redirectedURL.setFragmentIdentifier(request.url().fragmentIdentifier());
++        bool crossOrigin = !protocolHostAndPortAreEqual(request.url(), redirectedURL);
++        request.setURL(WTF::move(redirectedURL));
++        request.removeHTTPHeaderField(HTTPHeaderName::Cookie);
++        if (!equalLettersIgnoringASCIICase(request.httpMethod(), "get"_s) && shouldRedirectAsGET(request, response, crossOrigin)) {
++            request.setHTTPMethod("GET"_s);
++            request.setHTTPBody(nullptr);
++            request.clearHTTPContentType();
++        }
++        if (crossOrigin) {
++            request.clearHTTPAuthorization();
++            request.clearHTTPOrigin();
++            if (!SecurityOrigin::create(response.url())->canRequest(request.url(), EmptyOriginAccessPatterns::singleton()))
++                markAsHavingCrossOriginRedirect();
++        }
++        incrementRedirectCount();
++
++        d->m_curlRequest->cancel();
++        client()->willSendRequestAsync(this, WTF::move(request), WTF::move(response), [protectedThis = Ref { *this }](ResourceRequest&& newRequest) mutable {
++            if (newRequest.isNull() || !protectedThis->client())
++                return;
++            protectedThis->amigaStartCurlRequest(WTF::move(newRequest));
++        });
++        return;
++    }
++
++    client()->didReceiveResponseAsync(this, WTF::move(response), [protectedThis = Ref { *this }] {
++        if (auto& curlRequest = protectedThis->d->m_curlRequest)
++            curlRequest->completeDidReceiveResponse();
++    });
++}
++
++// Synchronous loads (synchronous XMLHttpRequest): run the request and spin the
++// run loop until it ends. CurlRequest calls back through the main run loop.
++namespace {
++class SynchronousClient final : public ResourceHandleClient {
++public:
++    void willSendRequestAsync(ResourceHandle*, ResourceRequest&& request, ResourceResponse&&, CompletionHandler<void(ResourceRequest&&)>&& completionHandler) final
++    {
++        completionHandler(WTF::move(request));
++    }
++    void didReceiveResponseAsync(ResourceHandle*, ResourceResponse&& response, CompletionHandler<void()>&& completionHandler) final
++    {
++        m_response = WTF::move(response);
++        completionHandler();
++    }
++    void didReceiveData(ResourceHandle*, const SharedBuffer& buffer, int) final { m_data.append(buffer.span()); }
++    void didFinishLoading(ResourceHandle*, const NetworkLoadMetrics&) final { m_done = true; }
++    void didFail(ResourceHandle*, const ResourceError& error) final
++    {
++        m_error = error;
++        m_done = true;
++    }
++
++    bool m_done { false };
++    ResourceResponse m_response;
++    ResourceError m_error;
++    Vector<uint8_t> m_data;
++};
++}
++
++void ResourceHandle::platformLoadResourceSynchronously(NetworkingContext* context, const ResourceRequest& request, StoredCredentialsPolicy, SecurityOrigin*, ResourceError& error, ResourceResponse& response, Vector<uint8_t>& data)
++{
++    SynchronousClient client;
++    auto handle = adoptRef(*new ResourceHandle(context, request, &client, false, false, ContentEncodingSniffingPolicy::Default, nullptr, false));
++    handle->start();
++    while (!client.m_done)
++        RunLoop::cycle();
++    error = client.m_error;
++    response = client.m_response;
++    data = WTF::move(client.m_data);
++}
++
++bool ResourceHandle::shouldUseCredentialStorage()
++{
++    return false;
++}
++
++void ResourceHandle::didReceiveAuthenticationChallenge(const AuthenticationChallenge&)
++{
++}
++
++void ResourceHandle::receivedCredential(const AuthenticationChallenge&, const Credential&)
++{
++}
++
++void ResourceHandle::receivedRequestToContinueWithoutCredential(const AuthenticationChallenge&)
++{
++}
++
++void ResourceHandle::receivedCancellation(const AuthenticationChallenge&)
++{
++}
++
++void ResourceHandle::receivedRequestToPerformDefaultHandling(const AuthenticationChallenge&)
++{
++}
++
++void ResourceHandle::receivedChallengeRejection(const AuthenticationChallenge&)
++{
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/network/curl/CurlRequestScheduler.cpp b/Source/WebCore/platform/network/curl/CurlRequestScheduler.cpp
+index 393535b29c..7774f0fe2a 100644
+--- a/Source/WebCore/platform/network/curl/CurlRequestScheduler.cpp
++++ b/Source/WebCore/platform/network/curl/CurlRequestScheduler.cpp
+@@ -27,6 +27,10 @@
+ 
+ #include "config.h"
+ #include "CurlRequestScheduler.h"
++
++#if PLATFORM(AMIGA)
++#include "../amiga/AmigaNetwork.h"
++#endif
+ #include <wtf/TZoneMallocInlines.h>
+ #include <wtf/Threading.h>
+ 
+@@ -110,6 +114,9 @@ void CurlRequestScheduler::startOrWakeUpThread()
+ 
+ void CurlRequestScheduler::wakeUpThreadIfPossible()
+ {
++#if PLATFORM(AMIGA)
++    return; // the thread polls (see workerThread)
++#endif
+     Locker locker { m_multiHandleMutex };
+     if (!m_curlMultiHandle)
+         return;
+@@ -160,6 +167,9 @@ void CurlRequestScheduler::executeTasks()
+ void CurlRequestScheduler::workerThread()
+ {
+     ASSERT(!isMainThread());
++#if PLATFORM(AMIGA)
++    amigaNetworkThreadStarted();
++#endif
+ 
+     {
+         Locker locker { m_multiHandleMutex };
+@@ -178,7 +188,13 @@ void CurlRequestScheduler::workerThread()
+ 
+         executeTasks();
+ 
++#if PLATFORM(AMIGA)
++        // Other tasks cannot wake this one through curl's socket pair (the
++        // sockets belong to this task), so it looks for new work every 20 ms.
++        const int selectTimeoutMS = 20;
++#else
+         const int selectTimeoutMS = INT_MAX;
++#endif
+         m_curlMultiHandle->poll({ }, selectTimeoutMS);
+ 
+         int activeCount = 0;
+@@ -204,6 +220,9 @@ void CurlRequestScheduler::workerThread()
+         Locker locker { m_multiHandleMutex };
+         m_curlMultiHandle.reset();
+     }
++#if PLATFORM(AMIGA)
++    amigaNetworkThreadFinished();
++#endif
+ }
+ 
+ void CurlRequestScheduler::startTransfer(CurlRequestSchedulerClient* client)
+diff --git a/Source/WebCore/platform/text/BidiContext.cpp b/Source/WebCore/platform/text/BidiContext.cpp
+index b7fbad39e5..5f65115108 100644
+--- a/Source/WebCore/platform/text/BidiContext.cpp
++++ b/Source/WebCore/platform/text/BidiContext.cpp
+@@ -33,7 +33,9 @@ struct SameSizeAsBidiContext : public ThreadSafeRefCounted<SameSizeAsBidiContext
+     void* parent;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(BidiContext) == sizeof(SameSizeAsBidiContext), "BidiContext should stay small");
++#endif
+ 
+ inline BidiContext::BidiContext(unsigned char level, UCharDirection direction, bool override, BidiEmbeddingSource source, BidiContext* parent)
+     : m_level(level)
+diff --git a/Source/WebCore/rendering/FloatingObjects.cpp b/Source/WebCore/rendering/FloatingObjects.cpp
+index 1bb7e3edb2..c22fb1106a 100644
+--- a/Source/WebCore/rendering/FloatingObjects.cpp
++++ b/Source/WebCore/rendering/FloatingObjects.cpp
+@@ -47,7 +47,9 @@ struct SameSizeAsFloatingObject {
+     uint32_t bitfields : 8;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(FloatingObject) == sizeof(SameSizeAsFloatingObject), "FloatingObject should stay small");
++#endif
+ #if !ASSERT_ENABLED && ASSERT_WITH_SECURITY_IMPLICATION_DISABLED
+ static_assert(sizeof(SingleThreadWeakPtr<RenderBox>) == sizeof(void*), "WeakPtr should be same size as raw pointer");
+ static_assert(sizeof(CheckedPtr<LegacyRootInlineBox>) == sizeof(void*), "WeakPtr should be same size as raw pointer");
+diff --git a/Source/WebCore/rendering/LegacyInlineBox.cpp b/Source/WebCore/rendering/LegacyInlineBox.cpp
+index 6009e03fb2..e418c1cfd1 100644
+--- a/Source/WebCore/rendering/LegacyInlineBox.cpp
++++ b/Source/WebCore/rendering/LegacyInlineBox.cpp
+@@ -55,7 +55,9 @@ struct SameSizeAsLegacyInlineBox {
+ #endif
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(LegacyInlineBox) == sizeof(SameSizeAsLegacyInlineBox), "LegacyInlineBox size guard");
++#endif
+ 
+ #if !ASSERT_WITH_SECURITY_IMPLICATION_DISABLED
+ 
+diff --git a/Source/WebCore/rendering/LegacyInlineFlowBox.cpp b/Source/WebCore/rendering/LegacyInlineFlowBox.cpp
+index 8240acac08..769d4364e9 100644
+--- a/Source/WebCore/rendering/LegacyInlineFlowBox.cpp
++++ b/Source/WebCore/rendering/LegacyInlineFlowBox.cpp
+@@ -54,7 +54,9 @@ struct SameSizeAsLegacyInlineFlowBox : public LegacyInlineBox {
+     void* pointers[5];
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(LegacyInlineFlowBox) == sizeof(SameSizeAsLegacyInlineFlowBox), "LegacyInlineFlowBox should stay small");
++#endif
+ 
+ #if !ASSERT_WITH_SECURITY_IMPLICATION_DISABLED
+ 
+diff --git a/Source/WebCore/rendering/LegacyInlineTextBox.cpp b/Source/WebCore/rendering/LegacyInlineTextBox.cpp
+index a7af5a6835..847ceb250a 100644
+--- a/Source/WebCore/rendering/LegacyInlineTextBox.cpp
++++ b/Source/WebCore/rendering/LegacyInlineTextBox.cpp
+@@ -73,7 +73,9 @@ struct SameSizeAsLegacyInlineTextBox : public LegacyInlineBox {
+     unsigned variables[2];
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(LegacyInlineTextBox) == sizeof(SameSizeAsLegacyInlineTextBox), "LegacyInlineTextBox should stay small");
++#endif
+ 
+ typedef HashMap<const LegacyInlineTextBox*, LayoutRect> LegacyInlineTextBoxOverflowMap;
+ static LegacyInlineTextBoxOverflowMap* gTextBoxesWithOverflow;
+diff --git a/Source/WebCore/rendering/LegacyRootInlineBox.cpp b/Source/WebCore/rendering/LegacyRootInlineBox.cpp
+index 807952c86c..90768495b0 100644
+--- a/Source/WebCore/rendering/LegacyRootInlineBox.cpp
++++ b/Source/WebCore/rendering/LegacyRootInlineBox.cpp
+@@ -51,7 +51,9 @@ struct SameSizeAsLegacyRootInlineBox : LegacyInlineFlowBox, CanMakeWeakPtr<Legac
+ 
+ WTF_MAKE_STRUCT_TZONE_ALLOCATED_IMPL(SameSizeAsLegacyRootInlineBox);
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(LegacyRootInlineBox) == sizeof(SameSizeAsLegacyRootInlineBox), "LegacyRootInlineBox should stay small");
++#endif
+ #if !ASSERT_ENABLED && ASSERT_WITH_SECURITY_IMPLICATION_DISABLED
+ static_assert(sizeof(SingleThreadWeakPtr<RenderObject>) == sizeof(void*), "WeakPtr should be same size as raw pointer");
+ #endif
+diff --git a/Source/WebCore/rendering/RenderBlock.cpp b/Source/WebCore/rendering/RenderBlock.cpp
+index a7343fafcd..569d719a3a 100644
+--- a/Source/WebCore/rendering/RenderBlock.cpp
++++ b/Source/WebCore/rendering/RenderBlock.cpp
+@@ -108,7 +108,9 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(RenderBlock);
+ struct SameSizeAsRenderBlock : public RenderBox {
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(RenderBlock) == sizeof(SameSizeAsRenderBlock), "RenderBlock should stay small");
++#endif
+ 
+ using TrackedDescendantsMap = SingleThreadWeakHashMap<const RenderBlock, std::unique_ptr<TrackedRendererListHashSet>>;
+ using TrackedContainerMap = SingleThreadWeakHashMap<const RenderBox, SingleThreadWeakHashSet<const RenderBlock>>;
+diff --git a/Source/WebCore/rendering/RenderBlockFlow.cpp b/Source/WebCore/rendering/RenderBlockFlow.cpp
+index 0524367d47..1e5457a432 100644
+--- a/Source/WebCore/rendering/RenderBlockFlow.cpp
++++ b/Source/WebCore/rendering/RenderBlockFlow.cpp
+@@ -106,7 +106,9 @@ struct SameSizeAsMarginInfo {
+ };
+ 
+ static_assert(sizeof(MarginValues) == sizeof(LayoutUnit[4]), "MarginValues should stay small");
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(RenderBlockFlow::MarginInfo) == sizeof(SameSizeAsMarginInfo), "MarginInfo should stay small");
++#endif
+ 
+ RenderBlockFlowRareData::RenderBlockFlowRareData(const RenderBlockFlow& block)
+     : m_margins(positiveMarginBeforeDefault(block), negativeMarginBeforeDefault(block), positiveMarginAfterDefault(block), negativeMarginAfterDefault(block))
+diff --git a/Source/WebCore/rendering/RenderBox.cpp b/Source/WebCore/rendering/RenderBox.cpp
+index 765f53db34..5408d34a80 100644
+--- a/Source/WebCore/rendering/RenderBox.cpp
++++ b/Source/WebCore/rendering/RenderBox.cpp
+@@ -141,7 +141,9 @@ struct SameSizeAsRenderBox : public RenderBoxModelObject {
+     void* pointers[2];
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(RenderBox) == sizeof(SameSizeAsRenderBox), "RenderBox should stay small");
++#endif
+ 
+ using namespace HTMLNames;
+ 
+diff --git a/Source/WebCore/rendering/RenderElement.cpp b/Source/WebCore/rendering/RenderElement.cpp
+index f5c5d223c0..a201c56751 100644
+--- a/Source/WebCore/rendering/RenderElement.cpp
++++ b/Source/WebCore/rendering/RenderElement.cpp
+@@ -138,7 +138,9 @@ float opacity(const RenderElement& renderer)
+     return renderer.opacity();
+ }
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(RenderElement) == sizeof(SameSizeAsRenderElement), "RenderElement should stay small");
++#endif
+ 
+ inline RenderElement::RenderElement(Type type, ContainerNode& elementOrDocument, Style::ComputedStyle&& style, OptionSet<TypeFlag> flags, TypeSpecificFlags typeSpecificFlags)
+     : RenderObject(type, elementOrDocument, flags, typeSpecificFlags)
+diff --git a/Source/WebCore/rendering/RenderObject.cpp b/Source/WebCore/rendering/RenderObject.cpp
+index 5a90dd6867..f95ff412a8 100644
+--- a/Source/WebCore/rendering/RenderObject.cpp
++++ b/Source/WebCore/rendering/RenderObject.cpp
+@@ -154,8 +154,10 @@ struct SameSizeAsRenderObject : public CanMakeSingleThreadWeakPtr<SameSizeAsRend
+ };
+ 
+ #if CPU(ADDRESS64)
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(RenderObject) == sizeof(SameSizeAsRenderObject), "RenderObject should stay small");
+ #endif
++#endif
+ 
+ void RenderObjectDeleter::operator() (RenderObject* renderer) const
+ {
+diff --git a/Source/WebCore/rendering/RenderTableCell.cpp b/Source/WebCore/rendering/RenderTableCell.cpp
+index aeedb70fd9..7c18864837 100644
+--- a/Source/WebCore/rendering/RenderTableCell.cpp
++++ b/Source/WebCore/rendering/RenderTableCell.cpp
+@@ -75,7 +75,9 @@ struct SameSizeAsRenderTableCell : public RenderBlockFlow {
+     std::optional<LayoutUnit> orthogonalCellContentIntrinsicHeight;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(RenderTableCell) == sizeof(SameSizeAsRenderTableCell), "RenderTableCell should stay small");
++#endif
+ static_assert(sizeof(CollapsedBorderValue) <= 24, "CollapsedBorderValue should stay small");
+ 
+ RenderTableCell::RenderTableCell(Element& element, Style::ComputedStyle&& style)
+diff --git a/Source/WebCore/rendering/RenderText.cpp b/Source/WebCore/rendering/RenderText.cpp
+index a52a008e49..c5b7f6d790 100644
+--- a/Source/WebCore/rendering/RenderText.cpp
++++ b/Source/WebCore/rendering/RenderText.cpp
+@@ -108,7 +108,9 @@ struct SameSizeAsRenderText : public RenderObject {
+     uint32_t bitfields : 14;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(RenderText) == sizeof(SameSizeAsRenderText), "RenderText should stay small");
++#endif
+ 
+ class SecureTextTimer final : private TimerBase {
+     WTF_MAKE_TZONE_ALLOCATED_INLINE(SecureTextTimer);
+diff --git a/Source/WebCore/rendering/adwaita/RenderThemeAdwaita.cpp b/Source/WebCore/rendering/adwaita/RenderThemeAdwaita.cpp
+index a6fb2e3ceb..a9c5969531 100644
+--- a/Source/WebCore/rendering/adwaita/RenderThemeAdwaita.cpp
++++ b/Source/WebCore/rendering/adwaita/RenderThemeAdwaita.cpp
+@@ -47,7 +47,9 @@
+ #include "StylePadding.h"
+ #include "ThemeAdwaita.h"
+ #include "TimeRanges.h"
++#if ENABLE(VIDEO)
+ #include "UserAgentScripts.h"
++#endif
+ #include "UserAgentStyleSheets.h"
+ #include <wtf/text/Base64.h>
+ 
+diff --git a/Source/WebCore/style/RuleData.cpp b/Source/WebCore/style/RuleData.cpp
+index af64e7f1d3..8245f8ec82 100644
+--- a/Source/WebCore/style/RuleData.cpp
++++ b/Source/WebCore/style/RuleData.cpp
+@@ -57,7 +57,9 @@ struct SameSizeAsRuleData {
+     unsigned d[4];
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(RuleData) == sizeof(SameSizeAsRuleData), "RuleData should stay small");
++#endif
+ 
+ static inline MatchBasedOnRuleHash NODELETE computeMatchBasedOnRuleHash(const CSSSelector& selector)
+ {
+diff --git a/Source/WebCore/style/computed/StyleComputedStyle.cpp b/Source/WebCore/style/computed/StyleComputedStyle.cpp
+index 980877111e..05407fe14c 100644
+--- a/Source/WebCore/style/computed/StyleComputedStyle.cpp
++++ b/Source/WebCore/style/computed/StyleComputedStyle.cpp
+@@ -51,7 +51,9 @@ struct SameSizeAsBorderValue {
+     int m_restBits;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(BorderValue) == sizeof(SameSizeAsBorderValue), "BorderValue should not grow");
++#endif
+ 
+ IGNORE_CLANG_WARNINGS_BEGIN("unused-private-field")
+ 
+@@ -78,7 +80,9 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(SameSizeAsComputedStyle);
+ 
+ IGNORE_CLANG_WARNINGS_END
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(ComputedStyle) == sizeof(SameSizeAsComputedStyle), "ComputedStyle should stay small");
++#endif
+ 
+ ComputedStyle::ComputedStyle(ComputedStyle&&) = default;
+ ComputedStyle& ComputedStyle::operator=(ComputedStyle&&) = default;
+diff --git a/Source/WebCore/style/computed/data/StyleBoxData.cpp b/Source/WebCore/style/computed/data/StyleBoxData.cpp
+index 6270282878..2d7f1f431a 100644
+--- a/Source/WebCore/style/computed/data/StyleBoxData.cpp
++++ b/Source/WebCore/style/computed/data/StyleBoxData.cpp
+@@ -37,7 +37,9 @@ struct SameSizeAsStyleBoxData : public RefCounted<SameSizeAsStyleBoxData> {
+     uint8_t bitfield;
+     int m_zIndex[2];
+ };
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(BoxData) == sizeof(SameSizeAsStyleBoxData), "BoxData should not grow");
++#endif
+ 
+ DEFINE_ALLOCATOR_WITH_HEAP_IDENTIFIER(BoxData);
+ 
+diff --git a/Source/WebCore/svg/GradientAttributes.h b/Source/WebCore/svg/GradientAttributes.h
+index 548daae8e4..32dd3ba30a 100644
+--- a/Source/WebCore/svg/GradientAttributes.h
++++ b/Source/WebCore/svg/GradientAttributes.h
+@@ -87,6 +87,8 @@ struct SameSizeAsGradientAttributes {
+     unsigned c : 7;
+ };
+ 
++#if !CPU(M68K) // 68k aligns to 2 bytes: sizes differ from the other CPUs'
+ static_assert(sizeof(GradientAttributes) == sizeof(SameSizeAsGradientAttributes));
++#endif
+ 
+ } // namespace WebCore
+diff --git a/Source/bmalloc/PlatformAmiga.cmake b/Source/bmalloc/PlatformAmiga.cmake
+new file mode 100644
+index 0000000000..841559f29b
+--- /dev/null
++++ b/Source/bmalloc/PlatformAmiga.cmake
+@@ -0,0 +1,2 @@
++# The Amiga port shares the JSCOnly platform files.
++include(${CMAKE_CURRENT_LIST_DIR}/PlatformJSCOnly.cmake)
+diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
+new file mode 100644
+index 0000000000..5defbaf16a
+--- /dev/null
++++ b/Source/cmake/OptionsAmiga.cmake
+@@ -0,0 +1,115 @@
++# The Amiga port: WebCore in one process, for AmigaOS 3.2 (68020 + FPU).
++# Drawing is Cairo's image surface, text is FreeType + HarfBuzz + fontconfig,
++# the network is curl with AmiSSL. There is no WebKit (multi-process) layer:
++# the embedding layer (page clients, loader strategy) belongs to the browser.
++
++if (CMAKE_SYSTEM_NAME MATCHES "^(AROS|AmigaOS)$")
++    set(CMAKE_DL_LIBS "")
++endif ()
++
++find_package(Threads REQUIRED)
++
++set(CMAKE_C_VISIBILITY_PRESET hidden)
++set(CMAKE_CXX_VISIBILITY_PRESET hidden)
++set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
++
++add_definitions(-DBUILDING_AMIGA__=1)
++
++set(PROJECT_VERSION_MAJOR 0)
++set(PROJECT_VERSION_MINOR 1)
++set(PROJECT_VERSION_MICRO 0)
++set(PROJECT_VERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_MICRO})
++
++set(ENABLE_WEBKIT_LEGACY OFF)
++set(ENABLE_WEBKIT OFF)
++set(ENABLE_WEBINSPECTORUI OFF)
++set(ENABLE_WEBDRIVER OFF)
++set(ENABLE_TOOLS OFF)
++
++find_package(ICU 70.1 REQUIRED COMPONENTS data i18n uc)
++
++if (ENABLE_WEBCORE)
++    find_package(Cairo 1.16.0 REQUIRED)
++    find_package(CURL 7.85.0 REQUIRED)
++    find_package(Fontconfig 2.13.0 REQUIRED)
++    find_package(Freetype 2.9.0 REQUIRED)
++    find_package(HarfBuzz 2.7.4 REQUIRED COMPONENTS ICU)
++    find_package(LibPSL 0.20.2 REQUIRED)
++    find_package(LibXml2 2.9.7 REQUIRED)
++    find_package(OpenSSL REQUIRED)
++    find_package(PNG REQUIRED)
++    find_package(SQLite3 3.23.1 REQUIRED)
++    if (NOT TARGET SQLite3::SQLite3) # CMake < 4.3
++        add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
++    endif ()
++    find_package(ZLIB 1.2.11 REQUIRED)
++endif ()
++
++WEBKIT_OPTION_BEGIN()
++WEBKIT_OPTION_DEFINE(ENABLE_STATIC_JSC "Whether to build JavaScriptCore as a static library." PUBLIC ON)
++WEBKIT_OPTION_DEFINE(USE_LIBBACKTRACE "Whether to enable usage of libbacktrace." PUBLIC OFF)
++WEBKIT_OPTION_DEFINE(USE_SYSTEM_UNIFDEF "Whether to use a system-provided unifdef" PRIVATE OFF)
++
++# The C loop interpreter: no JIT on 68k.
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_JIT PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_DFG_JIT PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FTL_JIT PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBASSEMBLY PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SAMPLING_PROFILER PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_ISO_MALLOC PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SYSTEM_MALLOC PRIVATE ON)
++
++# One process, no GPU, no media, no remote inspector.
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_ASYNC_SCROLLING PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_CONTEXT_MENUS PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FULLSCREEN_API PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_GAMEPAD PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_GEOLOCATION PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_GPU_PROCESS PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_IMAGE_DIFF PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_JAVASCRIPT_SHELL PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_MATHML PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_NOTIFICATIONS PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_REMOTE_INSPECTOR PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SMOOTH_SCROLLING PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_USER_MESSAGE_HANDLERS PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_VIDEO PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_VIDEO_USES_ELEMENT_FULLSCREEN PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_AUDIO PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBGL PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_XSLT PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_AVIF PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_JPEGXL PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_LCMS PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SKIA PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SKIA_ENCODERS PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_WOFF2 PRIVATE OFF)
++WEBKIT_OPTION_END()
++
++set(ENABLE_API_TESTS OFF)
++
++set(bmalloc_LIBRARY_TYPE STATIC)
++set(WTF_LIBRARY_TYPE STATIC)
++set(JavaScriptCore_LIBRARY_TYPE STATIC)
++set(PAL_LIBRARY_TYPE STATIC)
++set(WebCore_LIBRARY_TYPE STATIC)
++
++set(EVENT_LOOP_TYPE "Generic" CACHE STRING "Implementation of event loop to be used in JavaScriptCore")
++string(TOLOWER ${EVENT_LOOP_TYPE} LOWERCASE_EVENT_LOOP_TYPE)
++SET_AND_EXPOSE_TO_BUILD(USE_GENERIC_EVENT_LOOP 1)
++SET_AND_EXPOSE_TO_BUILD(WTF_DEFAULT_EVENT_LOOP 0)
++
++# Set even when only JavaScriptCore is built, so cmakeconfig.h stays the same.
++SET_AND_EXPOSE_TO_BUILD(USE_CAIRO ON)
++SET_AND_EXPOSE_TO_BUILD(USE_CURL ON)
++SET_AND_EXPOSE_TO_BUILD(USE_FREETYPE ON)
++SET_AND_EXPOSE_TO_BUILD(USE_HARFBUZZ ON)
++SET_AND_EXPOSE_TO_BUILD(USE_OPENSSL ON)
++SET_AND_EXPOSE_TO_BUILD(USE_THEME_ADWAITA ON)
++
++SET_AND_EXPOSE_TO_BUILD(HAVE_PTHREAD_SETNAME_NP OFF)
++SET_AND_EXPOSE_TO_BUILD(HAVE_MAP_ALIGNED OFF)
++
++if (USE_LIBBACKTRACE)
++    message(FATAL_ERROR "USE_LIBBACKTRACE is not available on the Amiga port")
++endif ()
+diff --git a/Source/cmake/WebKitCommon.cmake b/Source/cmake/WebKitCommon.cmake
+index a782854acc..e61ecd1d81 100644
+--- a/Source/cmake/WebKitCommon.cmake
++++ b/Source/cmake/WebKitCommon.cmake
+@@ -73,6 +73,7 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
+     # Determine which port will be built
+     # -----------------------------------------------------------------------------
+     set(ALL_PORTS
++        Amiga
+         Cocoa
+         GTK
+         IOS
