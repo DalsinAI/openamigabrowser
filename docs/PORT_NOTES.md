@@ -55,7 +55,10 @@ JIT) on AmigaOS 3.2.3 on a 68040, 4 Oct 2026. Upstream WebKit is pinned at
 - Process ID is the Task address. Random numbers come from splitmix64 over the
   clock and the Task address. This is not cryptographic.
 - The FPU: user tasks reach `main()` with FPCR `$40`, which means single
-  precision. WTF sets FPCR to 0 in `WTF::initialize` and in every thread.
+  precision. Kickstart 3.2.3's mathieeesingbas.library 47.1 writes `$40` to
+  the FPCR of every task that opens it, and libnix opens it at startup. Real
+  hardware does the same. WTF sets FPCR to 0 in `WTF::initialize` (after the
+  libraries are open) and in every thread.
 - newlib hides POSIX under `-std=c++23`, so `-D_DEFAULT_SOURCE` and the
   `_POSIX_TIMERS`/`_POSIX_REALTIME_SIGNALS` declarations are needed.
 - `JSC_STDERR_TO_STDOUT` (an `ENV:` variable) sends `jsc`'s errors to stdout,
