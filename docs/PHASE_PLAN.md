@@ -74,6 +74,15 @@ pages fail with "The server stopped answering"; reported to the ACNet side.
 **Milestone 2a:** WebCore loads a local HTML file and dumps the render tree to the console.
 **Milestone 2b:** WebCore paints a page into an offscreen bitmap saved as an ILBM/PNG.
 
+Status, 4 October 2026: 2a and 2b are done on AmigaOS 3.2.3 (Instance-24):
+`obcore-dump` prints a page's render tree and saves the page as PNG, and
+`obcore-view` runs the browser's page layer (JavaScript, the DOM, timers)
+without a window. Choices made on the way, with the reasons in
+`WEBCORE_PORT.md`: cairo with pixman (Skia refuses big-endian CPUs), the
+Liberation and DejaVu fonts through fontconfig, pictures through the
+system's datatypes, and libcurl with AmiSSL for the loader, since WebCore
+already has a curl backend with cookies, redirects and TLS.
+
 ### Phase 3: WebCore in the GadTools shell
 1. Swap the Phase 1 text view for the WebCore view inside the same shell: scrolling, link clicks, keyboard focus, text selection, forms (text fields, buttons, checkboxes, selects drawn natively).
 2. Cookies, history, bookmarks, downloads to disk, a disk cache.

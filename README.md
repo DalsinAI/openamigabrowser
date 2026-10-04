@@ -2,8 +2,15 @@
 
 A WebKit-based web browser for AmigaOS 3.2 (68020+ with FPU).
 
-**Status, 4 October 2026:** its JavaScript engine, WebKit's JavaScriptCore,
-runs on AmigaOS 3.2.3:
+**Status, 4 October 2026:** WebKit's engine, WebCore, draws real pages on
+AmigaOS 3.2.3. It lays out HTML and CSS, runs the page's JavaScript
+(JavaScriptCore) and paints with cairo, FreeType and HarfBuzz into a 32-bit
+bitmap; pictures are decoded by the system's datatypes. The browser window,
+**OpenBrowser** (GadTools), and its network layer (libcurl with AmiSSL 5) are
+built and being brought up on the test instance. See
+[docs/WEBCORE_PORT.md](docs/WEBCORE_PORT.md).
+
+JavaScriptCore on its own runs in a Shell:
 
 ```
 1> Stack 4194304
@@ -11,10 +18,7 @@ runs on AmigaOS 3.2.3:
 2
 ```
 
-It runs functions, objects, arrays, strings, JSON, RegExp, Date, exceptions
-and double-precision maths (`tests/js`).
-
-The browser has started: **OpenBrowser Lite** is a GadTools window that opens
+**OpenBrowser Lite**, the first browser, is a GadTools window that opens
 http:// and https:// pages (bsdsocket.library and AmiSSL 5) and shows them as
 text, with numbered links, Back and Reload. Other programs open pages in it
 through its ARexx port, `AMIGACHROME.BROWSER`:
@@ -23,18 +27,18 @@ through its ARexx port, `AMIGACHROME.BROWSER`:
 1> rx "address AMIGACHROME.BROWSER 'OPENURL http://info.cern.ch/'"
 ```
 
-Images through datatypes come next, then pages drawn by WebKit. See
-[docs/PHASE_PLAN.md](docs/PHASE_PLAN.md).
+See [docs/PHASE_PLAN.md](docs/PHASE_PLAN.md) for what comes next.
 
 ## What is here
 
 | Folder | What |
 | --- | --- |
 | `src/` | OpenBrowser Lite: the GadTools window (`ob_main.c`) and HTTP fetching (`ob_http.c`) |
+| `src/webcore/` | OpenBrowser on WebCore: the window (`ob_browser.c`), the page layer (WebCore's clients, `ob_webview.h`), cookies and the network loader, and the test programs `obcore-dump` and `obcore-view` |
 | `third_party/openmail/` | Network, HTML-to-text and stack code shared with OpenMail (MIT, Dalsin Limited) |
-| `webkit/` | The pinned upstream revision and the AmigaOS/m68k patch for WebKit (JSCOnly) |
+| `webkit/` | The pinned upstream revision and the AmigaOS/m68k patches for WebKit (JavaScriptCore and WebCore) |
 | `toolchain/` | CMake toolchain file for the os32-gcc16 compiler |
-| `scripts/` | `build-openbrowser.sh`, `build-icu.sh` and `build-jsc.sh` |
+| `scripts/` | `build-openbrowser.sh`, `build-icu.sh`, `build-jsc.sh` and `build-webcore.sh` |
 | `icu/` | ICU 78.3 patch for AmigaOS 3.x |
 | `stove/` | Notes and patches for the GCC 16.2 AmigaOS compiler, plus the compat library and headers it needs |
 | `tools/` | `obfetch` (fetch a page from a Shell, for tests), probe runner for an AmigaChrome test instance, and stack/map helpers |
@@ -64,6 +68,15 @@ The JavaScript engine:
 3. Check out WebKit at the pinned revision and apply the patch (see
    `webkit/README.md`).
 4. Run `WEBKIT_SOURCE=... scripts/build-jsc.sh`.
+
+OpenBrowser on WebCore needs, besides the compiler and ICU above, the
+libraries from the OpenAmiga ports (cairo and pixman, FreeType, HarfBuzz,
+fontconfig, Expat, libxml2, SQLite, curl, libpsl, zlib and libpng; see
+https://github.com/DalsinAI/openamiga) built into one prefix, and the AmiSSL 5
+SDK. Then apply all three patches in `webkit/` and run
+`WEBKIT_SOURCE=... OAB_DEPS=... AMISSL_SDK=... scripts/build-webcore.sh`.
+The programs are large (about 120 MB each, stripped) and need a 68020 or
+better with an FPU and plenty of Fast RAM.
 
 ## Licence
 
