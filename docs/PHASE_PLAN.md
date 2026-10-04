@@ -53,6 +53,16 @@ A small native browser that is useful early while WebCore is brought up.
 **Milestone 1b:** HTTPS plus clickable links and history.
 **Milestone 1c:** inline images through datatypes.
 
+Status, 4 October 2026: 1a is done and most of 1b with it. OpenBrowser Lite
+(`src/`) opens http:// and https:// pages on AmigaOS 3.2.3 and shows them as
+wrapped text in a GadTools listview; clicking a line follows its first link,
+Links... lists them all, Back and Reload work, and the ARexx port
+`AMIGACHROME.BROWSER` takes OPENURL. Still to do for 1b: Forward, Stop, a
+window title from the page's `<title>`, and fetching without blocking the
+window. Known problem: under AmigaChrome's ACNet bsdsocket.library 4.1,
+WaitSelect returns at once after the first connection, so second and later
+pages fail with "The server stopped answering"; reported to the ACNet side.
+
 ### Phase 2: WebCore bring-up (headless first)
 1. Build WebCore for AmigaOS 3.2 (new `PLATFORM(AMIGA)` port, modelled on the WPE/JSCOnly split): HTML parser, DOM, CSS, layout, JS bindings. No GPU, no media, no WebGL/WebGPU/WebAssembly, no multi-process.
 2. Graphics backend: a software rasteriser into an RGB buffer (Cairo with its image surface, or WebKit's own Skia-free path if small enough), blitted with `WritePixelArray`/Picasso96. One paint interface, so OpenGPU can replace it.

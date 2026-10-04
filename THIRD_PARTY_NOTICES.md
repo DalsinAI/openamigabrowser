@@ -9,6 +9,12 @@ their own licences:
 | `icu/patches/` | Changes to ICU 78.3 source files | Unicode License v3 (ICU) |
 | `stove/gcc-patches/` | Changes to GCC 16 (bebbo amiga-gcc, branch amiga16.2) and its newlib headers | GPL-3.0-or-later with the GCC Runtime Library Exception (GCC); newlib's own licence for `sys-include` |
 
+`third_party/openmail/` comes from OpenMail (Dalsin Limited's mail client,
+MIT, same copyright); see its `FROM` and `LICENSE`.
+
+OpenBrowser Lite links, at build time, libnix and libamiga from bebbo's
+amiga-gcc and uses AmiSSL 5 (OpenSSL 3, Apache-2.0) when it runs.
+
 Built programs also link, at build time on your machine (none of it is in this
 repository):
 
