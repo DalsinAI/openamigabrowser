@@ -1,0 +1,15 @@
+<!doctype html><html><head><meta charset="utf-8"><title>t5 before</title></head><body><p id=a>first</p><script>
+var r = [];
+try {
+var B=document.body;
+B.children[0].insertAdjacentHTML("afterend","<p lang=fr>ascii one</p><p lang=x>ascii two</p>");
+r.push("ascii ps=" + B.querySelectorAll("p").length);
+B.insertAdjacentHTML("beforeend","<p lang=ar>هذا arabic</p><p lang=ru>Да russian</p>");
+r.push("wide ps=" + B.querySelectorAll("p").length);
+var d=document.createElement('div'); d.innerHTML="<b>latin1</b> é <i>it</i>"; B.appendChild(d);
+var e=document.createElement('div'); e.innerHTML="<b>wide</b> д <i>it</i>"; B.appendChild(e);
+r.push("b=" + B.querySelectorAll("b").length + " i=" + B.querySelectorAll("i").length);
+} catch (x) { r.push("EXC " + x); }
+document.title = "t5 " + r.join("; ");
+setTimeout(function () { alert(document.body.innerHTML.replace(/[^\x20-\x7e]/g, "?")); }, 100);
+</script></body></html>

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>input test</title>
+<style>
+body { margin: 0; font-family: sans-serif; }
+#email { position: absolute; left: 20px; top: 20px; width: 300px; height: 30px; font-size: 16px; }
+#go { position: absolute; left: 20px; top: 100px; font-size: 16px; }
+</style></head>
+<body>
+<input id="email" type="email" placeholder="Email, phone or Skype">
+<a id="go" href="#next">Next</a>
+<script>
+var keys = 0, inputs = 0;
+var box = document.getElementById('email');
+box.addEventListener('keydown', function () { keys++; });
+box.addEventListener('input', function () { inputs++; });
+box.addEventListener('focus', function () { document.title = 'focused'; });
+document.getElementById('go').addEventListener('click', function () { alert('clicked with ' + box.value + ' keys=' + keys + ' inputs=' + inputs); });
+</script>
+</body></html>

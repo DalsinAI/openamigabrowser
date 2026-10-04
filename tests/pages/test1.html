@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenBrowser test 1</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; color: #222; background: #fff; }
+  h1 { color: #1a4fa0; font-size: 28px; border-bottom: 2px solid #1a4fa0; }
+  .note { background: #fff4cc; border: 1px solid #e0c060; padding: 8px; }
+  code { font-family: monospace; background: #eee; }
+  table { border-collapse: collapse; }
+  td, th { border: 1px solid #888; padding: 4px 8px; }
+  th { background: #ddd; }
+  .serif { font-family: serif; font-style: italic; }
+</style>
+</head>
+<body>
+<h1>OpenBrowser on AmigaOS 3.2</h1>
+<p>This page is laid out by <b>WebCore</b>, the engine inside WebKit, running on a 68k Amiga.
+Text is shaped by HarfBuzz and drawn with FreeType through cairo.</p>
+<p class="note">A note box with a <code>monospace</code> word and a <a href="https://www.amiga.org/">link</a>.</p>
+<ul>
+  <li>First item</li>
+  <li>Second item, with <i>italic</i> and <b>bold</b> text</li>
+  <li class="serif">A serif line: caf&eacute;, na&iuml;ve, &pound;5</li>
+</ul>
+<table>
+  <tr><th>Library</th><th>Version</th></tr>
+  <tr><td>cairo</td><td>1.18.6</td></tr>
+  <tr><td>FreeType</td><td>2.14.3</td></tr>
+</table>
+</body>
+</html>

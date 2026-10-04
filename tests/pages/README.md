@@ -1,0 +1,23 @@
+# Test pages for OpenBrowser's page layer
+
+Pages for `obcore-view`, which runs OpenBrowser's page layer (WebCore with
+JavaScript, the DOM and timers) without a window and prints what the page
+does: `OBVIEW_TITLE`, `OBVIEW_ALERT`, `OBVIEW_CONSOLE` and so on. Copy the
+pages and `obcore-view` to the Amiga and run it from a Shell, with the
+fonts in `PROGDIR:Fonts` and the configuration in `PROGDIR:fontconfig` as
+for OpenBrowser itself.
+
+| Page | Command | What it shows | Result on AmigaOS 3.2.3, 4 October 2026 |
+| --- | --- | --- | --- |
+| `test1.html` | `obcore-view test1.html 800 600 test1.png` | Text, a table, colours and the three font families, painted to a PNG | Draws the page; compare `test1.png` with a desktop browser |
+| `test3.html` | `obcore-view test3.html` | A script builds a list, sets the title and fires a timer | `OBVIEW_TITLE After script: {"ok":true,"n":5}` and `OBVIEW_ALERT Timer fired` |
+| `test4.html` | `obcore-view test4.html` | JavaScript probes, one console line each | Every line has a value; none says `THREW` |
+| `test5.html` | `obcore-view test5.html` | `insertAdjacentHTML` and `innerHTML` with Latin-1, Arabic and Cyrillic text (UTF-8 on big-endian CPUs) | `OBVIEW_TITLE t5 ascii ps=3; wide ps=5; b=2 i=2` |
+| `input.html` | `obcore-view -input input.html` | A click into a text box, typing an address key by key, then a click on a link | `OBVIEW_ALERT clicked with someone@example.com keys=19 inputs=19` |
+
+`obcore-view -input` clicks at (30, 35), types `someone@example.com` with
+Intuition raw key codes, as OpenBrowser's window does, then clicks at
+(30, 110). `-wait seconds` changes how long it lets a page load (120 by
+default), and `-url` loads an address from the network instead of a file.
+
+MIT, Copyright (c) 2026 Dalsin Limited.

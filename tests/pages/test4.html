@@ -1,0 +1,26 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>JS probe</title></head><body><p id="o">probe</p>
+<script>
+function t(name, f) { try { console.log(name + ' = ' + f()); } catch (e) { console.log(name + ' THREW ' + e); } }
+t('typeof Array', function () { return typeof Array; });
+t('typeof Array.prototype.push', function () { return typeof Array.prototype.push; });
+t('Object.getOwnPropertyNames(Array.prototype).length', function () { return Object.getOwnPropertyNames(Array.prototype).length; });
+t('first names', function () { return Object.getOwnPropertyNames(Array.prototype).slice(0, 12).join(','); });
+t('local array push', function () { var a = []; a.push(1); return a.length; });
+t('isArray([])', function () { return Array.isArray([]); });
+t('proto is Array.prototype', function () { return Object.getPrototypeOf([]) === Array.prototype; });
+t('typeof [].push', function () { return typeof [].push; });
+t('[].concat', function () { return typeof [].concat; });
+t('String.prototype.toUpperCase', function () { return 'abc'.toUpperCase(); });
+t('Object.keys', function () { return Object.keys({a:1,b:2}).join(); });
+t('JSON', function () { return JSON.stringify({x:[1,2]}); });
+t('Math.sqrt(2)', function () { return Math.sqrt(2); });
+t('document.title', function () { return document.title; });
+t('getElementById', function () { return document.getElementById('o').textContent; });
+t('window.items before', function () { return typeof window.items; });
+var items = [];
+t('global items type', function () { return Object.prototype.toString.call(items); });
+t('global items.push', function () { return typeof items.push; });
+t('window.items === items', function () { return window.items === items; });
+t('Date', function () { return new Date(0).toISOString(); });
+t('RegExp', function () { return /a(b+)c/.exec('xabbbc')[1]; });
+</script></body></html>

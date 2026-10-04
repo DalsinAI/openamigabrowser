@@ -121,11 +121,53 @@ static void run(double seconds)
     }
 }
 
+/* Intuition raw key codes of a US keyboard, for the input test. */
+static int rawKeyFor(char c, int *shift)
+{
+    static const char *rows[] = { "1234567890-=", "qwertyuiop[]", "asdfghjkl;'", "zxcvbnm,./" };
+    static const char *shifted[] = { "!@#$%^&*()_+", "QWERTYUIOP{}", "ASDFGHJKL:\"", "ZXCVBNM<>?" };
+    static const int first[] = { 0x01, 0x10, 0x20, 0x31 };
+    int row;
+    *shift = 0;
+    if (c == ' ')
+        return 0x40;
+    for (row = 0; row < 4; row++) {
+        const char *at = strchr(rows[row], c);
+        if (!at && (at = strchr(shifted[row], c)))
+            *shift = OB_QUAL_SHIFT;
+        if (at)
+            return first[row] + (int)(at - (*shift ? shifted[row] : rows[row]));
+    }
+    return -1;
+}
+
+/* Clicks at (x, y) on the page, as the window does with the left button. */
+static void click(OBWebView *view, int x, int y)
+{
+    ob_webview_mouse(view, OB_MOUSE_MOVE, x, y, OB_BUTTON_NONE, 0, 0);
+    ob_webview_mouse(view, OB_MOUSE_DOWN, x, y, OB_BUTTON_LEFT, 0, 1);
+    ob_webview_mouse(view, OB_MOUSE_UP, x, y, OB_BUTTON_LEFT, 0, 1);
+}
+
+/* Types text a key at a time, each key down and up, as the window does. */
+static void typeText(OBWebView *view, const char *text)
+{
+    for (; *text; text++) {
+        char one[2] = { *text, 0 };
+        int shift, raw = rawKeyFor(*text, &shift);
+        if (raw < 0)
+            continue;
+        ob_webview_key(view, 1, raw, one, shift);
+        ob_webview_key(view, 0, raw, "", shift);
+        ob_webcore_cycle();
+    }
+}
+
 static int viewMain(int argc, char **argv)
 {
     OBWebViewCallbacks callbacks = { 0 };
     OBWebView *view;
-    int width = 800, height = 600, argi = 1, isURL = 0;
+    int width = 800, height = 600, argi = 1, isURL = 0, inputTest = 0;
     double seconds = 120.0;
     const char *source, *png = NULL;
     unsigned char *pixels;
@@ -135,12 +177,17 @@ static int viewMain(int argc, char **argv)
         seconds = atof(argv[argi + 1]);
         argi += 2;
     }
+    if (argc > argi && !strcmp(argv[argi], "-input")) {
+        /* After the load: click at (30, 35), type an address, click at (30, 110). */
+        inputTest = 1;
+        argi++;
+    }
     if (argc > argi && !strcmp(argv[argi], "-url")) {
         isURL = 1;
         argi++;
     }
     if (argc <= argi) {
-        printf("usage: obcore-view [-wait seconds] [-url] <file.html|address> [width height] [page.png]\n");
+        printf("usage: obcore-view [-wait seconds] [-input] [-url] <file.html|address> [width height] [page.png]\n");
         return 10;
     }
     source = argv[argi++];
@@ -182,6 +229,16 @@ static int viewMain(int argc, char **argv)
         ob_webview_load_html(view, html, "file:///page.html");
     run(seconds);
     run(1.0); /* rendering updates and timers the load left behind */
+    if (inputTest) {
+        ob_webview_focus(view, 1);
+        click(view, 30, 35);
+        run(1.0);
+        typeText(view, "someone@example.com");
+        run(1.0);
+        printf("OBVIEW_TYPED\n");
+        click(view, 30, 110);
+        run(3.0);
+    }
     printf("OBVIEW_RAN loading=%d invalidations=%d cycles=%ld waits=%ld\n", loading, invalidations, busyCycles, waits);
     fflush(stdout);
 
