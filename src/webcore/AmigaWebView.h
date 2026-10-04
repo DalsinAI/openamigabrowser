@@ -67,6 +67,8 @@ public:
     bool runConfirm(const String&);
     bool runPrompt(const String& message, const String& defaultValue, String& result);
     void consoleMessage(const String& message, unsigned line, const String& source);
+    void resourceStarted(const String& url);
+    void resourceEnded(const String& url, const String& error);
 
 private:
     void renderingUpdateTimerFired();

@@ -10,6 +10,7 @@
  * MIT, Copyright (c) 2026 Dalsin Limited.
  */
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <cairo.h>
@@ -22,6 +23,7 @@ static const char version[] __attribute__((used)) = "$VER: obcore-view 0.1 (4.10
 
 static int loading = -1;   /* -1 not started yet, 1 loading, 0 done */
 static int invalidations;
+static long busyCycles, waits;  /* run loop turns with work waiting, and waits */
 
 static void onInvalidate(void *context, int x, int y, int w, int h)
 {
@@ -67,6 +69,13 @@ static void onConsole(void *context, const char *message, int line, const char *
     printf("OBVIEW_CONSOLE %s (%s:%d)\n", message, source, line);
 }
 
+static void onResource(void *context, const char *url, int started, const char *error)
+{
+    (void)context;
+    printf("OBVIEW_%s %.200s%s%s\n", started ? "REQUEST" : "LOADED", url, error ? " FAILED: " : "", error ? error : "");
+    fflush(stdout);
+}
+
 static char *readFile(const char *name)
 {
     FILE *f = fopen(name, "rb");
@@ -89,20 +98,25 @@ static char *readFile(const char *name)
 }
 
 /* Runs WebCore's run loop for up to `seconds`, or until the page is done
- * and nothing is due within 50 ms. */
+ * and nothing is due within 50 ms, saying every 15 seconds how it goes. */
 static void run(double seconds)
 {
-    int ticks = (int)(seconds * 50), waited = 0;
-    while (waited < ticks) {
+    time_t start = time(NULL), lastTick = start;
+    while (difftime(time(NULL), start) < seconds) {
         double next;
         ob_webcore_cycle();
         next = ob_webcore_next_timer();
         if (loading == 0 && (next < 0 || next > 0.05))
             break;
         if (next != 0) {
-            int t = next < 0 || next > 0.2 ? 10 : (int)(next * 50) + 1;
-            Delay(t);
-            waited += t;
+            Delay(next < 0 || next > 0.2 ? 10 : (int)(next * 50) + 1);
+            waits++;
+        } else
+            busyCycles++;
+        if (difftime(time(NULL), lastTick) >= 15) {
+            lastTick = time(NULL);
+            printf("OBVIEW_TICK %lds loading=%d cycles=%ld waits=%ld\n", (long)(lastTick - start), loading, busyCycles, waits);
+            fflush(stdout);
         }
     }
 }
@@ -112,16 +126,21 @@ static int viewMain(int argc, char **argv)
     OBWebViewCallbacks callbacks = { 0 };
     OBWebView *view;
     int width = 800, height = 600, argi = 1, isURL = 0;
+    double seconds = 120.0;
     const char *source, *png = NULL;
     unsigned char *pixels;
     char *html = NULL;
 
-    if (argc > 1 && !strcmp(argv[1], "-url")) {
+    if (argc > argi + 1 && !strcmp(argv[argi], "-wait")) {
+        seconds = atof(argv[argi + 1]);
+        argi += 2;
+    }
+    if (argc > argi && !strcmp(argv[argi], "-url")) {
         isURL = 1;
         argi++;
     }
     if (argc <= argi) {
-        printf("usage: obcore-view [-url] <file.html|address> [width height] [page.png]\n");
+        printf("usage: obcore-view [-wait seconds] [-url] <file.html|address> [width height] [page.png]\n");
         return 10;
     }
     source = argv[argi++];
@@ -152,6 +171,7 @@ static int viewMain(int argc, char **argv)
     callbacks.failed = onFailed;
     callbacks.alert = onAlert;
     callbacks.console = onConsole;
+    callbacks.resource = onResource;
     view = ob_webview_create(width, height, &callbacks);
     printf("OBVIEW_CREATED %dx%d\n", width, height);
     fflush(stdout);
@@ -160,9 +180,9 @@ static int viewMain(int argc, char **argv)
         ob_webview_load(view, source);
     else
         ob_webview_load_html(view, html, "file:///page.html");
-    run(120.0);
+    run(seconds);
     run(1.0); /* rendering updates and timers the load left behind */
-    printf("OBVIEW_RAN loading=%d invalidations=%d\n", loading, invalidations);
+    printf("OBVIEW_RAN loading=%d invalidations=%d cycles=%ld waits=%ld\n", loading, invalidations, busyCycles, waits);
     fflush(stdout);
 
     pixels = calloc((size_t)width * height, 4);

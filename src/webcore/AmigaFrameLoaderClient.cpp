@@ -42,6 +42,7 @@
 #include <WebCore/SubstituteData.h>
 #include <WebCore/UserAgent.h>
 #include <WebCore/Widget.h>
+#include <wtf/HashMap.h>
 #include <wtf/RunLoop.h>
 
 namespace OpenBrowser {
@@ -94,7 +95,13 @@ private:
 
     void assignIdentifierToInitialRequest(ResourceLoaderIdentifier, DocumentLoader*, const ResourceRequest&) final { }
     bool shouldUseCredentialStorage(DocumentLoader*, ResourceLoaderIdentifier) final { return true; }
-    void dispatchWillSendRequest(DocumentLoader*, ResourceLoaderIdentifier, ResourceRequest&, const ResourceResponse&) final { }
+    void dispatchWillSendRequest(DocumentLoader*, ResourceLoaderIdentifier identifier, ResourceRequest& request, const ResourceResponse&) final
+    {
+        // Also called again for each redirect, with the new address.
+        auto url = request.url().string();
+        m_requestURLs.set(identifier, url);
+        m_view.resourceStarted(url);
+    }
     void dispatchDidReceiveAuthenticationChallenge(DocumentLoader*, ResourceLoaderIdentifier, const AuthenticationChallenge& challenge) final
     {
         // No HTTP log-in panel yet: carry on without credentials.
@@ -104,8 +111,14 @@ private:
 
     void dispatchDidReceiveResponse(DocumentLoader*, ResourceLoaderIdentifier, const ResourceResponse&) final { }
     void dispatchDidReceiveContentLength(DocumentLoader*, ResourceLoaderIdentifier, int) final { }
-    void dispatchDidFinishLoading(DocumentLoader*, ResourceLoaderIdentifier) final { }
-    void dispatchDidFailLoading(DocumentLoader*, ResourceLoaderIdentifier, const ResourceError&) final { }
+    void dispatchDidFinishLoading(DocumentLoader*, ResourceLoaderIdentifier identifier) final
+    {
+        m_view.resourceEnded(m_requestURLs.take(identifier), { });
+    }
+    void dispatchDidFailLoading(DocumentLoader*, ResourceLoaderIdentifier identifier, const ResourceError& error) final
+    {
+        m_view.resourceEnded(m_requestURLs.take(identifier), error.localizedDescription().isEmpty() ? "failed"_s : error.localizedDescription());
+    }
     bool dispatchDidLoadResourceFromMemoryCache(DocumentLoader*, const ResourceRequest&, const ResourceResponse&, int) final { return false; }
 
     void dispatchDidDispatchOnloadEvents() final { }
@@ -320,6 +333,7 @@ private:
 
     WeakRef<FrameLoader> m_frameLoader;
     WebView& m_view;
+    HashMap<ResourceLoaderIdentifier, String> m_requestURLs;
 };
 
 UniqueRef<LocalFrameLoaderClient> createFrameLoaderClient(FrameLoader& loader, WebView& view)

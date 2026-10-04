@@ -1,0 +1,178 @@
+diff --git a/Source/WebCore/platform/network/ResourceHandleInternal.h b/Source/WebCore/platform/network/ResourceHandleInternal.h
+index fd5bea46a1..29f73c2232 100644
+--- a/Source/WebCore/platform/network/ResourceHandleInternal.h
++++ b/Source/WebCore/platform/network/ResourceHandleInternal.h
+@@ -48,13 +48,11 @@ typedef const struct __CFURLStorageSession* CFURLStorageSessionRef;
+ 
+ #if PLATFORM(AMIGA)
+ #include "CurlRequest.h"
++#include "CurlRequestClient.h"
+ #endif
+ 
+ namespace WebCore {
+ 
+-#if PLATFORM(AMIGA)
+-class ResourceHandleCurlDelegate;
+-#endif
+ 
+ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(ResourceHandleInternal);
+ class ResourceHandleInternal {
+@@ -108,7 +106,9 @@ public:
+ #endif
+ #if PLATFORM(AMIGA)
+     RefPtr<CurlRequest> m_curlRequest;
+-    RefPtr<ResourceHandleCurlDelegate> m_curlDelegate;
++    // A ResourceHandleCurlDelegate (ResourceHandleAmiga.cpp), kept by its base
++    // so this header needs no complete type for it.
++    RefPtr<CurlRequestClient> m_curlDelegate;
+ #endif
+     Box<NetworkLoadMetrics> m_networkLoadMetrics;
+     MonotonicTime m_startTime;
+diff --git a/Source/WebCore/platform/network/amiga/AmigaNetwork.h b/Source/WebCore/platform/network/amiga/AmigaNetwork.h
+index 458bb27436..d2e3accb85 100644
+--- a/Source/WebCore/platform/network/amiga/AmigaNetwork.h
++++ b/Source/WebCore/platform/network/amiga/AmigaNetwork.h
+@@ -52,4 +52,8 @@ WEBCORE_EXPORT void setAmigaNetworkThreadHooks(const AmigaNetworkThreadHooks&);
+ void amigaNetworkThreadStarted();
+ void amigaNetworkThreadFinished();
+ 
++// Stops the network thread, whatever it is loading; the browser calls this
++// before it exits, as an AmigaOS program does not end while a thread runs.
++WEBCORE_EXPORT void stopAmigaNetwork();
++
+ } // namespace WebCore
+diff --git a/Source/WebCore/platform/network/amiga/CurlSSLHandleAmiga.cpp b/Source/WebCore/platform/network/amiga/CurlSSLHandleAmiga.cpp
+index a36ad9e717..98e433b912 100644
+--- a/Source/WebCore/platform/network/amiga/CurlSSLHandleAmiga.cpp
++++ b/Source/WebCore/platform/network/amiga/CurlSSLHandleAmiga.cpp
+@@ -30,7 +30,10 @@ namespace WebCore {
+ 
+ // AmiSSL keeps its trusted root certificates in AmiSSL:Certs, OpenSSL's
+ // default verify paths, which curl uses when no CA file is given. The cipher
+-// list prefers ciphers that are cheap on a 68k without AES instructions.
++// list prefers ciphers that are cheap on a 68k without AES instructions. The
++// key exchange offers X25519 and P-256 only: some servers (login.live.com)
++// pick P-384 when it is offered, and its arithmetic takes a 68020 several
++// seconds longer, which counts against the server's handshake timeout.
+ void CurlSSLHandle::platformInitialize()
+ {
+     constexpr auto cipherList =
+@@ -49,8 +52,7 @@ void CurlSSLHandle::platformInitialize()
+         "AES128-SHA"_s;
+     constexpr auto ecCurves =
+         "X25519:"
+-        "P-256:"
+-        "P-384"_s;
++        "P-256"_s;
+     setCipherList(cipherList);
+     setECCurves(ecCurves);
+ }
+diff --git a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+index 4e7ad1cb17..54b2ab4134 100644
+--- a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
++++ b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+@@ -31,8 +31,10 @@
+ #include "ResourceHandle.h"
+ 
+ #include "AmigaNetwork.h"
++#include "CurlContext.h"
+ #include "CurlRequest.h"
+ #include "CurlRequestClient.h"
++#include "CurlRequestScheduler.h"
+ #include "CurlResponse.h"
+ #include "HTTPParsers.h"
+ #include "MIMETypeRegistry.h"
+@@ -80,6 +82,11 @@ void amigaNetworkThreadFinished()
+         networkThreadHooks.finished();
+ }
+ 
++void stopAmigaNetwork()
++{
++    CurlContext::singleton().scheduler().stopThread();
++}
++
+ // Receives CurlRequest's callbacks (on the main thread) for one handle.
+ class ResourceHandleCurlDelegate final : public CurlRequestClient, public RefCounted<ResourceHandleCurlDelegate> {
+ public:
+@@ -132,7 +139,7 @@ private:
+ ResourceHandleInternal::~ResourceHandleInternal()
+ {
+     if (m_curlDelegate)
+-        m_curlDelegate->releaseHandle();
++        static_cast<ResourceHandleCurlDelegate&>(*m_curlDelegate).releaseHandle();
+     if (m_curlRequest)
+         m_curlRequest->invalidateClient();
+ }
+diff --git a/Source/WebCore/platform/network/curl/CurlContext.cpp b/Source/WebCore/platform/network/curl/CurlContext.cpp
+index 2e6a2537f3..5c7bda8c58 100644
+--- a/Source/WebCore/platform/network/curl/CurlContext.cpp
++++ b/Source/WebCore/platform/network/curl/CurlContext.cpp
+@@ -126,7 +126,11 @@ CurlContext::CurlContext()
+     lazyInitialize(m_scheduler, makeUnique<CurlRequestScheduler>(maxConnects, maxTotalConnections, maxHostConnections));
+ 
+     auto info = curl_version_info(CURLVERSION_NOW);
++#if !OS(AMIGA)
++    // AmigaOS's C library has a 32-bit off_t, so curl does not report large
++    // files; its transfer sizes (curl_off_t) are 64-bit all the same.
+     RELEASE_ASSERT(info->features & CURL_VERSION_LARGEFILE);
++#endif
+     m_isAltSvcEnabled = info->features & CURL_VERSION_ALTSVC;
+     m_isHttp2Enabled = info->features & CURL_VERSION_HTTP2;
+     // HTTP/3 backend is supported in cURL since 8.5.0
+diff --git a/Source/WebCore/platform/network/curl/CurlContext.h b/Source/WebCore/platform/network/curl/CurlContext.h
+index 757359cf3b..b511488622 100644
+--- a/Source/WebCore/platform/network/curl/CurlContext.h
++++ b/Source/WebCore/platform/network/curl/CurlContext.h
+@@ -51,8 +51,16 @@ namespace WebCore {
+ // Values taken from http://www.browserscope.org/ following
+ // the rule "Do What Every Other Modern Browser Is Doing".
+ const long CurlDefaultMaxConnects { -1 }; // -1 : Does not set CURLMOPT_MAXCONNECTS
++#if PLATFORM(AMIGA)
++// A TLS handshake is seconds of work for a 68k, and handshakes made side by
++// side slow each other down past what servers wait for: one connection per
++// host, reused for the next request, and few at once.
++const long CurlDefaultMaxTotalConnections { 4 };
++const long CurlDefaultMaxHostConnections { 1 };
++#else
+ const long CurlDefaultMaxTotalConnections { 17 };
+ const long CurlDefaultMaxHostConnections { 6 };
++#endif
+ 
+ // CurlGlobal --------------------------------------------
+ // to make the initialization of libcurl happen before other initialization of CurlContext
+@@ -151,7 +159,11 @@ private:
+     bool m_isHttp3Enabled { false };
+ 
+     Seconds m_dnsCacheTimeout { Seconds::fromMinutes(5) };
++#if PLATFORM(AMIGA)
++    Seconds m_connectTimeout { 120.0 }; // the TLS handshake counts, and takes seconds on a 68k
++#else
+     Seconds m_connectTimeout { 30.0 };
++#endif
+     Seconds m_defaultTimeoutInterval { 60.0 };
+ 
+     String m_alternativeServicesStorageFile;
+diff --git a/Source/WebCore/platform/network/curl/CurlRequestScheduler.h b/Source/WebCore/platform/network/curl/CurlRequestScheduler.h
+index 8f554b37e4..09327008ff 100644
+--- a/Source/WebCore/platform/network/curl/CurlRequestScheduler.h
++++ b/Source/WebCore/platform/network/curl/CurlRequestScheduler.h
+@@ -55,11 +55,19 @@ public:
+ 
+     void callOnWorkerThread(Function<void()>&&);
+ 
++#if PLATFORM(AMIGA)
++    // An AmigaOS program does not end while one of its threads runs, so the
++    // program stops this one before it exits.
++    void stopThread();
++#endif
++
+ private:
+     void startOrWakeUpThread();
+     void wakeUpThreadIfPossible();
+     void stopThreadIfNoMoreJobRunning();
++#if !PLATFORM(AMIGA)
+     void stopThread();
++#endif
+ 
+     void executeTasks();
+ 

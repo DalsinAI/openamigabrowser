@@ -356,4 +356,21 @@ void WebView::consoleMessage(const String& message, unsigned line, const String&
     m_callbacks.console(m_callbacks.context, cString(utf8Message), static_cast<int>(line), cString(utf8Source));
 }
 
+void WebView::resourceStarted(const String& url)
+{
+    if (!m_callbacks.resource)
+        return;
+    CString utf8URL = url.utf8();
+    m_callbacks.resource(m_callbacks.context, cString(utf8URL), 1, nullptr);
+}
+
+void WebView::resourceEnded(const String& url, const String& error)
+{
+    if (!m_callbacks.resource)
+        return;
+    CString utf8URL = url.utf8();
+    CString utf8Error = error.utf8();
+    m_callbacks.resource(m_callbacks.context, cString(utf8URL), 0, error.isNull() ? nullptr : cString(utf8Error));
+}
+
 } // namespace OpenBrowser

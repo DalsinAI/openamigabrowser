@@ -39,7 +39,7 @@
 
 static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.2 (4.10.2026)";
 
-#define HOME_PAGE "https://login.live.com/"
+#define HOME_PAGE "https://example.com/"
 
 enum { GID_BACK = 1, GID_FORWARD, GID_RELOAD, GID_STOP, GID_URL, GID_STATUS, GID_COUNT };
 

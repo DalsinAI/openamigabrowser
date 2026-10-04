@@ -1,0 +1,90 @@
+diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructor.cpp b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructor.cpp
+index bcad395753..0e90fcadfa 100644
+--- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructor.cpp
++++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructor.cpp
+@@ -165,9 +165,16 @@ template<typename CharacterType>
+                 return true;
+             } else {
+                 auto vectorDecode16 = [&](simde_uint8x16x2_t input, uint8_t* output) ALWAYS_INLINE_LAMBDA {
+-                    if (SIMD::isNonZero(input.val[1])) [[unlikely]]
++                    // val[0] holds the byte each code unit stores first: the
++                    // low byte, or the high byte on a big-endian CPU.
++#if CPU(BIG_ENDIAN)
++                    constexpr unsigned low = 1;
++#else
++                    constexpr unsigned low = 0;
++#endif
++                    if (SIMD::isNonZero(input.val[1 - low])) [[unlikely]]
+                         return false;
+-                    return vectorDecode8(input.val[0], output);
++                    return vectorDecode8(input.val[low], output);
+                 };
+ 
+                 for (; cursor + stride <= end; cursor += stride, output += halfStride) {
+diff --git a/Source/WTF/wtf/text/StringImpl.cpp b/Source/WTF/wtf/text/StringImpl.cpp
+index d29c0197f6..182c6c4ebc 100644
+--- a/Source/WTF/wtf/text/StringImpl.cpp
++++ b/Source/WTF/wtf/text/StringImpl.cpp
+@@ -1641,7 +1641,7 @@ std::expected<size_t, UTF8ConversionError> StringImpl::utf8ForCharactersIntoBuff
+ {
+     ASSERT(bufferVector.size() == span.size() * 3);
+ 
+-    auto conversionResult = simdutf::convert_utf16le_to_utf8_with_errors(span, bufferVector.mutableSpan());
++    auto conversionResult = simdutf::convert_utf16_to_utf8_with_errors(span, bufferVector.mutableSpan());
+ 
+     if (conversionResult.error == simdutf::error_code::SUCCESS)
+         return conversionResult.count;
+@@ -1664,12 +1664,12 @@ std::expected<size_t, UTF8ConversionError> StringImpl::utf8ForCharactersIntoBuff
+ 
+ size_t StringImpl::utf8LengthFromUTF16(std::span<const char16_t> characters)
+ {
+-    return simdutf::utf8_length_from_utf16le(characters);
++    return simdutf::utf8_length_from_utf16(characters);
+ }
+ 
+ size_t StringImpl::tryConvertUTF16ToUTF8(std::span<const char16_t> source, std::span<char8_t> destination)
+ {
+-    auto result = simdutf::convert_utf16le_to_utf8_with_errors(source, destination);
++    auto result = simdutf::convert_utf16_to_utf8_with_errors(source, destination);
+     if (result.error == simdutf::error_code::SUCCESS)
+         return result.count;
+     return notFound;
+diff --git a/Source/WTF/wtf/unicode/UTF8Conversion.cpp b/Source/WTF/wtf/unicode/UTF8Conversion.cpp
+index c76960d7bc..5d02a069dc 100644
+--- a/Source/WTF/wtf/unicode/UTF8Conversion.cpp
++++ b/Source/WTF/wtf/unicode/UTF8Conversion.cpp
+@@ -116,12 +116,12 @@ template<Replacement replacement = Replacement::None, typename SourceCharacterTy
+ 
+ ConversionResult<char8_t> convert(std::span<const char16_t> source, std::span<char8_t> buffer)
+ {
+-    size_t requiredLength = simdutf::utf8_length_from_utf16le(source);
++    size_t requiredLength = simdutf::utf8_length_from_utf16(source);
+ 
+     if (buffer.size() < requiredLength)
+         return convertInternal(source, buffer);
+ 
+-    auto result = simdutf::convert_utf16le_to_utf8_with_errors(source, buffer);
++    auto result = simdutf::convert_utf16_to_utf8_with_errors(source, buffer);
+ 
+     if (result.error == simdutf::error_code::SUCCESS) {
+         bool isAllASCII = result.count == source.size();
+diff --git a/Source/WebCore/html/parser/HTMLDocumentParserFastPath.cpp b/Source/WebCore/html/parser/HTMLDocumentParserFastPath.cpp
+index 2406086829..50e3ab7fde 100644
+--- a/Source/WebCore/html/parser/HTMLDocumentParserFastPath.cpp
++++ b/Source/WebCore/html/parser/HTMLDocumentParserFastPath.cpp
+@@ -627,7 +627,14 @@ private:
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+             auto vectorMatch = [&](auto input) ALWAYS_INLINE_LAMBDA {
+                 constexpr simde_uint8x16_t zeros = SIMD::splat8(0);
+-                return SIMD::findFirstNonZeroIndex(SIMD::bitAnd(vectorEquals8Bit(input.val[0]), SIMD::equal(input.val[1], zeros)));
++                // simde_vld2q_u8() puts the byte each code unit stores first in
++                // val[0]: its low byte, or its high byte on a big-endian CPU.
++#if CPU(BIG_ENDIAN)
++                constexpr unsigned low = 1;
++#else
++                constexpr unsigned low = 0;
++#endif
++                return SIMD::findFirstNonZeroIndex(SIMD::bitAnd(vectorEquals8Bit(input.val[low]), SIMD::equal(input.val[1 - low], zeros)));
+             };
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+             auto* it = SIMD::findInterleaved(span, vectorMatch, scalarMatch);

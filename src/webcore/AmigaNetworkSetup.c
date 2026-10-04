@@ -26,6 +26,7 @@
 extern struct Library *SocketBase, *AmiSSLMasterBase, *AmiSSLBase, *AmiSSLExtBase;
 
 static struct Library *mainSocketBase, *threadSocketBase;
+static BYTE mainPriority;
 
 /* ROM math libraries opened on the way can leave the FPU in single precision. */
 static void resetFPCR(void)
@@ -35,6 +36,7 @@ static void resetFPCR(void)
 
 int ob_network_open(void)
 {
+    mainPriority = FindTask(NULL)->tc_Node.ln_Pri;
     mainSocketBase = OpenLibrary((CONST_STRPTR)"bsdsocket.library", 4);
     if (!mainSocketBase)
         return 0;
@@ -70,6 +72,11 @@ void ob_network_close(void)
 
 void ob_network_thread_started(void)
 {
+    /* One priority above the browser: a TLS handshake is seconds of
+     * public-key arithmetic on a 68k, and a server hangs up on a client that
+     * takes too long, so the page's work must not slow it down. The thread
+     * spends most of its time waiting on its sockets. */
+    SetTaskPri(FindTask(NULL), mainPriority + 1);
     threadSocketBase = OpenLibrary((CONST_STRPTR)"bsdsocket.library", 4);
     if (threadSocketBase) {
         SocketBase = threadSocketBase;

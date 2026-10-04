@@ -11,6 +11,8 @@ git checkout 54fe1539718eef2f24d813019949ca8cd4b9e89e
 git apply /path/to/openamigabrowser/webkit/patches/0001-amiga-m68k-jsconly.patch
 git apply /path/to/openamigabrowser/webkit/patches/0002-amiga-webcore.patch
 git apply /path/to/openamigabrowser/webkit/patches/0003-jsc-llint-prototype-cache-big-endian.patch
+git apply /path/to/openamigabrowser/webkit/patches/0004-amiga-webcore-network.patch
+git apply /path/to/openamigabrowser/webkit/patches/0005-utf16-big-endian.patch
 ```
 
 The patches, in order:
@@ -19,12 +21,20 @@ The patches, in order:
   options, the platform files (screen, keyboard, pasteboard, MIME types,
   user agent, fonts), pictures through the system's datatypes, cairo
   drawing without accelerated compositing, and the network layer over
-  WebCore's curl backend (built, not yet run). Notes are in
-  `../docs/WEBCORE_PORT.md`.
+  WebCore's curl backend. Notes are in `../docs/WEBCORE_PORT.md`.
 - `0003-jsc-llint-prototype-cache-big-endian.patch`: a JavaScriptCore fix
   for big-endian 32-bit CPUs; without it, methods found on a prototype
   (`a.push`, `s.concat`) read back as `undefined` after their first cached
   call.
+- `0004-amiga-webcore-network.patch`: the network layer running on AmigaOS:
+  the curl delegate's type, no large-file requirement (libnix's `off_t` is
+  32-bit), stopping curl's thread before the program exits, and settings
+  for slow TLS handshakes on a 68k (X25519 and P-256 key exchange, one
+  connection per host and four in all, a 120 s connect timeout).
+- `0005-utf16-big-endian.patch`: fixes for big-endian CPUs, where 16-bit
+  strings were converted to UTF-8 as if little-endian (garbling any text
+  beyond Latin-1) and the HTML fast-path parser could not find tags in
+  16-bit text.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

@@ -101,3 +101,47 @@ not mounted gets a "Please insert volume" requester, and waits until someone
 answers it. OpenBrowser's programs set `pr_WindowPtr` to -1 at start, so
 such a name just fails.
 
+**TLS handshakes take seconds.** On the test instance's emulated 68k a TLS
+handshake is 4 to 10 seconds of public-key arithmetic: an X25519 key exchange
+takes about 1.2 s, P-256 about 2 s and P-384 about 7 s, and checking an ECDSA
+certificate chain such as Cloudflare's about 7 s more. Servers hang up on a
+client that takes too long (Cloudflare accepted 10 seconds and refused 20),
+and curl then reports "Failed sending data to the peer" when it sends the
+request. So the network thread runs one priority above the browser's, the
+key exchange offers X25519 and P-256 only (login.live.com picks P-384 when it
+is offered), curl keeps one connection per host, reused for the next request,
+and four in all, so few handshakes run side by side, and the connect timeout,
+which includes the handshake, is two minutes.
+
+**UTF-16 in the CPU's byte order.** WebKit keeps 16-bit strings in the
+CPU's byte order, but three places assumed little-endian: converting them to
+UTF-8 (simdutf's `utf16le` functions in WTF), the HTML fast-path parser's SIMD
+scan of 16-bit text, and JavaScriptCore's hex decoder. On a 68k the first
+garbled every page holding a character beyond Latin-1, and the second turned
+markup given to `innerHTML` or `insertAdjacentHTML` with such text into
+literal text. WTF now uses simdutf's native-endian functions, and the two
+scans take each character's low byte from the right half. The proper place
+for that is `SIMD::findInterleaved()` itself, which is in WTF's prefix header,
+so it waits for a change that rebuilds everything anyway.
+
+**WebKit's network thread never ends.** Upstream keeps curl's thread for
+the life of the program. An AmigaOS program does not end while one of its
+threads runs, so the browser stops it (`stopAmigaNetwork()`) before it exits.
+
+**`getenv()` sees Shell variables.** libnix's `getenv()` reads the
+variables of the Shell that started the program (`Set`), not global ones
+(`SetEnv`). WebKit's `WEBKIT_CURL_*` settings are given with `Set`.
+
+## Open problems
+
+**login.live.com stalls after its page arrives (4 October 2026).** The page
+comes back (HTTP 200, 33 KB), and then WebCore's main thread makes no more
+progress: the page never reports its document finished, asks for none of its
+scripts or preloads (all on logincdn.msauth.net), and the run loop's 15-second
+heartbeat in `obcore-view` stops, so the thread is stuck inside one run-loop
+turn, in parsing or script. The network thread is not the cause: polling
+idle at its higher priority leaves the main task its time. example.com, whose
+script adds paragraphs in several languages, loads and draws. Next steps:
+sample the main task's program counter while it is stuck, or load a saved
+copy of the page from disk and remove its inline scripts one at a time.
+

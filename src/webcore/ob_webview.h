@@ -28,6 +28,9 @@ typedef struct {
     int (*prompt)(void *context, const char *message, const char *defaultValue, char *result, int resultSize);
     /* The page's console: script errors and console.log(). */
     void (*console)(void *context, const char *message, int line, const char *source);
+    /* A request for the page or one of its parts starts (started = 1) or
+     * ends (started = 0, with error NULL or the reason it failed). */
+    void (*resource)(void *context, const char *url, int started, const char *error);
 } OBWebViewCallbacks;
 
 /* Mouse buttons and the qualifiers that go with events. */

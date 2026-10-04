@@ -114,6 +114,9 @@ int ob_webcore_init_with_network(const char* cookieDatabase)
 
 void ob_webcore_shutdown(void)
 {
+    // The network thread ends first: the program cannot exit while it runs,
+    // and it uses the sockets and AmiSSL that are closed below.
+    stopAmigaNetwork();
     cookieJar() = nullptr;
     ob_network_close();
 }
