@@ -15,6 +15,7 @@ git apply /path/to/openamigabrowser/webkit/patches/0004-amiga-webcore-network.pa
 git apply /path/to/openamigabrowser/webkit/patches/0005-utf16-big-endian.patch
 git apply /path/to/openamigabrowser/webkit/patches/0006-amiga-disk-webp-quiet.patch
 git apply /path/to/openamigabrowser/webkit/patches/0007-amiga-host-connections-llint-o2.patch
+git apply /path/to/openamigabrowser/webkit/patches/0008-jsc-for-in-big-endian.patch
 ```
 
 The patches, in order:
@@ -45,6 +46,11 @@ The patches, in order:
   instead of one (one left pictures queued long enough to time out), and
   the C-loop interpreter, which runs every line of JavaScript, built with
   `-O2`.
+- `0008-jsc-for-in-big-endian.patch`: `for (k in o)` loops end. The
+  interpreter's pointer comparisons (`op_jeq_ptr`, `op_jneq_ptr`) read
+  half of an 8-byte value on big-endian CPUs with 32-bit pointers, so a
+  for-in loop never saw the value that ends it: it ran forever, and reading
+  `o[k]` inside it crashed the program.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

@@ -14,6 +14,7 @@ for OpenBrowser itself.
 | `test4.html` | `obcore-view test4.html` | JavaScript probes, one console line each | Every line has a value; none says `THREW` |
 | `test5.html` | `obcore-view test5.html` | `insertAdjacentHTML` and `innerHTML` with Latin-1, Arabic and Cyrillic text (UTF-8 on big-endian CPUs) | `OBVIEW_TITLE t5 ascii ps=3; wide ps=5; b=2 i=2` |
 | `input.html` | `obcore-view -input input.html` | A click into a text box, typing an address key by key, then a click on a link | `OBVIEW_ALERT clicked with someone@example.com keys=19 inputs=19` |
+| `forin.html` | `obcore-view forin.html` | `for (k in o)` over a small object, an array and a 1000-key object | `OBVIEW_TITLE forin names=abcd sum=10 array=012 big=1000/499500` (before WebKit patch 0008 the loops never ended, and the program crashed) |
 
 `obcore-view -input` clicks at (30, 35), types `someone@example.com` with
 Intuition raw key codes, as OpenBrowser's window does, then clicks at

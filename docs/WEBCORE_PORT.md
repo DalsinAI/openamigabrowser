@@ -193,4 +193,7 @@ idle at its higher priority leaves the main task its time. example.com, whose
 script adds paragraphs in several languages, loads and draws. Next steps:
 sample the main task's program counter while it is stuck, or load a saved
 copy of the page from disk and remove its inline scripts one at a time.
+A likely cause, not yet re-tested: until WebKit patch 0008 (5 October 2026)
+every `for (k in o)` loop ran forever on the 68k, which would leave the main
+thread inside one script exactly like this.
 
