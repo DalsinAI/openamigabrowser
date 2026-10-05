@@ -33,6 +33,22 @@ set(OB_PROGRAM_SOURCES
     ${OB_THIRD_PARTY}/oam_stack.c
 )
 
+# opentls (DalsinAI/openamigaservice, checked out beside this repository, or
+# OPENSERVICE_DIR): AmiSSL hands TLS key maths to openservice.device's
+# opentls.key/1 when a board or a paired Cradle offers it.
+set(OB_OPENSERVICE_DIR "$ENV{OPENSERVICE_DIR}")
+if (NOT EXISTS "${OB_OPENSERVICE_DIR}/opentls/opentls_provider.c")
+    set(OB_OPENSERVICE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../openamigaservice")
+endif ()
+if (EXISTS "${OB_OPENSERVICE_DIR}/opentls/opentls_provider.c")
+    list(APPEND OB_CORE_SOURCES
+        ${OB_OPENSERVICE_DIR}/opentls/opentls_provider.c
+        ${OB_OPENSERVICE_DIR}/opentls/opentls_amiga.c
+        ${OB_OPENSERVICE_DIR}/host/opentls_key.c
+    )
+    set(OB_OPENTLS 1)
+endif ()
+
 set(OB_FRAMEWORKS
     JavaScriptCore
     PAL
@@ -47,6 +63,10 @@ set(OB_PRIVATE_INCLUDE_DIRECTORIES
     # AmigaNetwork.h: the Amiga network layer's hooks (not a public header)
     ${WEBCORE_DIR}/platform/network/amiga
 )
+if (OB_OPENTLS)
+    list(APPEND OB_PRIVATE_INCLUDE_DIRECTORIES
+        ${OB_OPENSERVICE_DIR}/opentls ${OB_OPENSERVICE_DIR}/host ${OB_OPENSERVICE_DIR}/include)
+endif ()
 set(OB_SYSTEM_INCLUDE_DIRECTORIES
     ${AC_WEBCORE_DEPS}/include
     ${AC_WEBCORE_DEPS}/include/cairo
@@ -89,6 +109,9 @@ set(OBCore_PRIVATE_LIBRARIES WebKit::WebCore WebKit::PAL WebKit::JavaScriptCore 
 set(OBCore_DEPENDENCIES WebCore)
 WEBKIT_LIBRARY_DECLARE(OBCore)
 WEBKIT_LIBRARY(OBCore)
+if (OB_OPENTLS)
+    target_compile_definitions(OBCore PRIVATE OB_OPENTLS=1)
+endif ()
 
 # obcore-dump: load a local HTML file, print its render tree (milestone 2a)
 # and paint it into a PNG (2b).
