@@ -184,6 +184,10 @@ configure_engine() {
         write_launcher
         set -- -DCMAKE_C_COMPILER_LAUNCHER="$BUILD/ob-ccache" -DCMAKE_CXX_COMPILER_LAUNCHER="$BUILD/ob-ccache"
     fi
+    # WebKit uses no C++ modules. With Ninja, CMake 3.28 and later would
+    # otherwise preprocess every C++ file a second time, uncached, to look
+    # for them.
+    set -- "$@" -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
     if [ -f "$BUILD/CMakeCache.txt" ]; then
         # An existing folder keeps its options; only the launcher changes,
         # which the Makefile generator does not treat as a reason to rebuild.
@@ -223,13 +227,13 @@ run_build() {
     before=$(ccache_counts)
     start=$(date +%s)
     status=0
-    if [ "$(generator)" = Ninja ]; then
-        ninja -C "$BUILD" -j "$jobs" "$@" >> "$log" 2>&1 || status=$?
-    else
-        for target in "$@"; do
+    for target in "$@"; do
+        if [ "$(generator)" = Ninja ]; then
+            ninja -C "$BUILD" -j "$jobs" "$target" >> "$log" 2>&1 || { status=$?; break; }
+        else
             "$GMAKE" -C "$BUILD" -j"$jobs" "$target" >> "$log" 2>&1 || { status=$?; break; }
-        done
-    fi
+        fi
+    done
     seconds=$(( $(date +%s) - start ))
     after=$(ccache_counts)
     compiled=$(grep -c 'Building C' "$log" || true)
@@ -249,7 +253,9 @@ build_bindings() {
     [ -f "$BUILD/CMakeCache.txt" ] || configure_engine
     # The Makefile generator can run one custom command for two targets at
     # once, which breaks the generated sources: make those with one job.
-    run_build bindings 1 WebCoreBindings
+    # WebCore's bindings read WTF's preferences file, which CMake does not
+    # list as their input: copy it first.
+    run_build bindings 1 WTF_CopyPreferences WebCoreBindings
 }
 
 build_engine() {
