@@ -11,7 +11,8 @@
 #                ICU, the OpenAmiga libraries and AmiSSL, the build options.
 #   the browser  OpenBrowser's own code (src/webcore): the page layer library
 #                OBCore and the programs
-#                  OpenBrowser   the browser window
+#                  OpenBrowser   the launcher: a title window, then it loads
+#                                and runs OpenBrowser.engine, the browser
 #                  obcore-view   the page layer without a window (tests)
 #                  obcore-dump   a local page's render tree, and a PNG of it
 #                A change here compiles the changed files and relinks; it
@@ -354,8 +355,8 @@ browser_build() {
 }
 
 build_browser() {
-    browser_build browser OBCore OpenBrowser
-    ls -l "$BUILD/bin/OpenBrowser"
+    browser_build browser OBCore OpenBrowser OpenBrowserLauncher
+    ls -l "$BUILD/bin/OpenBrowser" "$BUILD/bin/OpenBrowser.engine"
 }
 
 build_tests() {
@@ -367,7 +368,7 @@ test_browser() {
     : "${OB_TEST_DIR:?set OB_TEST_DIR to the folder to stage the tests in}"
     strip="$GCC16/prefix/bin/m68k-amigaos-strip"
     mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig"
-    for program in OpenBrowser obcore-view obcore-dump; do
+    for program in OpenBrowser OpenBrowser.engine obcore-view obcore-dump; do
         "$strip" -o "$OB_TEST_DIR/$program" "$BUILD/bin/$program"
     done
     cp "$ROOT"/tests/pages/*.html "$OB_TEST_DIR/pages/"
@@ -396,8 +397,10 @@ test_browser() {
 
 clean_browser() {
     rm -rf "$BUILD"/OpenBrowser/CMakeFiles/OBCore.dir "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowser.dir \
+        "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowserLauncher.dir \
         "$BUILD"/OpenBrowser/CMakeFiles/obcore-view.dir "$BUILD"/OpenBrowser/CMakeFiles/obcore-dump.dir
-    rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump
+    rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/OpenBrowser.engine \
+        "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump
     echo "Removed the browser's objects and programs from $BUILD"
 }
 

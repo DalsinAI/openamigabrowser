@@ -222,6 +222,21 @@ found an empty slot and looped: www.bbc.co.uk stopped in
 task's stack (`tests` programs `fpinf` and `fpedge`, in the build tree).
 Real 68881, 68882 and 68040 FPUs were never affected.
 
+**A title window while it starts (5 October 2026).** The browser is about
+100 MB, and loading it from disk took 10 seconds or more with nothing on the
+screen. `OpenBrowser` is now a small launcher (`ob_launcher.c`): it opens a
+title window at once, loads `OpenBrowser.engine` with `InternalLoadSeg()`
+and a progress bar that follows the bytes read, then runs it in its own
+process with `RunCommand()`, so the browser keeps the launcher's icon, tool
+types, Shell arguments and `PROGDIR:`. Started from Workbench, the launcher
+puts a copy of its Workbench message on its own port for the engine's
+start-up code. The engine reports its steps to the title window through the
+public port `OPENBROWSER.SPLASH` (`ob_splash.h`) and closes it when its own
+window is open; started directly, without the launcher, it simply finds no
+port. Once the window is open, the status line names each file being
+fetched, since one can take seconds (a secure connection to a new site,
+about ten).
+
 ## Experiments, 5 October 2026
 
 **Drawing commands instead of pixels.** `obcore-view -dl` paints a page

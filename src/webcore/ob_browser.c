@@ -38,9 +38,10 @@
 
 #include "ob_blit.h"
 #include "ob_webview.h"
+#include "ob_splash.h"
 #include "oam_stack.h"
 
-static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.2 (4.10.2026)";
+static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.3 (5.10.2026)";
 
 #define HOME_PAGE "https://example.com/"
 
@@ -301,17 +302,39 @@ static void onStatus(void *context, const char *text)
     setStatus(latin1);
 }
 
+static int loadPercent;
+
 static void onLoading(void *context, int isLoading, int percent)
 {
     char text[64];
     (void)context;
     loading = isLoading;
+    loadPercent = percent;
     if (isLoading)
         snprintf(text, sizeof text, "Loading... %d%%", percent);
     else
         strcpy(text, "Done.");
     setStatus(text);
     updateButtons();
+}
+
+/* While a page loads, the status line says what is being fetched: on a 68k
+ * one file can take seconds (a secure connection to a new site, about ten). */
+static void onResource(void *context, const char *url, int started, const char *error)
+{
+    char text[sizeof statusText], latin1[sizeof statusText];
+    const char *shown = url;
+    (void)context;
+    (void)error;
+    if (!started || !loading || !url)
+        return;
+    if (!strncmp(shown, "https://", 8))
+        shown += 8;
+    else if (!strncmp(shown, "http://", 7))
+        shown += 7;
+    utf8ToLatin1(shown, latin1, sizeof latin1);
+    snprintf(text, sizeof text, "Loading %d%%: %s", loadPercent, latin1);
+    setStatus(text);
 }
 
 static void onFailed(void *context, const char *url, const char *description)
@@ -663,6 +686,7 @@ static int browserMain(int argc, char **argv)
 
     mainTask = FindTask(NULL);
     readToolTypes(argc, argv);
+    ob_splash("Starting WebKit and the network", 75);
     if (!openLibraries()) {
         printf("OpenBrowser needs AmigaOS 3.1 or newer.\n");
         closeLibraries();
@@ -674,6 +698,7 @@ static int browserMain(int argc, char **argv)
         return 20;
     }
     ob_webcore_set_wakeup(wakeUp, NULL);
+    ob_splash("Opening the window", 90);
 
     screen = LockPubScreen(NULL);
     if (screen && GetBitMapAttr(screen->RastPort.BitMap, BMA_DEPTH) <= 8) {
@@ -722,6 +747,7 @@ static int browserMain(int argc, char **argv)
         printf("OpenBrowser could not open its window.\n");
         quitNow = 1;
     }
+    ob_splash(NULL, OB_SPLASH_CLOSE);
 
     memset(&callbacks, 0, sizeof callbacks);
     callbacks.title = onTitle;
@@ -731,6 +757,7 @@ static int browserMain(int argc, char **argv)
     callbacks.failed = onFailed;
     callbacks.alert = onAlert;
     callbacks.confirm = onConfirm;
+    callbacks.resource = onResource;
     view = ob_webview_create(pageWidth > 0 ? pageWidth : 640, pageHeight > 0 ? pageHeight : 400, &callbacks);
     ob_webview_set_scripts(view, scriptsOn);
     ob_webview_set_pictures(view, picturesOn);
