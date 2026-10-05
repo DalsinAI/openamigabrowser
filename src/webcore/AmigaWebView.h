@@ -55,6 +55,7 @@ public:
     void setLiteMode(bool enabled) { m_liteMode = enabled; }
     bool liteMode() const { return m_liteMode; }
     void paint(unsigned char* argb, int stride, const WebCore::IntRect&);
+    void reportDisplayList(unsigned char* direct, unsigned char* replayed, int stride, const WebCore::IntRect&);
     WebCore::IntRect takeDirtyRect();
 
     // From WebCore's clients.

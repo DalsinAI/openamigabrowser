@@ -6,6 +6,10 @@
  *
  *   obcore-view <file.html> [width height] [page.png]
  *   obcore-view -url <address> [width height] [page.png]
+ *   obcore-view -dl ...   also paint through WebKit's display list (twice:
+ *                         the second time with caches warm), report the
+ *                         commands and timings, and save the replayed
+ *                         picture as page-dl.png beside page.png
  *
  * MIT, Copyright (c) 2026 Dalsin Limited.
  */
@@ -164,11 +168,51 @@ static void typeText(OBWebView *view, const char *text)
     }
 }
 
+/* -dl: paint directly and through the display list, twice, then compare
+ * the two pictures pixel by pixel and save the replayed one. */
+static void reportDisplayList(OBWebView *view, int width, int height, const char *png)
+{
+    size_t size = (size_t)width * height * 4, i, differing = 0;
+    unsigned char *direct = calloc(size, 1), *replayed = calloc(size, 1);
+    int pass;
+    if (!direct || !replayed) {
+        printf("OBVIEW_DL no memory\n");
+        free(direct);
+        free(replayed);
+        return;
+    }
+    for (pass = 1; pass <= 2; pass++) {
+        printf("OBVIEW_DL_PASS %d\n", pass);
+        ob_webview_report_display_list(view, direct, replayed, width * 4, 0, 0, width, height);
+    }
+    for (i = 0; i < size; i += 4) {
+        if (memcmp(direct + i, replayed + i, 4))
+            differing++;
+    }
+    printf("OBVIEW_DL_DIFF %lu of %lu pixels differ\n", (unsigned long)differing, (unsigned long)(size / 4));
+    if (png) {
+        char name[256];
+        const char *dot = strrchr(png, '.');
+        size_t stem = dot ? (size_t)(dot - png) : strlen(png);
+        cairo_surface_t *surface;
+        if (stem > sizeof(name) - 8)
+            stem = sizeof(name) - 8;
+        memcpy(name, png, stem);
+        strcpy(name + stem, "-dl.png");
+        surface = cairo_image_surface_create_for_data(replayed, CAIRO_FORMAT_ARGB32, width, height, width * 4);
+        printf("OBVIEW_DL_PNG %s %s\n", name, cairo_status_to_string(cairo_surface_write_to_png(surface, name)));
+        cairo_surface_destroy(surface);
+    }
+    fflush(stdout);
+    free(direct);
+    free(replayed);
+}
+
 static int viewMain(int argc, char **argv)
 {
     OBWebViewCallbacks callbacks = { 0 };
     OBWebView *view;
-    int width = 800, height = 600, argi = 1, isURL = 0, inputTest = 0;
+    int width = 800, height = 600, argi = 1, isURL = 0, inputTest = 0, displayList = 0;
     double seconds = 120.0;
     const char *source, *png = NULL;
     unsigned char *pixels;
@@ -183,12 +227,16 @@ static int viewMain(int argc, char **argv)
         inputTest = 1;
         argi++;
     }
+    if (argc > argi && !strcmp(argv[argi], "-dl")) {
+        displayList = 1;
+        argi++;
+    }
     if (argc > argi && !strcmp(argv[argi], "-url")) {
         isURL = 1;
         argi++;
     }
     if (argc <= argi) {
-        printf("usage: obcore-view [-wait seconds] [-input] [-url] <file.html|address> [width height] [page.png]\n");
+        printf("usage: obcore-view [-wait seconds] [-input] [-dl] [-url] <file.html|address> [width height] [page.png]\n");
         return 10;
     }
     source = argv[argi++];
@@ -244,6 +292,8 @@ static int viewMain(int argc, char **argv)
         (long)(time(NULL) - startTime));
     fflush(stdout);
 
+    if (displayList)
+        reportDisplayList(view, width, height, png);
     pixels = calloc((size_t)width * height, 4);
     if (pixels) {
         ob_webview_paint(view, pixels, width * 4, 0, 0, width, height);
@@ -259,6 +309,8 @@ static int viewMain(int argc, char **argv)
     ob_webview_destroy(view);
     if (isURL)
         ob_webcore_shutdown();
+    else
+        ob_webcore_stop_threads();
     free(html);
     printf("OBVIEW_DONE\n");
     fflush(stdout);

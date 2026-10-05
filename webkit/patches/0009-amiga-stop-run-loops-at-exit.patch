@@ -1,0 +1,58 @@
+diff --git a/Source/WTF/wtf/generic/RunLoopGeneric.cpp b/Source/WTF/wtf/generic/RunLoopGeneric.cpp
+index 219dd614b8..e0a86f8101 100644
+--- a/Source/WTF/wtf/generic/RunLoopGeneric.cpp
++++ b/Source/WTF/wtf/generic/RunLoopGeneric.cpp
+@@ -28,6 +28,7 @@
+ #include <wtf/RunLoop.h>
+ 
+ #include <wtf/DataLog.h>
++#include <wtf/HashSet.h>
+ #include <wtf/NeverDestroyed.h>
+ #include <wtf/ProcessID.h>
+ #include <wtf/TZoneMallocInlines.h>
+@@ -123,10 +124,45 @@ private:
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(RunLoop::TimerBase::ScheduledTask);
+ 
++#if PLATFORM(AMIGA)
++// AmigaOS: libpthread waits for every thread when a program exits, and a
++// work queue's thread waits for work for ever, so the program asks every
++// run loop to stop first (amigaStopAllRunLoops(), declared where it is
++// called).
++static Lock amigaRunLoopsLock;
++static HashSet<RunLoop*>& amigaRunLoops() WTF_REQUIRES_LOCK(amigaRunLoopsLock)
++{
++    static NeverDestroyed<HashSet<RunLoop*>> runLoops;
++    return runLoops;
++}
++
++WTF_EXPORT_PRIVATE void amigaStopAllRunLoops();
++void amigaStopAllRunLoops()
++{
++    Locker locker { amigaRunLoopsLock };
++    for (auto* runLoop : amigaRunLoops()) {
++        if (runLoop != &RunLoop::mainSingleton())
++            runLoop->stop();
++    }
++}
++
++RunLoop::RunLoop()
++{
++    Locker locker { amigaRunLoopsLock };
++    amigaRunLoops().add(this);
++}
++#else
+ RunLoop::RunLoop() = default;
++#endif
+ 
+ RunLoop::~RunLoop()
+ {
++#if PLATFORM(AMIGA)
++    {
++        Locker locker { amigaRunLoopsLock };
++        amigaRunLoops().remove(this);
++    }
++#endif
+     Locker locker { m_loopLock };
+     m_shutdown = true;
+     m_readyToRun.notifyOne();

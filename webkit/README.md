@@ -16,6 +16,8 @@ git apply /path/to/openamigabrowser/webkit/patches/0005-utf16-big-endian.patch
 git apply /path/to/openamigabrowser/webkit/patches/0006-amiga-disk-webp-quiet.patch
 git apply /path/to/openamigabrowser/webkit/patches/0007-amiga-host-connections-llint-o2.patch
 git apply /path/to/openamigabrowser/webkit/patches/0008-jsc-for-in-big-endian.patch
+git apply /path/to/openamigabrowser/webkit/patches/0009-amiga-stop-run-loops-at-exit.patch
+git apply /path/to/openamigabrowser/webkit/patches/0010-amiga-fetch-proxy-experiment.patch
 ```
 
 The patches, in order:
@@ -51,6 +53,14 @@ The patches, in order:
   half of an 8-byte value on big-endian CPUs with 32-bit pointers, so a
   for-in loop never saw the value that ends it: it ran forever, and reading
   `o[k]` inside it crashed the program.
+- `0009-amiga-stop-run-loops-at-exit.patch`: libpthread waits for every
+  thread when a program exits, and a work queue's thread waits for work for
+  ever, so a program that had made one never exited. The generic run loop
+  keeps a list on AmigaOS, and `amigaStopAllRunLoops()` stops them all.
+- `0010-amiga-fetch-proxy-experiment.patch`: the host-fetch experiment.
+  With the Shell variable `OB_FETCH_PROXY` set (see
+  `scripts/ob-fetch-proxy.py`), requests go to a proxy on another PC, which
+  makes the TLS connections. Off unless the variable is set.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

@@ -792,6 +792,8 @@ static int browserMain(int argc, char **argv)
         FreeVec(pageBuffer);
     if (network)
         ob_webcore_shutdown();
+    else
+        ob_webcore_stop_threads();
     closeLibraries();
     return 0;
 }

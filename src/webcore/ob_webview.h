@@ -51,6 +51,9 @@ enum { OB_MOUSE_MOVE, OB_MOUSE_DOWN, OB_MOUSE_UP };
 int ob_webcore_init(void);
 int ob_webcore_init_with_network(const char *cookieDatabase);
 void ob_webcore_shutdown(void);
+/* Ends WebKit's helper threads, so the program can exit (libpthread waits
+ * for every thread). ob_webcore_shutdown() does this too. */
+void ob_webcore_stop_threads(void);
 
 /* The run loop: do what is due, then ask when the next timer is (seconds
  * from now; 0 means at once, a negative number means no timer). */
@@ -75,6 +78,13 @@ void ob_webview_resize(OBWebView *view, int width, int height);
 /* Paints a part of the view into a 32-bit buffer of the whole view's size:
  * bytes A, R, G, B (cybergraphics' RECTFMT_ARGB), stride bytes per row. */
 void ob_webview_paint(OBWebView *view, unsigned char *argb, int stride, int x, int y, int width, int height);
+/* The display-list experiment: paints the area directly into `direct` and,
+ * through WebKit's display list (recorded, then replayed with cairo), into
+ * `replayed`, and prints OBVIEW_DL lines: what the commands are, roughly
+ * how many bytes they take, and how long painting, recording and replaying
+ * took. */
+void ob_webview_report_display_list(OBWebView *view, unsigned char *direct, unsigned char *replayed, int stride,
+    int x, int y, int width, int height);
 /* The area changed since the last call (width 0 when none). */
 void ob_webview_dirty(OBWebView *view, int *x, int *y, int *width, int *height);
 

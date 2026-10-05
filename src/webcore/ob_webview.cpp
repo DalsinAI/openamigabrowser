@@ -120,11 +120,23 @@ int ob_webcore_init_with_network(const char* cookieDatabase)
     return 1;
 }
 
+namespace WTF {
+void amigaStopAllRunLoops();
+}
+
+void ob_webcore_stop_threads(void)
+{
+    // libpthread waits for every thread when the program exits, and WebKit's
+    // work-queue threads wait for work for ever: stop their run loops.
+    WTF::amigaStopAllRunLoops();
+}
+
 void ob_webcore_shutdown(void)
 {
     // The network thread ends first: the program cannot exit while it runs,
     // and it uses the sockets and AmiSSL that are closed below.
     stopAmigaNetwork();
+    ob_webcore_stop_threads();
     cookieJar() = nullptr;
     ob_network_close();
 }
@@ -190,6 +202,12 @@ void ob_webview_resize(OBWebView* handle, int width, int height)
 void ob_webview_paint(OBWebView* handle, unsigned char* argb, int stride, int x, int y, int width, int height)
 {
     handle->view->paint(argb, stride, IntRect(x, y, width, height));
+}
+
+void ob_webview_report_display_list(OBWebView* handle, unsigned char* direct, unsigned char* replayed, int stride,
+    int x, int y, int width, int height)
+{
+    handle->view->reportDisplayList(direct, replayed, stride, IntRect(x, y, width, height));
 }
 
 void ob_webview_dirty(OBWebView* handle, int* x, int* y, int* width, int* height)

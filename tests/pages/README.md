@@ -20,5 +20,8 @@ for OpenBrowser itself.
 Intuition raw key codes, as OpenBrowser's window does, then clicks at
 (30, 110). `-wait seconds` changes how long it lets a page load (120 by
 default), and `-url` loads an address from the network instead of a file.
+`-dl` also paints through WebKit's display list and prints `OBVIEW_DL`
+lines: the drawing commands, their size and how long painting, recording and
+replaying took (see docs/WEBCORE_PORT.md).
 
 MIT, Copyright (c) 2026 Dalsin Limited.

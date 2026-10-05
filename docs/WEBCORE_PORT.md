@@ -222,6 +222,39 @@ found an empty slot and looped: www.bbc.co.uk stopped in
 task's stack (`tests` programs `fpinf` and `fpedge`, in the build tree).
 Real 68881, 68882 and 68040 FPUs were never affected.
 
+## Experiments, 5 October 2026
+
+**Drawing commands instead of pixels.** `obcore-view -dl` paints a page
+twice: directly with cairo, and through WebKit's display-list recorder
+(which keeps the drawing commands), replaying the list with cairo. On the
+test instance, 800x600, caches warm:
+
+| Page | Commands | Glyphs | Bytes of commands | Paint (cairo) | Recording | Replay |
+| --- | --- | --- | --- | --- | --- | --- |
+| `test1.html` | 148 | 334 | 4.4 KB | 440 ms | 80 ms | 360 ms |
+| example.com | 215 | 714 | 7.7 KB | 1,660 ms | 60 ms | 1,780 ms |
+| 300 paragraphs and a list | 316 | 221 | 6.4 KB | 760 ms | 180 ms | 520 ms |
+
+The replayed pictures match the direct ones pixel for pixel. 75 to 96% of
+painting is cairo and pixman turning commands into pixels; WebCore deciding
+what to draw is the rest. A screen's commands are a few kilobytes against
+1.9 MB of pixels, so handing them to something faster to draw (a GPU, the
+host) would cut painting by 4 to 25 times.
+
+**Fetching through the PC.** With `OB_FETCH_PROXY` set (patch 0010,
+`scripts/ob-fetch-proxy.py`), another PC makes the connections and the TLS
+handshakes. AmigaChrome does not let an instance reach the PC it runs on, so
+the proxy ran on a second PC on the LAN. example.com took 38 s from the
+Shell command with TLS on the 68k and 27 s through the proxy: each new https
+site costs the 68k about 10 seconds of TLS. Wikipedia's Amiga article
+fetched all its files quickly either way and was still loading after 7
+minutes: on heavy pages the 68k's own work on the page (style, layout,
+scripts) is the bottleneck, not the network.
+
+**Pictures decode on the main task.** WebKit decoded big and animated
+pictures on work-queue threads: each a 2 MB stack, no gain on one CPU, and
+threads that kept the program from exiting. Both settings are off.
+
 ## Open problems
 
 **login.live.com stalls after its page arrives (4 October 2026).** The page
