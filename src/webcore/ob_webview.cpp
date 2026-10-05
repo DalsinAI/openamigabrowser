@@ -14,6 +14,7 @@
 #include "ob_network.h"
 
 #include <JavaScriptCore/InitializeThreading.h>
+#include <JavaScriptCore/Options.h>
 #include <WebCore/DocumentPage.h>
 #include <WebCore/DocumentView.h>
 #include <WebCore/FrameDestructionObserverInlines.h>
@@ -24,6 +25,7 @@
 #include <WebCore/HandleUserInputEventResult.h>
 #include <WebCore/LocalFrame.h>
 #include <WebCore/LocalFrameInlines.h>
+#include <WebCore/MemoryCache.h>
 #include <WebCore/Page.h>
 #include <WebCore/PlatformKeyboardEvent.h>
 #include <WebCore/PlatformMouseEvent.h>
@@ -63,11 +65,17 @@ extern "C" void ob_quiet_requesters(void);
 
 static void initializeEngine(WebCore::LoaderStrategy* loader)
 {
-    JSC::initialize();
+    // One CPU: no garbage collection helper threads, which on a 68k only add
+    // task switches.
+    JSC::initialize([] {
+        JSC::Options::setOptions("numberOfGCMarkers=1 useConcurrentGC=false useParallelMarkingConstraintSolver=false");
+    });
     WTF::initializeMainThread();
     initializeCommonAtomStrings();
     populateJITOperations();
     OpenBrowser::initializePlatformStrategies(loader);
+    // Decoded pictures, style sheets and scripts kept for reuse: 16 MB.
+    MemoryCache::singleton().setCapacities(1024 * 1024, 8 * 1024 * 1024, 16 * 1024 * 1024);
     resetFPCR();
 }
 
@@ -344,6 +352,26 @@ void ob_webview_key(OBWebView* handle, int down, int rawKey, const char* text, i
     PlatformKeyboardEvent event(down ? PlatformEvent::Type::KeyDown : PlatformEvent::Type::KeyUp, characters, characters,
         key, code, keyIdentifier, virtualKey, false, isKeypad, false, modifiers, MonotonicTime::now());
     frame->eventHandler().keyEvent(event);
+}
+
+void ob_webview_set_scripts(OBWebView* handle, int enabled)
+{
+    handle->view->setScriptsEnabled(enabled);
+}
+
+void ob_webview_set_pictures(OBWebView* handle, int enabled)
+{
+    handle->view->setPicturesEnabled(enabled);
+}
+
+void ob_webview_set_web_fonts(OBWebView* handle, int enabled)
+{
+    handle->view->setWebFontsEnabled(enabled);
+}
+
+void ob_webview_set_lite(OBWebView* handle, int enabled)
+{
+    handle->view->setLiteMode(enabled);
 }
 
 void ob_webview_focus(OBWebView* handle, int focused)

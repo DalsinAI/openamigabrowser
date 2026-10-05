@@ -85,6 +85,15 @@ void ob_webview_wheel(OBWebView *view, int x, int y, int deltaX, int deltaY, int
 void ob_webview_key(OBWebView *view, int down, int rawKey, const char *text, int qualifiers);
 void ob_webview_focus(OBWebView *view, int focused);
 
+/* Page options, both on at first: scripts (JavaScript) and pictures. Off,
+ * pages load much faster on a 68k. They apply from the next page loaded. */
+void ob_webview_set_scripts(OBWebView *view, int enabled);
+void ob_webview_set_pictures(OBWebView *view, int enabled);
+/* Off at first: web fonts (pages use the Liberation and DejaVu fonts), and
+ * Lite, which asks sites for their mobile pages. */
+void ob_webview_set_web_fonts(OBWebView *view, int enabled);
+void ob_webview_set_lite(OBWebView *view, int enabled);
+
 #ifdef __cplusplus
 }
 #endif

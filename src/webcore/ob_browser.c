@@ -25,11 +25,14 @@
 #include <intuition/intuition.h>
 #include <intuition/gadgetclass.h>
 #include <libraries/gadtools.h>
+#include <workbench/startup.h>
+#include <workbench/workbench.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/graphics.h>
 #include <proto/intuition.h>
 #include <proto/gadtools.h>
+#include <proto/icon.h>
 #include <proto/keymap.h>
 #include <proto/timer.h>
 
@@ -45,7 +48,7 @@ enum { GID_BACK = 1, GID_FORWARD, GID_RELOAD, GID_STOP, GID_URL, GID_STATUS, GID
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
-struct Library *GadToolsBase, *KeymapBase;
+struct Library *GadToolsBase, *KeymapBase, *IconBase;
 struct Device *TimerBase;
 
 static struct Screen *screen;
@@ -72,6 +75,12 @@ static char statusText[256] = "";
 static char titleText[256] = "OpenBrowser";
 static int quitNow;
 static int loading;
+
+/* Page options (Settings menu; tool types JAVASCRIPT=NO, PICTURES=NO,
+ * WEBFONTS=YES and LITE=YES). */
+static int scriptsOn = 1, picturesOn = 1, webFontsOn = 0, liteOn = 0;
+static struct Menu *menuStrip;
+enum { MENU_RELOAD = 1, MENU_QUIT, MENU_SCRIPTS, MENU_PICTURES, MENU_WEBFONTS, MENU_LITE };
 
 /* --- text: WebCore speaks UTF-8, Amiga gadgets Latin-1 ----------------------- */
 
@@ -420,8 +429,10 @@ static void handleMouse(struct IntuiMessage *msg)
     }
 }
 
+#ifndef RAWKEY_WHEEL_UP
 #define RAWKEY_WHEEL_UP 0x7a
 #define RAWKEY_WHEEL_DOWN 0x7b
+#endif
 
 /* The message is still unreplied: MapRawKey() reads the dead-key state
  * that IAddress points to. */
@@ -479,6 +490,94 @@ static void handleGadget(struct Gadget *gadget)
     }
 }
 
+static void makeMenus(void)
+{
+    struct NewMenu menus[] = {
+        { NM_TITLE, (STRPTR)"Project", NULL, 0, 0, NULL },
+        { NM_ITEM, (STRPTR)"Reload", (STRPTR)"R", 0, 0, (APTR)MENU_RELOAD },
+        { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
+        { NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)MENU_QUIT },
+        { NM_TITLE, (STRPTR)"Settings", NULL, 0, 0, NULL },
+        { NM_ITEM, (STRPTR)"JavaScript", (STRPTR)"J", CHECKIT | MENUTOGGLE | (scriptsOn ? CHECKED : 0), 0, (APTR)MENU_SCRIPTS },
+        { NM_ITEM, (STRPTR)"Pictures", (STRPTR)"P", CHECKIT | MENUTOGGLE | (picturesOn ? CHECKED : 0), 0, (APTR)MENU_PICTURES },
+        { NM_ITEM, (STRPTR)"Web fonts", (STRPTR)"F", CHECKIT | MENUTOGGLE | (webFontsOn ? CHECKED : 0), 0, (APTR)MENU_WEBFONTS },
+        { NM_ITEM, (STRPTR)"Lite (mobile pages)", (STRPTR)"L", CHECKIT | MENUTOGGLE | (liteOn ? CHECKED : 0), 0, (APTR)MENU_LITE },
+        { NM_END, NULL, NULL, 0, 0, NULL }
+    };
+    menuStrip = CreateMenus(menus, TAG_DONE);
+    if (menuStrip && LayoutMenus(menuStrip, visualInfo, GTMN_NewLookMenus, TRUE, TAG_DONE))
+        SetMenuStrip(window, menuStrip);
+}
+
+static void handleMenu(UWORD code)
+{
+    while (code != MENUNULL) {
+        struct MenuItem *item = ItemAddress(menuStrip, code);
+        if (!item)
+            break;
+        switch ((ULONG)GTMENUITEM_USERDATA(item)) {
+        case MENU_RELOAD:
+            ob_webview_reload(view);
+            break;
+        case MENU_QUIT:
+            quitNow = 1;
+            break;
+        case MENU_SCRIPTS:
+            scriptsOn = (item->Flags & CHECKED) != 0;
+            ob_webview_set_scripts(view, scriptsOn);
+            setStatus(scriptsOn ? "JavaScript on, from the next page (Reload to apply)." : "JavaScript off, from the next page (Reload to apply).");
+            break;
+        case MENU_PICTURES:
+            picturesOn = (item->Flags & CHECKED) != 0;
+            ob_webview_set_pictures(view, picturesOn);
+            setStatus(picturesOn ? "Pictures on, from the next page (Reload to apply)." : "Pictures off, from the next page (Reload to apply).");
+            break;
+        case MENU_WEBFONTS:
+            webFontsOn = (item->Flags & CHECKED) != 0;
+            ob_webview_set_web_fonts(view, webFontsOn);
+            setStatus(webFontsOn ? "Web fonts on, from the next page (Reload to apply)." : "Web fonts off, from the next page (Reload to apply).");
+            break;
+        case MENU_LITE:
+            liteOn = (item->Flags & CHECKED) != 0;
+            ob_webview_set_lite(view, liteOn);
+            setStatus(liteOn ? "Lite: sites send their mobile pages (Reload to apply)." : "Lite off (Reload to apply).");
+            break;
+        }
+        code = item->NextSelect;
+    }
+}
+
+/* Started from Workbench: the icon's tool types set the page options from
+ * the start (JAVASCRIPT=NO, PICTURES=NO, WEBFONTS=YES, LITE=YES). */
+static void readToolTypes(int argc, char **argv)
+{
+    struct WBStartup *startup = (struct WBStartup *)argv;
+    struct DiskObject *icon;
+    BPTR oldDir;
+    STRPTR value;
+    if (argc != 0 || !startup || !startup->sm_NumArgs)
+        return;
+    IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 37);
+    if (!IconBase)
+        return;
+    oldDir = CurrentDir(startup->sm_ArgList[0].wa_Lock);
+    icon = GetDiskObject(startup->sm_ArgList[0].wa_Name);
+    CurrentDir(oldDir);
+    if (icon) {
+        if ((value = FindToolType((CONST_STRPTR *)icon->do_ToolTypes, (CONST_STRPTR)"JAVASCRIPT")) && MatchToolValue(value, (CONST_STRPTR)"NO"))
+            scriptsOn = 0;
+        if ((value = FindToolType((CONST_STRPTR *)icon->do_ToolTypes, (CONST_STRPTR)"PICTURES")) && MatchToolValue(value, (CONST_STRPTR)"NO"))
+            picturesOn = 0;
+        if ((value = FindToolType((CONST_STRPTR *)icon->do_ToolTypes, (CONST_STRPTR)"WEBFONTS")) && MatchToolValue(value, (CONST_STRPTR)"YES"))
+            webFontsOn = 1;
+        if ((value = FindToolType((CONST_STRPTR *)icon->do_ToolTypes, (CONST_STRPTR)"LITE")) && MatchToolValue(value, (CONST_STRPTR)"YES"))
+            liteOn = 1;
+        FreeDiskObject(icon);
+    }
+    CloseLibrary(IconBase);
+    IconBase = NULL;
+}
+
 static void handleWindow(void)
 {
     struct IntuiMessage *msg;
@@ -494,6 +593,9 @@ static void handleWindow(void)
             break;
         case IDCMP_GADGETUP:
             handleGadget((struct Gadget *)copy.IAddress);
+            break;
+        case IDCMP_MENUPICK:
+            handleMenu(copy.Code);
             break;
         case IDCMP_MOUSEMOVE:
         case IDCMP_MOUSEBUTTONS:
@@ -560,6 +662,7 @@ static int browserMain(int argc, char **argv)
     int network, width, height;
 
     mainTask = FindTask(NULL);
+    readToolTypes(argc, argv);
     if (!openLibraries()) {
         printf("OpenBrowser needs AmigaOS 3.1 or newer.\n");
         closeLibraries();
@@ -609,7 +712,9 @@ static int browserMain(int argc, char **argv)
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_SIZEGADGET | WFLG_SIZEBBOTTOM
             | WFLG_ACTIVATE | WFLG_REPORTMOUSE | WFLG_SMART_REFRESH,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_MOUSEMOVE | IDCMP_MOUSEBUTTONS | IDCMP_RAWKEY
-            | IDCMP_NEWSIZE | IDCMP_REFRESHWINDOW | IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW | BUTTONIDCMP | STRINGIDCMP,
+            | IDCMP_NEWSIZE | IDCMP_REFRESHWINDOW | IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW | IDCMP_MENUPICK
+            | BUTTONIDCMP | STRINGIDCMP,
+        WA_NewLookMenus, TRUE,
         TAG_DONE);
     ob_blit_open(screen);
     UnlockPubScreen(NULL, screen);
@@ -627,7 +732,12 @@ static int browserMain(int argc, char **argv)
     callbacks.alert = onAlert;
     callbacks.confirm = onConfirm;
     view = ob_webview_create(pageWidth > 0 ? pageWidth : 640, pageHeight > 0 ? pageHeight : 400, &callbacks);
+    ob_webview_set_scripts(view, scriptsOn);
+    ob_webview_set_pictures(view, picturesOn);
+    ob_webview_set_web_fonts(view, webFontsOn);
+    ob_webview_set_lite(view, liteOn);
     if (!quitNow) {
+        makeMenus();
         updateButtons();
         setStatus(network ? "Ready." : "No network: bsdsocket.library or AmiSSL is missing.");
         ob_webview_load(view, argc > 1 ? argv[1] : HOME_PAGE);
@@ -664,6 +774,8 @@ static int browserMain(int argc, char **argv)
 
     ob_webview_destroy(view);
     if (window) {
+        if (menuStrip)
+            ClearMenuStrip(window);
         removeGadgets();
         CloseWindow(window);
     }
@@ -674,6 +786,8 @@ static int browserMain(int argc, char **argv)
         while (!CloseScreen(ownScreen))
             Delay(50); /* a visitor window is still open on it */
     }
+    if (menuStrip)
+        FreeMenus(menuStrip);
     if (pageBuffer)
         FreeVec(pageBuffer);
     if (network)
@@ -684,6 +798,10 @@ static int browserMain(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    /* Started from Workbench (no arguments at all): WebKit's own messages
+     * go to a log in T:, not to a console window over the page. */
+    if (argc == 0)
+        freopen("T:OpenBrowser.log", "w", stderr);
     /* WebCore and JavaScriptCore recurse deeply; give them 2 MB of stack. */
     return oam_run_with_stack(2 * 1024 * 1024, browserMain, argc, argv);
 }

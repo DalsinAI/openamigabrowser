@@ -21,6 +21,7 @@
 #include <WebCore/EditorClient.h>
 #include <WebCore/EmptyClients.h>
 #include <WebCore/FocusController.h>
+#include <WebCore/ForcedAccessibilityValue.h>
 #include <WebCore/FrameLoadRequest.h>
 #include <WebCore/FrameLoader.h>
 #include <WebCore/GraphicsContextCairo.h>
@@ -38,6 +39,7 @@
 #include <WebCore/Settings.h>
 #include <WebCore/SharedBuffer.h>
 #include <WebCore/SubstituteData.h>
+#include <WebCore/TrustedFonts.h>
 #include <cairo.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/text/CString.h>
@@ -116,6 +118,17 @@ WebView::WebView(const OBWebViewCallbacks& callbacks, const IntSize& size)
     settings.setDefaultFontSize(16);
     settings.setDefaultFixedFontSize(13);
     settings.setMinimumLogicalFontSize(9);
+    // Less work for a 68k, nothing a page needs: no connections opened in
+    // advance (each TLS handshake takes seconds), no back/forward cache, no
+    // animation where a page offers to do without, pictures marked
+    // loading="lazy" loaded when they come into view, and the fonts on the
+    // disk rather than downloaded ones (setWebFontsEnabled()). Pictures come
+    // from datatypes, which give an animation's first frame only.
+    settings.setLinkPreconnectEnabled(false);
+    settings.setUsesBackForwardCache(false);
+    settings.setForcedPrefersReducedMotionAccessibilityValue(ForcedAccessibilityValue::On);
+    settings.setLazyImageLoadingEnabled(true);
+    settings.setDownloadableBinaryFontTrustedTypes(DownloadableBinaryFontTrustedTypes::None);
 
     RefPtr frame = m_page->localMainFrame();
     frame->init();
@@ -220,6 +233,8 @@ void WebView::paint(unsigned char* argb, int stride, const IntRect& rect)
         CAIRO_FORMAT_ARGB32, area.width(), area.height(), stride);
     {
         GraphicsContextCairo context(surface);
+        // Scaled pictures with the cheapest filter: a 68k has no time for more.
+        context.setImageInterpolationQuality(InterpolationQuality::Low);
         context.translate(-area.x(), -area.y());
         context.fillRect(area, Color::white);
         if (view) {
@@ -247,8 +262,16 @@ void WebView::invalidate(const IntRect& rect)
 
 void WebView::scheduleRenderingUpdate()
 {
-    if (!m_renderingUpdateTimer.isActive())
-        m_renderingUpdateTimer.startOneShot(0_s);
+    if (m_renderingUpdateTimer.isActive())
+        return;
+    // While a page loads, WebCore asks for a rendering update (style and
+    // layout of the whole page) after each piece of it arrives. On a 68k that
+    // is most of the work, so until the page has loaded the updates are
+    // spaced out: see renderingUpdateTimerFired().
+    Seconds delay = 0_s;
+    if (m_loading)
+        delay = std::max(0_s, m_nextRenderingUpdate - MonotonicTime::now());
+    m_renderingUpdateTimer.startOneShot(delay);
 }
 
 void WebView::renderingUpdateTimerFired()
@@ -256,8 +279,33 @@ void WebView::renderingUpdateTimerFired()
     if (!m_page)
         return;
     resetFPCR();
+    auto start = MonotonicTime::now();
     m_page->updateRendering();
     m_page->finalizeRenderingUpdate({ });
+    // The next one while loading: a second from now, or twice as long as
+    // this one took, so loading keeps at least two thirds of the time.
+    auto end = MonotonicTime::now();
+    m_nextRenderingUpdate = end + std::max(1_s, (end - start) * 2);
+}
+
+void WebView::setScriptsEnabled(bool enabled)
+{
+    if (m_page)
+        m_page->settings().setScriptEnabled(enabled);
+}
+
+void WebView::setWebFontsEnabled(bool enabled)
+{
+    if (m_page)
+        m_page->settings().setDownloadableBinaryFontTrustedTypes(enabled ? DownloadableBinaryFontTrustedTypes::Any : DownloadableBinaryFontTrustedTypes::None);
+}
+
+void WebView::setPicturesEnabled(bool enabled)
+{
+    if (!m_page)
+        return;
+    m_page->settings().setLoadsImagesAutomatically(enabled);
+    m_page->settings().setImagesEnabled(enabled);
 }
 
 void WebView::callString(void (*callback)(void*, const char*), const String& text)
@@ -293,6 +341,9 @@ void WebView::didStartLoad()
 void WebView::didFinishLoad()
 {
     m_loading = false;
+    // A rendering update held back while loading is due now.
+    if (m_renderingUpdateTimer.isActive())
+        m_renderingUpdateTimer.startOneShot(0_s);
     if (m_callbacks.loading)
         m_callbacks.loading(m_callbacks.context, 0, 100);
 }
@@ -300,6 +351,8 @@ void WebView::didFinishLoad()
 void WebView::didFailLoad(const ResourceError& error)
 {
     m_loading = false;
+    if (m_renderingUpdateTimer.isActive())
+        m_renderingUpdateTimer.startOneShot(0_s);
     if (m_callbacks.loading)
         m_callbacks.loading(m_callbacks.context, 0, 100);
     if (error.isCancellation() || !m_callbacks.failed)

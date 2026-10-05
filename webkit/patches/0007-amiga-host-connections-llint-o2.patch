@@ -1,0 +1,30 @@
+diff --git a/Source/JavaScriptCore/PlatformAmiga.cmake b/Source/JavaScriptCore/PlatformAmiga.cmake
+index 841559f29b..a9992017ac 100644
+--- a/Source/JavaScriptCore/PlatformAmiga.cmake
++++ b/Source/JavaScriptCore/PlatformAmiga.cmake
+@@ -1,2 +1,6 @@
+ # The Amiga port shares the JSCOnly platform files.
+ include(${CMAKE_CURRENT_LIST_DIR}/PlatformJSCOnly.cmake)
++
++# The C-loop interpreter runs every line of JavaScript: build it for speed
++# (-O2) even when the rest is built for size.
++target_compile_options(LowLevelInterpreterLib PRIVATE -O2)
+diff --git a/Source/WebCore/platform/network/curl/CurlContext.h b/Source/WebCore/platform/network/curl/CurlContext.h
+index b511488622..fb18b7132c 100644
+--- a/Source/WebCore/platform/network/curl/CurlContext.h
++++ b/Source/WebCore/platform/network/curl/CurlContext.h
+@@ -53,10 +53,11 @@ namespace WebCore {
+ const long CurlDefaultMaxConnects { -1 }; // -1 : Does not set CURLMOPT_MAXCONNECTS
+ #if PLATFORM(AMIGA)
+ // A TLS handshake is seconds of work for a 68k, and handshakes made side by
+-// side slow each other down past what servers wait for: one connection per
+-// host, reused for the next request, and few at once.
++// side slow each other down past what servers wait for: two connections per
++// host, reused for the next requests, and few at once. (One per host left
++// pictures queued long enough to time out.)
+ const long CurlDefaultMaxTotalConnections { 4 };
+-const long CurlDefaultMaxHostConnections { 1 };
++const long CurlDefaultMaxHostConnections { 2 };
+ #else
+ const long CurlDefaultMaxTotalConnections { 17 };
+ const long CurlDefaultMaxHostConnections { 6 };

@@ -132,6 +132,55 @@ threads runs, so the browser stops it (`stopAmigaNetwork()`) before it exits.
 variables of the Shell that started the program (`Set`), not global ones
 (`SetEnv`). WebKit's `WEBKIT_CURL_*` settings are given with `Set`.
 
+## Speed on a 68k
+
+Measured on the test instance (AmigaChrome's AC090, a 68040 with FPU, 256 MB),
+4 October 2026:
+
+| Step | Time | What it is |
+| --- | --- | --- |
+| Loading the program | about 40 s | 122 MB: 82 MB of code, 33 MB of ICU data, 1.6 million relocations, read through the emulated disk |
+| WebCore starting | 2 to 3 s | after `main()` |
+| The first text on a page | about 25 s | fontconfig scanning every font again, as its cache was never saved |
+| A page with a script and no text | 4 to 9 s | local file |
+| Each new https site | 4 to 10 s | the TLS handshake (see above) |
+
+What is done about it:
+
+- **The font cache works.** fontconfig's cache was never written under
+  libnix (openamigafontconfig's cache patch), so every start scanned all the
+  fonts. It now lives in `PROGDIR:fontconfig/cache`, which lasts across
+  reboots, with `T:fontconfig` when the program's drawer cannot be written.
+- **Less ICU data.** `scripts/build-icu.sh` keeps the items listed in
+  `icu/data-keep.lst`: the root and English locales, every break rule and
+  dictionary, normalisation, properties and converters. The data goes from
+  33 MB to under 13 MB, and the program from 122 MB to 101 MB.
+- **Fewer rendering updates while a page loads.** WebCore asks for a
+  rendering update (style and layout of the whole page) after each piece of a
+  page arrives. Until the page has loaded, OpenBrowser lets one through at
+  most every second, or every twice as long as the last one took.
+- **Cookies stay off the disk until needed.** The cookie database keeps its
+  journal in memory and does not sync, instead of writing, syncing and
+  deleting a journal file for every cookie.
+- **Scripts and pictures can be switched off** (Settings menu, or the tool
+  types `JAVASCRIPT=NO` and `PICTURES=NO`), the quickest way through a heavy
+  page.
+- **Fonts come from memory, unhinted.** FreeType read each glyph from the
+  disk through stdio and hinted every glyph as it was drawn; a window sat at
+  31% while its first text was laid out. On AmigaOS FreeType now reads a font
+  file into memory once (openamigafreetype), and `fonts.conf` turns hinting
+  off.
+- **Two connections per host** (`0007` in `webkit/`), and the C-loop
+  interpreter built with `-O2` while the rest is built for size.
+
+**Infinity on AmigaChrome's AC090 FPU (fixed in AmigaChrome 0.30.0).** On
+older AC090 builds an infinity compared unequal to itself. WTF's hash tables
+mark empty double keys with +infinity, so a table keyed by a double never
+found an empty slot and looped: www.bbc.co.uk stopped in
+`Style::Resolver::keyframeRulesForName()`, found by sampling the stuck
+task's stack (`tests` programs `fpinf` and `fpedge`, in the build tree).
+Real 68881, 68882 and 68040 FPUs were never affected.
+
 ## Open problems
 
 **login.live.com stalls after its page arrives (4 October 2026).** The page

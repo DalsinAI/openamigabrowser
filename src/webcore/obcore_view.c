@@ -24,6 +24,7 @@ static const char version[] __attribute__((used)) = "$VER: obcore-view 0.1 (4.10
 static int loading = -1;   /* -1 not started yet, 1 loading, 0 done */
 static int invalidations;
 static long busyCycles, waits;  /* run loop turns with work waiting, and waits */
+static time_t startTime;        /* for the seconds in OBVIEW_CREATED and OBVIEW_RAN */
 
 static void onInvalidate(void *context, int x, int y, int w, int h)
 {
@@ -220,7 +221,7 @@ static int viewMain(int argc, char **argv)
     callbacks.console = onConsole;
     callbacks.resource = onResource;
     view = ob_webview_create(width, height, &callbacks);
-    printf("OBVIEW_CREATED %dx%d\n", width, height);
+    printf("OBVIEW_CREATED %dx%d after %lds\n", width, height, (long)(time(NULL) - startTime));
     fflush(stdout);
 
     if (isURL)
@@ -239,7 +240,8 @@ static int viewMain(int argc, char **argv)
         click(view, 30, 110);
         run(3.0);
     }
-    printf("OBVIEW_RAN loading=%d invalidations=%d cycles=%ld waits=%ld\n", loading, invalidations, busyCycles, waits);
+    printf("OBVIEW_RAN loading=%d invalidations=%d cycles=%ld waits=%ld at %lds\n", loading, invalidations, busyCycles, waits,
+        (long)(time(NULL) - startTime));
     fflush(stdout);
 
     pixels = calloc((size_t)width * height, 4);
@@ -265,5 +267,6 @@ static int viewMain(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    startTime = time(NULL);
     return oam_run_with_stack(2 * 1024 * 1024, viewMain, argc, argv);
 }

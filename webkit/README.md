@@ -13,6 +13,8 @@ git apply /path/to/openamigabrowser/webkit/patches/0002-amiga-webcore.patch
 git apply /path/to/openamigabrowser/webkit/patches/0003-jsc-llint-prototype-cache-big-endian.patch
 git apply /path/to/openamigabrowser/webkit/patches/0004-amiga-webcore-network.patch
 git apply /path/to/openamigabrowser/webkit/patches/0005-utf16-big-endian.patch
+git apply /path/to/openamigabrowser/webkit/patches/0006-amiga-disk-webp-quiet.patch
+git apply /path/to/openamigabrowser/webkit/patches/0007-amiga-host-connections-llint-o2.patch
 ```
 
 The patches, in order:
@@ -35,6 +37,14 @@ The patches, in order:
   strings were converted to UTF-8 as if little-endian (garbling any text
   beyond Latin-1) and the HTML fast-path parser could not find tags in
   16-bit text.
+- `0006-amiga-disk-webp-quiet.patch`: the cookie database keeps its journal
+  in memory instead of on the disk, WebP sizes come from the file's header
+  so a picture is decoded only when drawn, and a missing picture no longer
+  writes a warning to stderr.
+- `0007-amiga-host-connections-llint-o2.patch`: two connections per host
+  instead of one (one left pictures queued long enough to time out), and
+  the C-loop interpreter, which runs every line of JavaScript, built with
+  `-O2`.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
