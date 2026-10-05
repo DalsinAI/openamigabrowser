@@ -83,6 +83,21 @@ answer: yes/no, or the shared secret. A few hundred bytes, so it fits
 today's bridge registers too: the Amiga stops for a millisecond, which is
 acceptable until the rings from the bridge plan land.
 
+## One API, and the AutoConfig card
+
+We expose an API for the work, not a mechanism: a program asks a named
+service (`opentls.key/1` here, `media.decode/1` for the media work) and does
+not know where it runs. On the Amiga that API is one Exec device behind an
+AutoConfig card, as in the bridge plan:
+
+- On AmigaChrome the card is the bridge board.
+- On a real Amiga it can be a physical card that does the work itself, or
+  passes it to a nursery on the LAN.
+- With no card, the same library does the work on the 68k.
+
+Media decoding follows the same path, with the codec libraries'
+68k code as the fallback.
+
 ## The nursery: where Cradle lives on the LAN
 
 A nursery is any Cradle that offers services to Amigas on the network: a
