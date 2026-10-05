@@ -40,6 +40,12 @@
 #   OB_CCACHE_DIR   ccache's folder for this build
 #                   (default ~/.cache/ccache-openbrowser)
 #   OB_CCACHE_SIZE  that folder's size limit                     (default 20G)
+#   OB_DISTCC_HOSTS other PCs to compile on with distcc, in distcc's form,
+#                   such as "localhost/8 @192.168.0.168/10,lzo" ("@" reaches
+#                   a PC over SSH, where the same compiler must be at the
+#                   same path; at most 10 jobs each, SSH's default sessions
+#                   per connection). Each host's /N is its number of jobs;
+#                   JOBS then defaults to their sum. Needs ccache and distcc.
 #   OB_TEST_DIR     folder to stage the test programs and pages in
 #                   (test-browser)
 #
@@ -97,6 +103,13 @@ default_jobs() {
     fi
     echo "$threads"
 }
+# With distcc, the jobs of every host together.
+distcc_jobs() {
+    echo "$OB_DISTCC_HOSTS" | tr ' ' '\n' | sed -n 's|.*/\([0-9][0-9]*\).*|\1|p' | awk '{ n += $1 } END { print n + 0 }'
+}
+if [ -n "${OB_DISTCC_HOSTS:-}" ] && [ -z "${JOBS:-}" ]; then
+    JOBS=$(distcc_jobs)
+fi
 JOBS=${JOBS:-$(default_jobs)}
 
 sha256() {
@@ -170,8 +183,43 @@ export CCACHE_MAXSIZE='$CCACHE_SIZE'
 export CCACHE_BASEDIR='$HOME'
 export CCACHE_NOHASHDIR=true
 export CCACHE_SLOPPINESS='pch_defines,time_macros,include_file_mtime,include_file_ctime'
-exec '$CCACHE' "\$@"
+# A cache miss reads the compiler's -MD output instead of preprocessing the
+# file a second time.
+export CCACHE_DEPEND=true
 EOF
+    if [ -n "${OB_DISTCC_HOSTS:-}" ]; then
+        command -v distcc >/dev/null 2>&1 || die "OB_DISTCC_HOSTS is set but distcc is not installed"
+        # distcc reaches "@" hosts with ssh (and asks their distccd to run
+        # a compiler by its path, which only this PC's SSH key can reach).
+        # All jobs share one connection per host: a burst of new logins
+        # trips the host's MaxStartups limit, and distcc then leaves the
+        # host alone for a minute. BatchMode: a host that wants a password
+        # fails instead of waiting.
+        cat > "$BUILD/ob-distcc-ssh" <<'EOF'
+#!/bin/sh
+# Written by openamigabrowser's scripts/build-webcore.sh: ssh for distcc.
+exec ssh -o BatchMode=yes -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/ob-distcc-%C" -o ControlPersist=600 "$@"
+EOF
+        chmod +x "$BUILD/ob-distcc-ssh"
+        # ccache adds -fpch-preprocess for files that use WebCore's
+        # precompiled header; distcc's preprocessed copy then names the .gch
+        # file, which the other PC does not have, and every remote compile
+        # fails. Without it, compiles here still use the precompiled header
+        # and the other PC compiles the headers in full.
+        cat > "$BUILD/ob-distcc" <<'EOF'
+#!/bin/sh
+# Written by openamigabrowser's scripts/build-webcore.sh: distcc for ccache.
+for a; do shift; [ "$a" = -fpch-preprocess ] || set -- "$@" "$a"; done
+exec distcc "$@"
+EOF
+        chmod +x "$BUILD/ob-distcc"
+        cat >> "$BUILD/ob-ccache" <<EOF
+export CCACHE_PREFIX='$BUILD/ob-distcc'
+export DISTCC_HOSTS='$OB_DISTCC_HOSTS'
+export DISTCC_SSH='$BUILD/ob-distcc-ssh'
+EOF
+    fi
+    echo "exec '$CCACHE' \"\$@\"" >> "$BUILD/ob-ccache"
     chmod +x "$BUILD/ob-ccache"
 }
 

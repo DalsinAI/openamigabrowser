@@ -113,6 +113,24 @@ OpenBrowser file 13 to 14 s (one compile, then OBCore and OpenBrowser
 linked); one changed WebCore file 13 s for the engine and 13 s to relink
 OpenBrowser. Linking the 116 MB program is most of that time.
 
+With Ninja (5 October 2026, same machine): nothing to do, 3 s for
+`build-webcore.sh all`; one changed OpenBrowser file 39 s (17 s when ccache
+has it); one changed WebCore file 10 s, then 15 s to relink; a new file in
+`PlatformAmiga.cmake` 10 s, compiling only that file; and with every object
+removed (`clean-engine --yes`), all of WebKit and the programs again in
+154 s, 1023 of WebKit's 1028 files coming from ccache. A full build with an
+empty cache is still most of an hour on one PC.
+
+**A second PC.** `OB_DISTCC_HOSTS` sends compiles to other PCs with distcc
+over SSH (the same compiler at the same path there). ccache adds
+`-fpch-preprocess` for files that use the precompiled header, which makes
+distcc's preprocessed copy name the `.gch` file that the other PC does not
+have, so every remote compile failed and fell back to this PC; the build
+folder's `ob-distcc` drops that option. Compiles here keep the precompiled
+header; the other PC compiles the headers in full. Jobs share one SSH
+connection per PC, since a burst of new logins trips the other PC's
+`MaxStartups` limit and distcc then leaves it alone for a minute.
+
 **AmigaDOS names in fontconfig.** fontconfig joins its configuration
 directory and file name with a slash, so an empty directory turned
 `PROGDIR:fontconfig/fonts.conf` into `/PROGDIR:...`, and AmigaDOS asked for
