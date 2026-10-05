@@ -220,6 +220,12 @@ export DISTCC_HOSTS='$OB_DISTCC_HOSTS'
 export DISTCC_SSH='$BUILD/ob-distcc-ssh'
 EOF
     fi
+    # The precompiled header itself is compiled directly: a .gch made through
+    # ccache's depend mode left WebCore's headers to be read twice in some
+    # files (multiple definition errors with -m68020-60).
+    cat >> "$BUILD/ob-ccache" <<'EOF'
+for a; do case "$a" in *.gch) exec "$@" ;; esac; done
+EOF
     echo "exec '$CCACHE' \"\$@\"" >> "$BUILD/ob-ccache"
     chmod +x "$BUILD/ob-ccache"
 }

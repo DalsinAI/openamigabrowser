@@ -24,7 +24,7 @@ P=$S/prefix
 OUT=${OAB_DEPS:-"$HOME/openbrowser-deps"}
 JOBS=${JOBS:-2}
 WORK=$OUT/icu-build
-F="-O2 -m68020 -m68881"
+F="-O2 $(echo "${OS32_CPU_FLAGS:--m68020 -m68881}" | sed "s/-mcrt=[a-z0-9]*//")"
 
 rm -rf "$WORK" "$OUT/icu78-m68k-amigaos"
 mkdir -p "$WORK"
