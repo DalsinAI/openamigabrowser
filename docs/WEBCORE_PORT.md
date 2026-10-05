@@ -88,7 +88,30 @@ generator lists every object's precompiled-header options in the target's
 file. A new file in `PlatformAmiga.cmake` therefore recompiles all of WebCore,
 about an hour on the build PC. New Amiga code goes into a file that is
 already listed (by `#include`), or waits for a change that needs a full
-rebuild anyway.
+rebuild anyway. Ninja has no such file: a build folder made with it
+(`GENERATOR=Ninja`, the default when ninja is installed) recompiles only
+what changed.
+
+**ccache and the precompiled header (5 October 2026).** WebKit turns ccache
+on by itself when it is installed, but on Linux without the `pch_defines`
+and `time_macros` settings, and every WebCore file uses the precompiled
+header: ccache gave up on all of them ("could not use precompiled header")
+and compiled each one again. `build-webcore.sh` now runs the compiler
+through a launcher in the build folder (`ob-ccache`) with those settings
+and its own 20 GB cache, so an unchanged file comes from the cache (6.5 s
+of compiling becomes 0.02 s), and a rebuild that touches files without
+changing them costs little.
+
+**Engine and browser builds.** OpenBrowser's own code (src/webcore) builds
+as the library OBCore and the programs, separately from WebKit's
+libraries: `build-webcore.sh build-browser` compiles only OpenBrowser's
+files and relinks, and `build-engine` does nothing unless the engine's
+fingerprint (the WebKit tree, compiler, libraries' headers and options) has
+changed. Measured on the build PC with the Makefile generator, 5 October
+2026: a build with nothing to do takes under a second; one changed
+OpenBrowser file 13 to 14 s (one compile, then OBCore and OpenBrowser
+linked); one changed WebCore file 13 s for the engine and 13 s to relink
+OpenBrowser. Linking the 116 MB program is most of that time.
 
 **AmigaDOS names in fontconfig.** fontconfig joins its configuration
 directory and file name with a slash, so an empty directory turned

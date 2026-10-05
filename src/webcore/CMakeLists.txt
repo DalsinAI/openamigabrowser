@@ -10,19 +10,26 @@ if (NOT EXISTS "${OB_AMISSL_SDK}/include/proto/amissl.h")
 endif ()
 set(OB_AMISSL_STUBS "${OB_AMISSL_SDK}/lib/AmigaOS3/libamisslstubs.a")
 
-# The page layer: WebCore's clients, the view and its C interface.
+# The page layer: WebCore's clients, the view and its C interface, built
+# once as the static library OBCore and linked into each program. A change
+# here compiles that file and relinks; it never compiles WebCore.
 set(OB_CORE_SOURCES
     AmigaBackForwardList.cpp
     AmigaChromeClient.cpp
     AmigaCookieJar.cpp
     AmigaEditorClient.cpp
     AmigaFrameLoaderClient.cpp
-    AmigaGlobals.c
     AmigaLoaderStrategy.cpp
     AmigaNetworkSetup.c
     AmigaPlatformStrategies.cpp
     AmigaWebView.cpp
     ob_webview.cpp
+)
+# Each program compiles these itself: they define symbols (library bases,
+# the stack size) that the C library also has, and an object in a program
+# always wins over one in a library.
+set(OB_PROGRAM_SOURCES
+    AmigaGlobals.c
     ${OB_THIRD_PARTY}/oam_stack.c
 )
 
@@ -57,7 +64,7 @@ macro(OB_LINK _target)
     target_link_directories(${_target} PRIVATE ${AC_WEBCORE_DEPS}/lib ${AC_WEBKIT_DEPS}/lib)
     target_link_libraries(${_target} PRIVATE
         -Wl,--start-group
-        WebCore PAL JavaScriptCore WTF bmalloc
+        OBCore WebCore PAL JavaScriptCore WTF bmalloc
         cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z xml2 sqlite3 curl psl
         icui18n icuuc icudata
         ${OB_AMISSL_STUBS}
@@ -66,13 +73,24 @@ macro(OB_LINK _target)
     )
 endmacro()
 
+set(OBCore_SOURCES ${OB_CORE_SOURCES})
+set(OBCore_LIBRARY_TYPE STATIC)
+set(OBCore_FRAMEWORKS ${OB_FRAMEWORKS})
+set(OBCore_PRIVATE_INCLUDE_DIRECTORIES ${OB_PRIVATE_INCLUDE_DIRECTORIES})
+set(OBCore_SYSTEM_INCLUDE_DIRECTORIES ${OB_SYSTEM_INCLUDE_DIRECTORIES})
+# Compile against WebKit as the programs do: linking the frameworks brings
+# their include folders and definitions. WebCore's generated and private
+# headers must exist before OBCore compiles.
+set(OBCore_PRIVATE_LIBRARIES WebKit::WebCore WebKit::PAL WebKit::JavaScriptCore WebKit::WTF WebKit::bmalloc)
+set(OBCore_DEPENDENCIES WebCore)
+WEBKIT_LIBRARY_DECLARE(OBCore)
+WEBKIT_LIBRARY(OBCore)
+
 # obcore-dump: load a local HTML file, print its render tree (milestone 2a)
 # and paint it into a PNG (2b).
 set(obcore-dump_SOURCES
-    AmigaGlobals.c
-    AmigaPlatformStrategies.cpp
+    ${OB_PROGRAM_SOURCES}
     DumpMain.cpp
-    ${OB_THIRD_PARTY}/oam_stack.c
 )
 set(obcore-dump_FRAMEWORKS ${OB_FRAMEWORKS})
 set(obcore-dump_PRIVATE_INCLUDE_DIRECTORIES ${OB_PRIVATE_INCLUDE_DIRECTORIES})
@@ -83,7 +101,7 @@ OB_LINK(obcore-dump)
 
 # obcore-view: the page layer without a window, through its C interface.
 set(obcore-view_SOURCES
-    ${OB_CORE_SOURCES}
+    ${OB_PROGRAM_SOURCES}
     obcore_view.c
 )
 set(obcore-view_FRAMEWORKS ${OB_FRAMEWORKS})
@@ -95,7 +113,7 @@ OB_LINK(obcore-view)
 
 # OpenBrowser: the browser window (GadTools) around the page layer.
 set(OpenBrowser_SOURCES
-    ${OB_CORE_SOURCES}
+    ${OB_PROGRAM_SOURCES}
     ob_blit.c
     ob_browser.c
 )
