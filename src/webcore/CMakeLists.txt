@@ -62,6 +62,10 @@ set(OB_SYSTEM_INCLUDE_DIRECTORIES
 # matter, followed by what libnix programs need.
 macro(OB_LINK _target)
     target_link_directories(${_target} PRIVATE ${AC_WEBCORE_DEPS}/lib ${AC_WEBKIT_DEPS}/lib)
+    # A link map beside each program (bin/NAME.map): which object every
+    # address belongs to, static functions included, which the program's
+    # own symbol table leaves out. For profiles, and for where the size goes.
+    target_link_options(${_target} PRIVATE -Wl,-Map=${CMAKE_BINARY_DIR}/bin/${_target}.map)
     target_link_libraries(${_target} PRIVATE
         -Wl,--start-group
         OBCore WebCore PAL JavaScriptCore WTF bmalloc
