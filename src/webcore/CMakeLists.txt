@@ -45,6 +45,7 @@ if (EXISTS "${OB_OPENSERVICE_DIR}/opentls/opentls_provider.c")
         ${OB_OPENSERVICE_DIR}/opentls/opentls_provider.c
         ${OB_OPENSERVICE_DIR}/opentls/opentls_amiga.c
         ${OB_OPENSERVICE_DIR}/host/opentls_key.c
+        ob_media.c
     )
     set(OB_OPENTLS 1)
 endif ()

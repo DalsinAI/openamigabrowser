@@ -22,6 +22,7 @@
 #include <amissl/amissl.h>
 #ifdef OB_OPENTLS
 #include "opentls_amiga.h"
+#include "ob_media.h"
 #endif
 
 #include "ob_network.h"
@@ -62,6 +63,8 @@ int ob_network_open(void)
     /* TLS key maths to a board in this machine or a paired Cradle, when one
      * offers it; AmiSSL does it all itself otherwise. */
     opentls_amiga_open();
+    /* Page pictures, SVG included, decoded there too. */
+    ob_media_open();
 #endif
     return 1;
 }
@@ -69,6 +72,7 @@ int ob_network_open(void)
 void ob_network_close(void)
 {
 #ifdef OB_OPENTLS
+    ob_media_close();
     opentls_amiga_close();
 #endif
     if (AmiSSLBase)
