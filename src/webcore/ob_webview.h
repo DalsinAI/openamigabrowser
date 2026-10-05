@@ -55,6 +55,11 @@ void ob_webcore_shutdown(void);
  * for every thread). ob_webcore_shutdown() does this too. */
 void ob_webcore_stop_threads(void);
 
+/* TLS sessions kept across runs (on the main task, with the network up):
+ * load returns how many came back. */
+int ob_webview_load_tls_sessions(const char *path);
+void ob_webview_save_tls_sessions(const char *path);
+
 /* The run loop: do what is due, then ask when the next timer is (seconds
  * from now; 0 means at once, a negative number means no timer). */
 void ob_webcore_cycle(void);

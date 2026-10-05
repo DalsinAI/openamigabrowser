@@ -39,6 +39,9 @@
 #include "ob_blit.h"
 #include "ob_webview.h"
 #include "ob_splash.h"
+
+/* TLS sessions kept from the last run (ob_webview_load_tls_sessions). */
+#define TLS_SESSIONS "PROGDIR:TLSSessions"
 #include "oam_stack.h"
 
 static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.3 (5.10.2026)";
@@ -697,6 +700,8 @@ static int browserMain(int argc, char **argv)
         closeLibraries();
         return 20;
     }
+    if (network)
+        ob_webview_load_tls_sessions(TLS_SESSIONS);
     ob_webcore_set_wakeup(wakeUp, NULL);
     ob_splash("Opening the window", 90);
 
@@ -817,9 +822,10 @@ static int browserMain(int argc, char **argv)
         FreeMenus(menuStrip);
     if (pageBuffer)
         FreeVec(pageBuffer);
-    if (network)
+    if (network) {
+        ob_webview_save_tls_sessions(TLS_SESSIONS);
         ob_webcore_shutdown();
-    else
+    } else
         ob_webcore_stop_threads();
     closeLibraries();
     return 0;

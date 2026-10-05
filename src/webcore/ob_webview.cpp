@@ -13,6 +13,7 @@
 #include "AmigaWebView.h"
 #include "ob_network.h"
 
+#include <WebCore/CurlContext.h>
 #include <JavaScriptCore/InitializeThreading.h>
 #include <JavaScriptCore/Options.h>
 #include <WebCore/DocumentPage.h>
@@ -34,6 +35,8 @@
 #include <WebCore/WebCoreJITOperations.h>
 #include <WebCore/WindowsKeyboardCodes.h>
 #include <limits>
+#include <stdio.h>
+#include <time.h>
 #include <wtf/MainThread.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/MonotonicTime.h>
@@ -118,6 +121,86 @@ int ob_webcore_init_with_network(const char* cookieDatabase)
     };
     setAmigaCookieHooks(WTF::move(cookieHooks));
     return 1;
+}
+
+/* TLS sessions across runs: curl's session cache is saved at quit and read
+ * back at start, so a site seen before resumes its TLS session instead of
+ * doing a whole handshake (certificate checks and all) again.
+ * The file: "OBTLS1", then per session four u32 lengths (key, hmac, data,
+ * ALPN) and the eight-byte expiry, then those bytes. */
+static const char tlsMagic[] = "OBTLS1";
+
+static CURL* tlsEasy()
+{
+    CURL* easy = curl_easy_init();
+    if (easy)
+        curl_easy_setopt(easy, CURLOPT_SHARE, WebCore::CurlContext::singleton().shareHandle().handle());
+    return easy;
+}
+
+static CURLcode tlsExportOne(CURL*, void* file, const char* key, const unsigned char* hmac, size_t hmacLength,
+    const unsigned char* data, size_t dataLength, curl_off_t validUntil, int, const char* alpn, size_t)
+{
+    FILE* f = static_cast<FILE*>(file);
+    uint32_t lengths[4] = { static_cast<uint32_t>(strlen(key)), static_cast<uint32_t>(hmacLength),
+        static_cast<uint32_t>(dataLength), static_cast<uint32_t>(alpn ? strlen(alpn) : 0) };
+    int64_t until = validUntil;
+    if (validUntil && validUntil < static_cast<curl_off_t>(time(nullptr)))
+        return CURLE_OK;
+    fwrite(lengths, sizeof lengths, 1, f);
+    fwrite(&until, sizeof until, 1, f);
+    fwrite(key, 1, lengths[0], f);
+    fwrite(hmac, 1, hmacLength, f);
+    fwrite(data, 1, dataLength, f);
+    if (alpn)
+        fwrite(alpn, 1, lengths[3], f);
+    return CURLE_OK;
+}
+
+void ob_webview_save_tls_sessions(const char* path)
+{
+    CURL* easy = tlsEasy();
+    FILE* f = easy ? fopen(path, "wb") : nullptr;
+    if (f) {
+        fwrite(tlsMagic, 1, sizeof tlsMagic - 1, f);
+        curl_easy_ssls_export(easy, tlsExportOne, f);
+        fclose(f);
+    }
+    if (easy)
+        curl_easy_cleanup(easy);
+}
+
+int ob_webview_load_tls_sessions(const char* path)
+{
+    char magic[sizeof tlsMagic - 1];
+    int loaded = 0;
+    FILE* f = fopen(path, "rb");
+    CURL* easy = f ? tlsEasy() : nullptr;
+    if (easy && fread(magic, 1, sizeof magic, f) == sizeof magic && !memcmp(magic, tlsMagic, sizeof magic)) {
+        uint32_t lengths[4];
+        int64_t until;
+        while (fread(lengths, sizeof lengths, 1, f) == 1 && fread(&until, sizeof until, 1, f) == 1) {
+            if (lengths[0] > 1024 || lengths[1] > 1024 || lengths[2] > 65536 || lengths[3] > 64)
+                break;
+            Vector<unsigned char> bytes(lengths[0] + 1 + lengths[1] + lengths[2] + lengths[3]);
+            unsigned char* key = bytes.mutableSpan().data();
+            unsigned char* hmac = key + lengths[0] + 1;
+            unsigned char* data = hmac + lengths[1];
+            if (fread(key, 1, lengths[0], f) != lengths[0] || fread(hmac, 1, lengths[1], f) != lengths[1]
+                || fread(data, 1, lengths[2], f) != lengths[2] || fread(data + lengths[2], 1, lengths[3], f) != lengths[3])
+                break;
+            key[lengths[0]] = 0;
+            if (until && until < static_cast<int64_t>(time(nullptr)))
+                continue;
+            if (curl_easy_ssls_import(easy, reinterpret_cast<const char*>(key), hmac, lengths[1], data, lengths[2]) == CURLE_OK)
+                loaded++;
+        }
+    }
+    if (easy)
+        curl_easy_cleanup(easy);
+    if (f)
+        fclose(f);
+    return loaded;
 }
 
 namespace WTF {

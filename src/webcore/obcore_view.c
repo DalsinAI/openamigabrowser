@@ -15,6 +15,7 @@
  */
 #include <stdio.h>
 #include <time.h>
+#include <sys/time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <cairo.h>
@@ -25,6 +26,7 @@
 
 static const char version[] __attribute__((used)) = "$VER: obcore-view 0.1 (4.10.2026)";
 
+static const char *tlsFile;  /* -tls: TLS sessions kept across runs */
 static int loading = -1;   /* -1 not started yet, 1 loading, 0 done */
 static int invalidations;
 static long busyCycles, waits;  /* run loop turns with work waiting, and waits */
@@ -74,10 +76,21 @@ static void onConsole(void *context, const char *message, int line, const char *
     printf("OBVIEW_CONSOLE %s (%s:%d)\n", message, source, line);
 }
 
+/* Milliseconds since the program started, for the resource lines. */
+static long sinceStart(void)
+{
+    static struct timeval first;
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    if (!first.tv_sec)
+        first = now;
+    return (now.tv_sec - first.tv_sec) * 1000L + (now.tv_usec - first.tv_usec) / 1000L;
+}
+
 static void onResource(void *context, const char *url, int started, const char *error)
 {
     (void)context;
-    printf("OBVIEW_%s %.200s%s%s\n", started ? "REQUEST" : "LOADED", url, error ? " FAILED: " : "", error ? error : "");
+    printf("OBVIEW_%s [%ld ms] %.200s%s%s\n", started ? "REQUEST" : "LOADED", sinceStart(), url, error ? " FAILED: " : "", error ? error : "");
     fflush(stdout);
 }
 
@@ -222,6 +235,10 @@ static int viewMain(int argc, char **argv)
         seconds = atof(argv[argi + 1]);
         argi += 2;
     }
+    if (argc > argi + 1 && !strcmp(argv[argi], "-tls")) {
+        tlsFile = argv[argi + 1];          /* TLS sessions: read before, saved after */
+        argi += 2;
+    }
     if (argc > argi && !strcmp(argv[argi], "-input")) {
         /* After the load: click at (30, 35), type an address, click at (30, 110). */
         inputTest = 1;
@@ -236,7 +253,7 @@ static int viewMain(int argc, char **argv)
         argi++;
     }
     if (argc <= argi) {
-        printf("usage: obcore-view [-wait seconds] [-input] [-dl] [-url] <file.html|address> [width height] [page.png]\n");
+        printf("usage: obcore-view [-wait seconds] [-tls file] [-input] [-dl] [-url] <file.html|address> [width height] [page.png]\n");
         return 10;
     }
     source = argv[argi++];
@@ -260,6 +277,9 @@ static int viewMain(int argc, char **argv)
         printf("OBVIEW_FAIL init%s\n", isURL ? " (bsdsocket.library or AmiSSL)" : "");
         return 20;
     }
+    sinceStart();
+    if (isURL && tlsFile)
+        printf("OBVIEW_TLS %d sessions read\n", ob_webview_load_tls_sessions(tlsFile));
     callbacks.invalidate = onInvalidate;
     callbacks.title = onTitle;
     callbacks.url = onURL;
@@ -307,6 +327,8 @@ static int viewMain(int argc, char **argv)
         free(pixels);
     }
     ob_webview_destroy(view);
+    if (isURL && tlsFile)
+        ob_webview_save_tls_sessions(tlsFile);
     if (isURL)
         ob_webcore_shutdown();
     else
