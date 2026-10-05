@@ -90,9 +90,11 @@ service (`opentls.key/1` here, `media.decode/1` for the media work) and does
 not know where it runs. On the Amiga that API is one Exec device behind an
 AutoConfig card, as in the bridge plan:
 
-- On AmigaChrome the card is the bridge board.
-- On a real Amiga it can be a physical card that does the work itself, or
-  passes it to a nursery on the LAN.
+- Where the Amiga is emulated, the card is virtual: AmigaChrome's bridge
+  board on an x86 PC, and the same card presented by Emu68 on a PiStorm's
+  Pi. The work then runs natively on that machine's own CPU.
+- On a real Amiga without one, it can be a physical card that does the work
+  itself, or passes it to a nursery on the LAN.
 - With no card, the same library does the work on the 68k.
 
 Media decoding follows the same path, with the codec libraries'
