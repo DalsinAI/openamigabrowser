@@ -7,8 +7,8 @@
  *      one digest, OBTEST, then fetches and runs that digest through AmiSSL;
  *   3. with "core", also calls one of the core functions AmiSSL hands the
  *      provider (AmiSSL is built base-relative on 68k, so this may crash).
- */
  * MIT, Copyright (c) 2026 Dalsin Limited.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
