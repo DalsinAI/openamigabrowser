@@ -400,14 +400,18 @@ def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, '..', 'icons')
     os.makedirs(os.path.join(outdir, 'OpenBrowser'), exist_ok=True)
     icons = [
-        ('OpenBrowser.info', WBDRAWER, drawer_icon(), {}),
-        ('OpenBrowser/OpenBrowser.info', WBTOOL, program_icon(), {'stack': 65536, 'at': (60, 12)}),
-        ('OpenBrowser/OpenBrowser.readme.info', WBPROJECT, readme_icon(),
+        ('OpenBrowser.info', WBDRAWER, drawer_icon(), 'drawer', {}),
+        ('OpenBrowser/OpenBrowser.info', WBTOOL, program_icon(), 'program', {'stack': 65536, 'at': (60, 12)}),
+        ('OpenBrowser/OpenBrowser.readme.info', WBPROJECT, readme_icon(), None,
          {'default_tool': 'SYS:Utilities/MultiView', 'at': (220, 12)}),
     ]
     previews = []
-    for name, kind, img, extra in icons:
-        sel = glowing(img)
+    for name, kind, img, pic, extra in icons:
+        # the selected image: the art's second frame (NAME-selected.png, the
+        # drawer pulled open, the globe turned), glowing, as openamigaup's
+        # ICONS.md asks of every Open app; else the picture itself, glowing
+        second = art(pic + '-selected') if pic and art(pic) is not None else None
+        sel = glowing(second if second is not None else img)
         with open(os.path.join(outdir, name), 'wb') as f:
             f.write(info(kind, img, sel, **extra))
         previews.append((img, sel))
