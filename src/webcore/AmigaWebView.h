@@ -49,7 +49,13 @@ public:
     bool canGoBack() const;
     bool canGoForward() const;
     void resize(const WebCore::IntSize&);
+    void setScriptsEnabled(bool);
+    void setPicturesEnabled(bool);
+    void setWebFontsEnabled(bool);
+    void setLiteMode(bool enabled) { m_liteMode = enabled; }
+    bool liteMode() const { return m_liteMode; }
     void paint(unsigned char* argb, int stride, const WebCore::IntRect&);
+    void reportDisplayList(unsigned char* direct, unsigned char* replayed, int stride, const WebCore::IntRect&);
     WebCore::IntRect takeDirtyRect();
 
     // From WebCore's clients.
@@ -80,7 +86,9 @@ private:
     RefPtr<AmigaBackForwardList> m_backForwardList;
     WebCore::IntRect m_dirtyRect;
     WebCore::Timer m_renderingUpdateTimer;
+    MonotonicTime m_nextRenderingUpdate; // while a page loads, none before this
     bool m_loading { false };
+    bool m_liteMode { false };
 };
 
 } // namespace OpenBrowser

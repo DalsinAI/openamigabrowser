@@ -1,0 +1,29 @@
+diff --git a/Source/WebCore/platform/network/curl/CurlContext.cpp b/Source/WebCore/platform/network/curl/CurlContext.cpp
+index 5c7bda8c58..a01e960a55 100644
+--- a/Source/WebCore/platform/network/curl/CurlContext.cpp
++++ b/Source/WebCore/platform/network/curl/CurlContext.cpp
+@@ -410,6 +410,24 @@ void CurlHandle::setURL(const URL& url, LocalhostAlias localhostAlias)
+             curlUrl.setQuery(String());
+     }
+ 
++#if PLATFORM(AMIGA)
++    // The host-fetch experiment (5 October 2026): with the Shell variable
++    // OB_FETCH_PROXY naming a fetch proxy (openamigabrowser's
++    // scripts/ob-fetch-proxy.py on another PC), http and https requests go to
++    // it as plain HTTP, https ones marked with X-OB-Fetch-Scheme, and the
++    // proxy makes the TLS connection instead of the 68k. Cookies, headers and
++    // redirects stay WebCore's, as they were worked out for the real URL.
++    static const char* fetchProxy = getenv("OB_FETCH_PROXY");
++    if (fetchProxy && *fetchProxy && (curlUrl.protocolIs("https"_s) || curlUrl.protocolIs("http"_s))) {
++        if (curlUrl.protocolIs("https"_s)) {
++            curlUrl.setProtocol("http"_s);
++            appendRequestHeader("X-OB-Fetch-Scheme: https"_s);
++        }
++        curl_easy_setopt(m_handle, CURLOPT_PROXY, fetchProxy);
++        curl_easy_setopt(m_handle, CURLOPT_URL, curlUrl.string().utf8().legacyCStringPointer());
++        return;
++    }
++#endif
+     curl_easy_setopt(m_handle, CURLOPT_URL, curlUrl.string().utf8().legacyCStringPointer());
+ 
+     if (url.protocolIs("https"_s))

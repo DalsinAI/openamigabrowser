@@ -33,7 +33,13 @@ set(CMAKE_HAVE_PTHREADS_CREATE FALSE CACHE INTERNAL "" FORCE)
 set(CMAKE_HAVE_PTHREAD_CREATE TRUE CACHE INTERNAL "" FORCE)
 set(CMAKE_THREAD_LIBS_INIT "-lpthread" CACHE STRING "" FORCE)
 
-set(AC_OS32_CPU_FLAGS "-m68020 -m68881 -mcrt=nix20")
+# OS32_CPU_FLAGS in the environment overrides the CPU flags, for example
+# "-m68020-60 -m68881 -mcrt=nix20": 68020 code tuned for the 68040 and 68060.
+if (DEFINED ENV{OS32_CPU_FLAGS})
+    set(AC_OS32_CPU_FLAGS "$ENV{OS32_CPU_FLAGS}")
+else ()
+    set(AC_OS32_CPU_FLAGS "-m68020 -m68881 -mcrt=nix20")
+endif ()
 # WebKit builds with -std=c++23 (strict), which makes newlib hide POSIX and BSD
 # calls; _DEFAULT_SOURCE shows them again. nanosleep() and siginfo_t also need
 # these POSIX options
