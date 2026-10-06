@@ -682,29 +682,14 @@ static void closeLibraries(void)
     if (IntuitionBase) CloseLibrary((struct Library *)IntuitionBase);
 }
 
-static int browserMain(int argc, char **argv)
+/* Opens the window (and our own screen when Workbench has few colours) and
+ * the page, and starts loading url. WebCore must be running. */
+static int openBrowserWindow(const char *url, int network)
 {
     OBWebViewCallbacks callbacks;
-    int network, width, height;
+    int width, height;
 
-    mainTask = FindTask(NULL);
-    readToolTypes(argc, argv);
-    ob_splash("Starting WebKit and the network", 75);
-    if (!openLibraries()) {
-        printf("OpenBrowser needs AmigaOS 3.1 or newer.\n");
-        closeLibraries();
-        return 20;
-    }
-    network = ob_webcore_init_with_network("PROGDIR:Cookies.db");
-    if (!network && !ob_webcore_init()) {
-        closeLibraries();
-        return 20;
-    }
-    if (network)
-        ob_webview_load_tls_sessions(TLS_SESSIONS);
-    ob_webcore_set_wakeup(wakeUp, NULL);
-    ob_splash("Opening the window", 90);
-
+    quitNow = 0;
     screen = LockPubScreen(NULL);
     if (screen && GetBitMapAttr(screen->RastPort.BitMap, BMA_DEPTH) <= 8) {
         /* A native Workbench: pages look much better on a graphics card's
@@ -728,8 +713,8 @@ static int browserMain(int argc, char **argv)
             UnlockPubScreen(NULL, screen);
         if (ownScreen)
             CloseScreen(ownScreen);
-        closeLibraries();
-        return 20;
+        screen = ownScreen = NULL;
+        return 0;
     }
     screenFont = screen->Font;
     fontHeight = screenFont->ta_YSize;
@@ -772,8 +757,137 @@ static int browserMain(int argc, char **argv)
         makeMenus();
         updateButtons();
         setStatus(network ? "Ready." : "No network: bsdsocket.library or AmiSSL is missing.");
-        ob_webview_load(view, argc > 1 ? argv[1] : HOME_PAGE);
+        ob_webview_load(view, url);
     }
+    return !quitNow;
+}
+
+static void closeBrowserWindow(void)
+{
+    if (view)
+        ob_webview_destroy(view);
+    view = NULL;
+    if (window) {
+        if (menuStrip)
+            ClearMenuStrip(window);
+        removeGadgets();
+        CloseWindow(window);
+    }
+    window = NULL;
+    ob_blit_close();
+    if (visualInfo)
+        FreeVisualInfo(visualInfo);
+    visualInfo = NULL;
+    if (ownScreen) {
+        while (!CloseScreen(ownScreen))
+            Delay(50); /* a visitor window is still open on it */
+    }
+    ownScreen = NULL;
+    screen = NULL;
+    if (menuStrip)
+        FreeMenus(menuStrip);
+    menuStrip = NULL;
+    if (pageBuffer)
+        FreeVec(pageBuffer);
+    pageBuffer = NULL;
+}
+
+#ifdef OB_BROWSER_IN_ENGINE
+
+/* The browser window inside WebBrowserEngine (webbrowser.library's engine,
+ * wb_engine.c), which runs WebCore, its timers and wake-ups; see
+ * ob_browser.h. */
+
+#include "ob_browser.h"
+
+static int guiLibrariesOpen;
+
+int obb_open(const char *url, int scripts, int pictures, int webFonts, int lite, int network)
+{
+    if (window) {
+        /* Already open: show the page there. */
+        WindowToFront(window);
+        ActivateWindow(window);
+        if (url && *url)
+            ob_webview_load(view, url);
+        return 1;
+    }
+    if (!guiLibrariesOpen) {
+        IntuitionBase = (struct IntuitionBase *)OpenLibrary((CONST_STRPTR)"intuition.library", 39);
+        GfxBase = (struct GfxBase *)OpenLibrary((CONST_STRPTR)"graphics.library", 40);
+        GadToolsBase = OpenLibrary((CONST_STRPTR)"gadtools.library", 39);
+        KeymapBase = OpenLibrary((CONST_STRPTR)"keymap.library", 37);
+        if (!IntuitionBase || !GfxBase || !GadToolsBase || !KeymapBase)
+            return 0;
+        guiLibrariesOpen = 1;
+    }
+    scriptsOn = scripts;
+    picturesOn = pictures;
+    webFontsOn = webFonts;
+    liteOn = lite;
+    if (!openBrowserWindow(url && *url ? url : HOME_PAGE, network)) {
+        closeBrowserWindow();
+        return 0;
+    }
+    return 1;
+}
+
+ULONG obb_signals(void)
+{
+    return window ? 1UL << window->UserPort->mp_SigBit : 0;
+}
+
+/* After WebCore's turn and any wake-up: input, then what changed on the
+ * page. Returns 0 once the window has been closed. */
+int obb_update(void)
+{
+    if (!window)
+        return 0;
+    handleWindow();
+    if (quitNow) {
+        closeBrowserWindow();
+        return 0;
+    }
+    paintDirty();
+    return 1;
+}
+
+void obb_close(void)
+{
+    closeBrowserWindow();
+    if (guiLibrariesOpen) {
+        CloseLibrary(KeymapBase);
+        CloseLibrary(GadToolsBase);
+        CloseLibrary((struct Library *)GfxBase);
+        CloseLibrary((struct Library *)IntuitionBase);
+        guiLibrariesOpen = 0;
+    }
+}
+
+#else // !OB_BROWSER_IN_ENGINE
+
+static int browserMain(int argc, char **argv)
+{
+    int network;
+
+    mainTask = FindTask(NULL);
+    readToolTypes(argc, argv);
+    ob_splash("Starting WebKit and the network", 75);
+    if (!openLibraries()) {
+        printf("OpenBrowser needs AmigaOS 3.1 or newer.\n");
+        closeLibraries();
+        return 20;
+    }
+    network = ob_webcore_init_with_network("PROGDIR:Cookies.db");
+    if (!network && !ob_webcore_init()) {
+        closeLibraries();
+        return 20;
+    }
+    if (network)
+        ob_webview_load_tls_sessions(TLS_SESSIONS);
+    ob_webcore_set_wakeup(wakeUp, NULL);
+    ob_splash("Opening the window", 90);
+    openBrowserWindow(argc > 1 ? argv[1] : HOME_PAGE, network);
 
     while (!quitNow) {
         ULONG waitMask, got;
@@ -804,24 +918,7 @@ static int browserMain(int argc, char **argv)
             handleWindow();
     }
 
-    ob_webview_destroy(view);
-    if (window) {
-        if (menuStrip)
-            ClearMenuStrip(window);
-        removeGadgets();
-        CloseWindow(window);
-    }
-    ob_blit_close();
-    if (visualInfo)
-        FreeVisualInfo(visualInfo);
-    if (ownScreen) {
-        while (!CloseScreen(ownScreen))
-            Delay(50); /* a visitor window is still open on it */
-    }
-    if (menuStrip)
-        FreeMenus(menuStrip);
-    if (pageBuffer)
-        FreeVec(pageBuffer);
+    closeBrowserWindow();
     if (network) {
         ob_webview_save_tls_sessions(TLS_SESSIONS);
         ob_webcore_shutdown();
@@ -840,3 +937,5 @@ int main(int argc, char **argv)
     /* WebCore and JavaScriptCore recurse deeply; give them 2 MB of stack. */
     return oam_run_with_stack(2 * 1024 * 1024, browserMain, argc, argv);
 }
+
+#endif // OB_BROWSER_IN_ENGINE

@@ -17,6 +17,7 @@
 #include <proto/dos.h>
 
 #include "ob_webview.h"
+#include "ob_browser.h"
 #include "oam_stack.h"
 #include "wb_protocol.h"
 #include "libraries/webbrowser.h"
@@ -45,6 +46,7 @@ static struct MsgPort *timerPort;
 static struct timerequest *timerRequest;
 static int timerPending;
 static struct MsgPort *enginePort;
+static int networkUp;                   /* bsdsocket.library and AmiSSL opened */
 static struct WBMessage *current;       /* the message being handled */
 
 /* abort(), replaced: the programs waiting on the engine get WBERR_NOENGINE
@@ -338,6 +340,9 @@ static int handle(struct WBMessage *m)
         if (v)
             ob_webview_wheel(v->web, v->width / 2, v->height / 2, m->arg[0], m->arg[1], 0);
         break;
+    case WBC_BROWSER:
+        m->result = obb_open(m->text, m->arg[0], m->arg[1], m->arg[2], m->arg[3], networkUp) ? 0 : WBERR_NOMEMORY;
+        break;
     case WBC_SHUTDOWN:
         return -1;
     }
@@ -374,7 +379,7 @@ static int serve(int argc, char **argv)
     timerRequest = timerPort ? (struct timerequest *)CreateIORequest(timerPort, sizeof *timerRequest) : NULL;
     if (wakeSignal < 0 || !timerRequest || OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_MICROHZ, (struct IORequest *)timerRequest, 0))
         return 20;
-    network = ob_webcore_init_with_network("PROGDIR:Cookies.db");
+    network = networkUp = ob_webcore_init_with_network("PROGDIR:Cookies.db");
     if (!network && !ob_webcore_init())
         return 20;
     if (network)
@@ -416,13 +421,15 @@ static int serve(int argc, char **argv)
                 ReplyMsg(&m->message);
         }
         checkWaits();
+        obb_update();
         if (!running)
             break;
         next = ob_webcore_next_timer();
         if (next == 0)
             continue;
         armTimer(next);
-        got = Wait((1UL << port->mp_SigBit) | (1UL << wakeSignal) | (1UL << timerPort->mp_SigBit) | SIGBREAKF_CTRL_C);
+        got = Wait((1UL << port->mp_SigBit) | (1UL << wakeSignal) | (1UL << timerPort->mp_SigBit) | obb_signals()
+            | SIGBREAKF_CTRL_C);
         if (got & SIGBREAKF_CTRL_C)
             running = 0;
         if (timerPending && CheckIO((struct IORequest *)timerRequest)) {
@@ -451,6 +458,7 @@ static int serve(int argc, char **argv)
     for (i = 0; i < MAX_VIEWS; i++)
         if (views[i].web)
             ob_webview_destroy(views[i].web);
+    obb_close();
     DeleteMsgPort(port);
     if (timerPending) {
         AbortIO((struct IORequest *)timerRequest);

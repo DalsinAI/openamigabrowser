@@ -20,12 +20,17 @@
 #include <intuition/intuition.h>
 #include <intuition/screens.h>
 #include <workbench/startup.h>
+#include <workbench/workbench.h>
+#include <utility/tagitem.h>
 #include <proto/exec.h>
+#include <proto/icon.h>
 #include <proto/dos.h>
 #include <proto/graphics.h>
 #include <proto/intuition.h>
 
 #include "ob_splash.h"
+#include "libraries/webbrowser.h"
+#include "proto/webbrowser.h"
 
 static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.5 (6.10.2026)";
 
@@ -34,6 +39,7 @@ static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.5 (6.10
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
+struct Library *WebBrowserBase;
 
 static struct Task *mainTask;
 static volatile int splashDone;  /* set, under Forbid, as the title window's process ends */
@@ -232,6 +238,70 @@ static BPTR loadEngine(void)
     return segments;
 }
 
+/* The icon's tool types (JAVASCRIPT=NO, PICTURES=NO, WEBFONTS=YES,
+ * LITE=YES) as webbrowser.library tags. */
+static void toolTypeTags(int argc, char **argv, struct TagItem *tags)
+{
+    struct WBStartup *startup = (struct WBStartup *)argv;
+    struct Library *IconBase;
+    struct DiskObject *icon;
+    BPTR oldDir;
+    STRPTR value;
+    tags[0].ti_Tag = WBA_Scripts;   tags[0].ti_Data = TRUE;
+    tags[1].ti_Tag = WBA_Pictures;  tags[1].ti_Data = TRUE;
+    tags[2].ti_Tag = WBA_WebFonts;  tags[2].ti_Data = FALSE;
+    tags[3].ti_Tag = WBA_Lite;      tags[3].ti_Data = FALSE;
+    tags[4].ti_Tag = TAG_DONE;
+    if (argc != 0 || !startup || !startup->sm_NumArgs)
+        return;
+    if (!(IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 37)))
+        return;
+    oldDir = CurrentDir(startup->sm_ArgList[0].wa_Lock);
+    icon = GetDiskObject(startup->sm_ArgList[0].wa_Name);
+    CurrentDir(oldDir);
+    if (icon) {
+        if ((value = FindToolType((CONST_STRPTR *)icon->do_ToolTypes, (CONST_STRPTR)"JAVASCRIPT")) && MatchToolValue(value, (CONST_STRPTR)"NO"))
+            tags[0].ti_Data = FALSE;
+        if ((value = FindToolType((CONST_STRPTR *)icon->do_ToolTypes, (CONST_STRPTR)"PICTURES")) && MatchToolValue(value, (CONST_STRPTR)"NO"))
+            tags[1].ti_Data = FALSE;
+        if ((value = FindToolType((CONST_STRPTR *)icon->do_ToolTypes, (CONST_STRPTR)"WEBFONTS")) && MatchToolValue(value, (CONST_STRPTR)"YES"))
+            tags[2].ti_Data = TRUE;
+        if ((value = FindToolType((CONST_STRPTR *)icon->do_ToolTypes, (CONST_STRPTR)"LITE")) && MatchToolValue(value, (CONST_STRPTR)"YES"))
+            tags[3].ti_Data = TRUE;
+        FreeDiskObject(icon);
+    }
+    CloseLibrary(IconBase);
+}
+
+/* With webbrowser.library 1.1 or newer installed, the browser window opens
+ * in its resident engine: at once when the engine is already in memory.
+ * Returns -1 when the library is not there (then the engine in this drawer
+ * runs, as before). */
+static LONG openInLibrary(int argc, char **argv, struct Task **splash)
+{
+    struct TagItem tags[5];
+    LONG result;
+    if (!(WebBrowserBase = OpenLibrary((CONST_STRPTR)WEBBROWSER_NAME, 1))
+        && !(WebBrowserBase = OpenLibrary((CONST_STRPTR)"PROGDIR:Libs/" WEBBROWSER_NAME, 1)))
+        return -1;
+    if (WebBrowserBase->lib_Version == 1 && WebBrowserBase->lib_Revision < 1) {
+        CloseLibrary(WebBrowserBase);
+        WebBrowserBase = NULL;
+        return -1;
+    }
+    if (*splash && !FindPort((CONST_STRPTR)WEBBROWSER_ENGINE_PORT))
+        ob_splash("Loading the browser engine", 10);
+    toolTypeTags(argc, argv, tags);
+    result = WB_OpenBrowser((CONST_STRPTR)(argc > 1 ? argv[1] : ""), tags);
+    if (result < 0) {
+        ob_splash("The browser engine did not start", 0);
+        Delay(5 * TICKS_PER_SECOND);
+    }
+    CloseLibrary(WebBrowserBase);
+    WebBrowserBase = NULL;
+    return result < 0 ? RETURN_FAIL : RETURN_OK;
+}
+
 int main(int argc, char **argv)
 {
     struct Process *self = (struct Process *)FindTask(NULL);
@@ -244,7 +314,9 @@ int main(int argc, char **argv)
     mainTask = &self->pr_Task;
     IntuitionBase = (struct IntuitionBase *)OpenLibrary((CONST_STRPTR)"intuition.library", 39);
     GfxBase = (struct GfxBase *)OpenLibrary((CONST_STRPTR)"graphics.library", 39);
-    if (IntuitionBase && GfxBase && !FindPort((CONST_STRPTR)OB_SPLASH_PORT)) {
+    /* No title window when the resident engine is there to open the
+     * browser at once. */
+    if (IntuitionBase && GfxBase && !FindPort((CONST_STRPTR)OB_SPLASH_PORT) && !FindPort((CONST_STRPTR)WEBBROWSER_ENGINE_PORT)) {
         SetSignal(0, SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F);
         splash = (struct Task *)CreateNewProcTags(NP_Entry, (ULONG)splashMain, NP_Name, (ULONG)"OpenBrowser title",
             NP_StackSize, 8192, NP_Priority, 1, TAG_DONE);
@@ -252,8 +324,10 @@ int main(int argc, char **argv)
             Wait(SIGBREAKF_CTRL_F | SIGBREAKF_CTRL_E);
     }
 
-    segments = loadEngine();
-    if (!segments) {
+    if ((result = openInLibrary(argc, argv, &splash)) >= 0) {
+        segments = 0;
+    } else if (!(segments = loadEngine())) {
+        result = RETURN_FAIL;
         ob_splash("OpenBrowser.engine is missing from this drawer", 0);
         if (argc)
             printf("OpenBrowser: cannot load %s\n", ENGINE);

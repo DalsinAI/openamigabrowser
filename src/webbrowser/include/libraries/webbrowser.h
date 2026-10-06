@@ -16,6 +16,11 @@
  * the last program closes the library, so later programs find it ready;
  * WB_Shutdown() ends it. Calls are synchronous and may come from any task.
  *
+ * WB_OpenBrowser(url, tags) opens OpenBrowser's own window in the engine
+ * (or shows the page in it when it is already open): the OpenBrowser icon
+ * does just that, so the browser opens at once while the engine is in
+ * memory.
+ *
  * MIT, Copyright (c) 2026 Dalsin Limited.
  */
 #ifndef LIBRARIES_WEBBROWSER_H
@@ -32,6 +37,8 @@
 #define WBA_Scripts  (WBA_Dummy + 1)   /* BOOL, default TRUE: run the pages' JavaScript */
 #define WBA_Pictures (WBA_Dummy + 2)   /* BOOL, default TRUE */
 #define WBA_Signal   (WBA_Dummy + 3)   /* ULONG signal bit: Signal()led to the opener when the page changes or finishes */
+#define WBA_WebFonts (WBA_Dummy + 4)   /* BOOL, default FALSE: fonts the page downloads (WB_OpenBrowser) */
+#define WBA_Lite     (WBA_Dummy + 5)   /* BOOL, default FALSE: lighter pages (WB_OpenBrowser) */
 
 /* WB_State flags */
 #define WBS_LOADING  (1 << 0)

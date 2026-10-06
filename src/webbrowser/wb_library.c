@@ -25,7 +25,7 @@
 #endif
 
 const char LibName[] = WEBBROWSER_NAME;
-const char LibVersion[] __attribute__((used)) = "$VER: webbrowser.library 1.0 (6.10.2026)";
+const char LibVersion[] __attribute__((used)) = "$VER: webbrowser.library 1.1 (6.10.2026)";
 #define LibIdString (LibVersion + 6)
 
 struct ExecBase *SysBase;
@@ -35,6 +35,9 @@ struct Library *CyberGfxBase;
 static BPTR segList;
 
 #define ENGINE_PATH "LIBS:WebBrowser/WebBrowserEngine"
+/* Not installed: OpenBrowser's drawer, as unpacked, carries the library and
+ * the engine in Libs (PROGDIR: of the program asking). */
+#define ENGINE_PATH_DRAWER "PROGDIR:Libs/WebBrowser/WebBrowserEngine"
 #define ENGINE_WAIT 180                       /* seconds for a cold start on a slow disk */
 
 /* One request, waited for. Returns the engine's result, or WBERR_NOENGINE. */
@@ -74,10 +77,26 @@ static LONG simple(ULONG command, APTR view)
 /* Starts the engine when it is not running, and waits for its port. */
 static int ensureEngine(void)
 {
+    char path[300];
+    BPTR lock;
     int i;
     if (FindPort((CONST_STRPTR)WEBBROWSER_ENGINE_PORT))
         return 1;
-    if (SystemTags((CONST_STRPTR)ENGINE_PATH, SYS_Asynch, TRUE, SYS_Input, Open((CONST_STRPTR)"NIL:", MODE_OLDFILE),
+    /* The engine's full name: the shell that starts it has no PROGDIR: of
+     * ours. */
+    if (!(lock = Lock((CONST_STRPTR)ENGINE_PATH, ACCESS_READ)) && !(lock = Lock((CONST_STRPTR)ENGINE_PATH_DRAWER, ACCESS_READ)))
+        return 0;
+    if (!NameFromLock(lock, (STRPTR)path + 1, sizeof path - 2)) {
+        UnLock(lock);
+        return 0;
+    }
+    UnLock(lock);
+    path[0] = '"';
+    for (i = 1; path[i]; i++)
+        ;
+    path[i] = '"';
+    path[i + 1] = 0;
+    if (SystemTags((CONST_STRPTR)path, SYS_Asynch, TRUE, SYS_Input, Open((CONST_STRPTR)"NIL:", MODE_OLDFILE),
             SYS_Output, Open((CONST_STRPTR)"NIL:", MODE_NEWFILE), NP_Name, (ULONG)"WebBrowserEngine", TAG_DONE) == -1)
         return 0;
     for (i = 0; i < ENGINE_WAIT; i++) {
@@ -277,6 +296,22 @@ static LONG wbScroll(REG(a0, APTR view), REG(d0, LONG dx), REG(d1, LONG dy), REG
     return ask(&m);
 }
 
+static LONG wbOpenBrowser(REG(a0, CONST_STRPTR url), REG(a1, struct TagItem *tags), REG(a6, struct Library *base))
+{
+    struct WBMessage m;
+    (void)base;
+    if (!ensureEngine())
+        return WBERR_NOENGINE;
+    memset(&m, 0, sizeof m);
+    m.command = WBC_BROWSER;
+    m.text = (const char *)url;
+    m.arg[0] = GetTagData(WBA_Scripts, TRUE, tags);
+    m.arg[1] = GetTagData(WBA_Pictures, TRUE, tags);
+    m.arg[2] = GetTagData(WBA_WebFonts, FALSE, tags);
+    m.arg[3] = GetTagData(WBA_Lite, FALSE, tags);
+    return ask(&m);
+}
+
 static LONG wbShutdown(REG(a6, struct Library *base))
 {
     (void)base;
@@ -293,7 +328,7 @@ static struct Library *libInit(REG(d0, struct Library *lib), REG(a0, BPTR seg), 
     lib->lib_Node.ln_Name = (char *)LibName;
     lib->lib_Flags = LIBF_SUMUSED | LIBF_CHANGED;
     lib->lib_Version = 1;
-    lib->lib_Revision = 0;
+    lib->lib_Revision = 1;
     lib->lib_IdString = (APTR)LibIdString;
     DOSBase = (struct DosLibrary *)OpenLibrary((CONST_STRPTR)"dos.library", 37);
     UtilityBase = OpenLibrary((CONST_STRPTR)"utility.library", 37);
@@ -363,6 +398,7 @@ static const APTR funcTable[] = {
     (APTR)wbKey,             /* -108 */
     (APTR)wbScroll,          /* -114 */
     (APTR)wbShutdown,        /* -120 */
+    (APTR)wbOpenBrowser,     /* -126 */
     (APTR)-1
 };
 

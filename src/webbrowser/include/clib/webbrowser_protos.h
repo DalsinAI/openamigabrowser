@@ -21,5 +21,6 @@ LONG WB_Mouse(APTR view, LONG type, LONG x, LONG y, LONG button);
 LONG WB_Key(APTR view, LONG down, LONG rawKey, CONST_STRPTR text, LONG qualifiers);
 LONG WB_Scroll(APTR view, LONG dx, LONG dy);
 LONG WB_Shutdown(void);
+LONG WB_OpenBrowser(CONST_STRPTR url, struct TagItem *tags);
 
 #endif

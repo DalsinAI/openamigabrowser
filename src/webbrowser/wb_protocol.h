@@ -24,7 +24,8 @@ enum {
     WBC_MOUSE,       /* arg 0: type, 1: x, 2: y, 3: button */
     WBC_KEY,         /* arg 0: down, 1: raw key, 2: qualifiers; text: the characters */
     WBC_SCROLL,      /* arg 0, 1: dx, dy */
-    WBC_SHUTDOWN
+    WBC_SHUTDOWN,
+    WBC_BROWSER      /* text: the URL (or NULL); arg 0-3: scripts, pictures, web fonts, lite */
 };
 
 struct WBMessage {
