@@ -2,7 +2,7 @@
 
 Copyright (c) 2026 Dalsin Limited. MIT licence for this document and our own code; WebKit and JavaScriptCore parts keep their LGPL/BSD notices.
 
-Written 4 Oct 2026 after Dale's direction, relayed word for word by the main session: "the webkit browser project needs to move to a new phase, a gadtools ui, datatype support, and get it a useable browser."
+Written 4 Oct 2026 after our direction, relayed word for word by the main session: "the webkit browser project needs to move to a new phase, a gadtools ui, datatype support, and get it a useable browser."
 
 ## Where it stands (4 Oct 2026)
 
