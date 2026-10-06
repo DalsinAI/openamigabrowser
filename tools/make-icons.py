@@ -19,14 +19,16 @@ import sys
 import numpy as np
 from PIL import Image
 
-W = H = 46          # GlowIcons size
+W = H = 64          # the icon, sized for the new icon set (64 x 64)
+DRAW = 46           # drawn in 46-unit coordinates, scaled to fill it
 SS = 8              # supersampling
+ART = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'icons', 'art')
 
 # --- drawing ---------------------------------------------------------------
 
 def grid():
     ys, xs = np.mgrid[0:H * SS, 0:W * SS].astype(np.float64)
-    return (xs + 0.5) / SS, (ys + 0.5) / SS
+    return (xs + 0.5) / SS * DRAW / W, (ys + 0.5) / SS * DRAW / H
 
 
 X, Y = grid()
@@ -157,13 +159,31 @@ def globe(cv, cx, cy, r, ring=True, clip=None):
     return sd
 
 
+def art(name):
+    """A picture from icons/art (64 x 64 RGBA, drawn to match the new icon
+    set's isometric drawers; openamigaup's tools/open_icons_art.py), with the
+    see-through cut at the same point as the drawn ones; None if it isn't there."""
+    path = os.path.join(ART, name + '.png')
+    if not os.path.isfile(path):
+        return None
+    out = np.array(Image.open(path).convert('RGBA').resize((W, H), Image.LANCZOS), np.uint8)
+    solid = out[..., 3] >= 110
+    out[..., 3] = np.where(solid, 255, 0)
+    out[~solid, :3] = 0
+    return out
+
+
 def program_icon():
+    if art('program') is not None:
+        return art('program')
     cv = Canvas()
     globe(cv, 23, 23, 14.2)
     return cv.image()
 
 
 def drawer_icon():
+    if art('drawer') is not None:
+        return art('drawer')
     cv = Canvas()
     # back of the drawer: its open top seen from above
     top = polygon([(10, 15), (36, 15), (41, 22), (5, 22)])
@@ -341,7 +361,7 @@ def bstr(s):
     return struct.pack('>I', len(s)) + s
 
 
-def info(kind, normal, selected, default_tool=None, tooltypes=(), stack=0):
+def info(kind, normal, selected, default_tool=None, tooltypes=(), stack=0, at=None):
     is_drawer = kind in (WBDISK, WBDRAWER)
     gadget = struct.pack('>IhhhhHHHIIIIIHI',
                          0, 0, 0, W, H,
@@ -354,13 +374,13 @@ def info(kind, normal, selected, default_tool=None, tooltypes=(), stack=0):
         '>BBIIIIIII', kind, 0,
         1 if default_tool else 0,
         1 if tooltypes else 0,
-        NO_ICON_POSITION, NO_ICON_POSITION,
+        *(at or (NO_ICON_POSITION, NO_ICON_POSITION)),
         1 if is_drawer else 0,
         0, stack)
     out = head
     if is_drawer:
         newwin = struct.pack('>hhhhBBIIIIIIIhhhhH',
-                             50, 40, 400, 200, 255, 255, 0, 0, 0, 0, 0, 0, 0,
+                             120, 80, 366, 152, 255, 255, 0, 0, 0, 0, 0, 0, 0,   # sized to its two icons
                              90, 40, -1, -1, 1)   # WBENCHSCREEN
         out += newwin + struct.pack('>ii', 0, 0)
     out += planar(normal)
@@ -381,9 +401,9 @@ def main():
     os.makedirs(os.path.join(outdir, 'OpenBrowser'), exist_ok=True)
     icons = [
         ('OpenBrowser.info', WBDRAWER, drawer_icon(), {}),
-        ('OpenBrowser/OpenBrowser.info', WBTOOL, program_icon(), {'stack': 65536}),
+        ('OpenBrowser/OpenBrowser.info', WBTOOL, program_icon(), {'stack': 65536, 'at': (60, 12)}),
         ('OpenBrowser/OpenBrowser.readme.info', WBPROJECT, readme_icon(),
-         {'default_tool': 'SYS:Utilities/MultiView'}),
+         {'default_tool': 'SYS:Utilities/MultiView', 'at': (220, 12)}),
     ]
     previews = []
     for name, kind, img, extra in icons:
