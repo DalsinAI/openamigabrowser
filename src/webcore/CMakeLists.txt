@@ -139,6 +139,20 @@ WEBKIT_EXECUTABLE_DECLARE(obcore-view)
 WEBKIT_EXECUTABLE(obcore-view)
 OB_LINK(obcore-view)
 
+# WebBrowserEngine: the one engine behind webbrowser.library
+# (src/webbrowser), serving every program's views through a public port.
+set(WebBrowserEngine_SOURCES
+    ${OB_PROGRAM_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../webbrowser/wb_engine.c
+)
+set(WebBrowserEngine_FRAMEWORKS ${OB_FRAMEWORKS})
+set(WebBrowserEngine_PRIVATE_INCLUDE_DIRECTORIES ${OB_PRIVATE_INCLUDE_DIRECTORIES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../webbrowser ${CMAKE_CURRENT_SOURCE_DIR}/../webbrowser/include)
+set(WebBrowserEngine_SYSTEM_INCLUDE_DIRECTORIES ${OB_SYSTEM_INCLUDE_DIRECTORIES})
+WEBKIT_EXECUTABLE_DECLARE(WebBrowserEngine)
+WEBKIT_EXECUTABLE(WebBrowserEngine)
+OB_LINK(WebBrowserEngine)
+
 # OpenBrowser.engine: the browser window (GadTools) around the page layer.
 # The launcher below loads and runs it.
 set(OpenBrowser_SOURCES

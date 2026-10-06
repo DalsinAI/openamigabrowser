@@ -22,6 +22,8 @@
 #include <WebCore/NodeDocument.h>
 #include <WebCore/CommonAtomStrings.h>
 #include <WebCore/EventHandler.h>
+#include <WebCore/HTMLElement.h>
+#include <WebCore/Document.h>
 #include <WebCore/FocusController.h>
 #include <WebCore/HandleUserInputEventResult.h>
 #include <WebCore/LocalFrame.h>
@@ -285,6 +287,24 @@ void ob_webview_resize(OBWebView* handle, int width, int height)
 void ob_webview_paint(OBWebView* handle, unsigned char* argb, int stride, int x, int y, int width, int height)
 {
     handle->view->paint(argb, stride, IntRect(x, y, width, height));
+}
+
+int ob_webview_text(OBWebView* handle, char* buffer, int size)
+{
+    auto* frame = handle->view->mainFrame();
+    RefPtr document = frame ? frame->document() : nullptr;
+    RefPtr root = document ? document->documentElement() : nullptr;
+    if (buffer && size > 0)
+        buffer[0] = 0;
+    if (!root)
+        return 0;
+    CString text = protect(*root)->innerText().utf8();
+    if (buffer && size > 0) {
+        int length = std::min<int>(text.length(), size - 1);
+        memcpy(buffer, text.data(), length);
+        buffer[length] = 0;
+    }
+    return static_cast<int>(text.length());
 }
 
 void ob_webview_report_display_list(OBWebView* handle, unsigned char* direct, unsigned char* replayed, int stride,
