@@ -1,0 +1,62 @@
+diff --git a/Source/WebCore/platform/graphics/ImageAdapter.cpp b/Source/WebCore/platform/graphics/ImageAdapter.cpp
+index 97f5549259..54723f74a2 100644
+--- a/Source/WebCore/platform/graphics/ImageAdapter.cpp
++++ b/Source/WebCore/platform/graphics/ImageAdapter.cpp
+@@ -36,7 +36,12 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(ImageAdapter);
+ #if !PLATFORM(COCOA) && !PLATFORM(GTK) && !PLATFORM(WIN) && !PLATFORM(WPE)
+ Ref<BitmapImage> ImageAdapter::loadPlatformResource(const char* resource)
+ {
++#if PLATFORM(AMIGA)
++    // No built-in pictures yet: a picture that cannot be shown draws nothing.
++    UNUSED_PARAM(resource);
++#else
+     WTFLogAlways("WARNING: trying to load platform resource '%s'", resource);
++#endif
+     return BitmapImage::create();
+ }
+ 
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.cpp b/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.cpp
+index 5a76532d09..5d7f1a0a75 100644
+--- a/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.cpp
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesImageDecoder.cpp
+@@ -94,6 +94,20 @@ static std::optional<IntSize> sizeFromHeader(std::span<const uint8_t> data)
+         }
+         return std::nullopt;
+     }
++    // WebP: RIFF, then a VP8 (lossy), VP8L (lossless) or VP8X (extended)
++    // chunk, each with the size in a different place.
++    if (data.size() >= 30 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F'
++        && data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P'
++        && data[12] == 'V' && data[13] == 'P' && data[14] == '8') {
++        if (data[15] == ' ' && data[23] == 0x9d && data[24] == 0x01 && data[25] == 0x2a)
++            return IntSize(readLittleEndian16(data, 26) & 0x3fff, readLittleEndian16(data, 28) & 0x3fff);
++        if (data[15] == 'L' && data[20] == 0x2f) {
++            uint32_t bits = data[21] | data[22] << 8 | data[23] << 16 | static_cast<uint32_t>(data[24]) << 24;
++            return IntSize((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1);
++        }
++        if (data[15] == 'X')
++            return IntSize((data[24] | data[25] << 8 | data[26] << 16) + 1, (data[27] | data[28] << 8 | data[29] << 16) + 1);
++    }
+     // IFF ILBM: the BMHD chunk.
+     if (data.size() >= 24 && data[0] == 'F' && data[1] == 'O' && data[2] == 'R' && data[3] == 'M'
+         && data[8] == 'I' && data[9] == 'L' && data[10] == 'B' && data[11] == 'M'
+diff --git a/Source/WebCore/platform/network/curl/CookieJarDB.cpp b/Source/WebCore/platform/network/curl/CookieJarDB.cpp
+index 3c56c7dff8..4786bda2c2 100644
+--- a/Source/WebCore/platform/network/curl/CookieJarDB.cpp
++++ b/Source/WebCore/platform/network/curl/CookieJarDB.cpp
+@@ -168,7 +168,15 @@ bool CookieJarDB::openDatabase()
+         }
+     }
+ 
++#if PLATFORM(AMIGA)
++    // Each change would otherwise write, sync and delete a journal file on
++    // the disk, slow on an Amiga; a crash can lose the latest cookies only.
++    m_database.setSynchronous(SQLiteDatabase::SyncOff);
++    if (auto statement = m_database.prepareStatement("PRAGMA journal_mode=MEMORY"_s))
++        statement->step();
++#else
+     m_database.setSynchronous(SQLiteDatabase::SyncNormal);
++#endif
+ 
+     // create prepared statements
+     createPrepareStatement(SET_COOKIE_SQL);

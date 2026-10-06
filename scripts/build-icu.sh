@@ -11,8 +11,12 @@
 #                   the one holding config/icucross.mk and bin/icupkg
 #   OS32_GCC16      stove root (prefix/, compat/)
 #   OAB_DEPS        output root; installs into $OAB_DEPS/icu78-m68k-amigaos
+#   ICU_DATA_KEEP   list of the data items to keep (default icu/data-keep.lst:
+#                   the root and English locales; "all" keeps everything)
 #   JOBS            parallel jobs (default 2)
 set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 : "${ICU_SRC:?set ICU_SRC to the patched icu folder}"
 : "${ICU_HOST_BUILD:?set ICU_HOST_BUILD to a host ICU 78.3 build}"
 S=${OS32_GCC16:-"$HOME/AmigaChrome/stoves/os32-gcc16"}
@@ -20,7 +24,7 @@ P=$S/prefix
 OUT=${OAB_DEPS:-"$HOME/openbrowser-deps"}
 JOBS=${JOBS:-2}
 WORK=$OUT/icu-build
-F="-O2 -m68020 -m68881"
+F="-O2 $(echo "${OS32_CPU_FLAGS:--m68020 -m68881}" | sed "s/-mcrt=[a-z0-9]*//")"
 
 rm -rf "$WORK" "$OUT/icu78-m68k-amigaos"
 mkdir -p "$WORK"
@@ -44,6 +48,15 @@ gmake install > install.log 2>&1
 D=$WORK/icudata-incbin
 mkdir -p "$D"
 cp data/out/icudt78b.dat "$D/"
+# Keep only the data OpenBrowser uses: every program carries it, and loading
+# it is part of each start.
+KEEP=${ICU_DATA_KEEP:-"$ROOT/icu/data-keep.lst"}
+if [ "$KEEP" != all ]; then
+    rm -rf "$WORK/icudata-items" && mkdir -p "$WORK/icudata-items"
+    LD_LIBRARY_PATH="$ICU_HOST_BUILD/lib" "$ICU_HOST_BUILD/bin/icupkg" -x '*' -d "$WORK/icudata-items" data/out/icudt78b.dat
+    rm -f "$D/icudt78b.dat"
+    LD_LIBRARY_PATH="$ICU_HOST_BUILD/lib" "$ICU_HOST_BUILD/bin/icupkg" -tb -s "$WORK/icudata-items" -a "$KEEP" new "$D/icudt78b.dat"
+fi
 cat > "$D/icudt78_dat.s" <<'S'
 	.globl	_icudt78_dat
 	.data

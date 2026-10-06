@@ -1,0 +1,85 @@
+From 8bb2215084df88bab6c9d693f48103d3fbd04e50 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 03:01:22 +0100
+Subject: [PATCH] WTF: CompactVariant payloads in the low bytes on big-endian
+ CPUs
+
+A 4-byte payload placed at the start of the 64-bit storage lands in its
+high half on a big-endian CPU, over the index and the top byte, so a
+conic-gradient stop at 360deg (float 0x43b40000) hit the RELEASE_ASSERT
+and the page aborted.
+---
+ Source/WTF/wtf/CompactVariantOperations.h | 22 +++++++++++++++++-----
+ 1 file changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/Source/WTF/wtf/CompactVariantOperations.h b/Source/WTF/wtf/CompactVariantOperations.h
+index 4f734fb16b..36a94bab52 100644
+--- a/Source/WTF/wtf/CompactVariantOperations.h
++++ b/Source/WTF/wtf/CompactVariantOperations.h
+@@ -79,6 +79,18 @@ template<CompactVariantAlternative... Ts> struct CompactVariantOperations {
+     static constexpr Storage topByteShift = 64 - 8;
+     static constexpr Storage topByteMask = 0xFFULL << topByteShift;
+ 
++    // Where a payload held in place lives inside the Storage: its first
++    // bytes on a little-endian CPU, its last (low-order) bytes on a
++    // big-endian one, so that it never reaches the index or the top byte.
++    template<typename T> static void* payloadAddress(Storage& data)
++    {
++#if CPU(BIG_ENDIAN)
++        return reinterpret_cast<char*>(&data) + sizeof(Storage) - sizeof(T);
++#else
++        return &data;
++#endif
++    }
++
+     static constexpr Storage encodedIndex(Index index)
+     {
+         return static_cast<Storage>(index) << indexShift;
+@@ -96,7 +108,7 @@ template<CompactVariantAlternative... Ts> struct CompactVariantOperations {
+         if constexpr (CompactVariantTraits<T>::hasAlternativeRepresentation)
+             data = CompactVariantTraits<T>::encode(std::forward<U>(payload));
+         else
+-            new (NotNull, &data) T(std::forward<U>(payload));
++            new (NotNull, payloadAddress<T>(data)) T(std::forward<U>(payload));
+ 
+         // For data other than pointers, ensure the data doesn't overwrite the top byte.
+         // (i.e top byte should be zero)
+@@ -119,7 +131,7 @@ template<CompactVariantAlternative... Ts> struct CompactVariantOperations {
+         if constexpr (CompactVariantTraits<T>::hasAlternativeRepresentation)
+             data = CompactVariantTraits<T>::encodeFromArguments(std::forward<Args>(arguments)...);
+         else
+-            new (NotNull, &data) T(std::forward<Args>(arguments)...);
++            new (NotNull, payloadAddress<T>(data)) T(std::forward<Args>(arguments)...);
+ 
+         // For data other than pointers, ensure the data doesn't overwrite the top byte.
+         // (i.e top byte should be zero)
+@@ -143,7 +155,7 @@ template<CompactVariantAlternative... Ts> struct CompactVariantOperations {
+             T decodedData = CompactVariantTraits<T>::decode(maskedData);
+             return f(decodedData);
+         } else {
+-            T& decodedData = *std::launder(reinterpret_cast<T*>(&maskedData));
++            T& decodedData = *std::launder(reinterpret_cast<T*>(payloadAddress<T>(maskedData)));
+             return f(decodedData);
+         }
+     }
+@@ -156,7 +168,7 @@ template<CompactVariantAlternative... Ts> struct CompactVariantOperations {
+             T decodedData = CompactVariantTraits<T>::decode(maskedData);
+             return f(std::as_const(decodedData));
+         } else {
+-            T& decodedData = *std::launder(reinterpret_cast<T*>(&maskedData));
++            T& decodedData = *std::launder(reinterpret_cast<T*>(payloadAddress<T>(maskedData)));
+             return f(std::as_const(decodedData));
+         }
+     }
+@@ -230,7 +242,7 @@ template<CompactVariantAlternative... Ts> struct CompactVariantOperations {
+         if constexpr (CompactVariantTraits<T>::hasAlternativeRepresentation)
+             return CompactVariantTraits<T>::decode(maskedA) == CompactVariantTraits<T>::decode(maskedB);
+         else
+-            return *std::launder(reinterpret_cast<T*>(&maskedA)) == *std::launder(reinterpret_cast<T*>(&maskedB));
++            return *std::launder(reinterpret_cast<T*>(payloadAddress<T>(maskedA))) == *std::launder(reinterpret_cast<T*>(payloadAddress<T>(maskedB)));
+     }
+ };
+ 
+-- 
+2.53.0
+

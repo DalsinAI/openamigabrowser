@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>forin</title></head>
+<body><script>
+// for-in over objects and arrays: each loop gives up after 100 steps, so a
+// loop that never ends shows as "runaway" instead of hanging the page.
+// MIT, Copyright (c) 2026 Dalsin Limited.
+var o = { a: 1, b: 2, c: 3, d: 4 }, arr = [10, 20, 30], r = [];
+function run(name, f) {
+    try { r.push(name + '=' + f()); } catch (e) { r.push(name + ' THREW ' + e); }
+}
+run('names', function () { var a = []; for (var k in o) { a.push(k); if (a.length > 100) return 'runaway'; } return a.join(''); });
+run('sum', function () { var s = 0, n = 0; for (var k in o) { s += o[k]; if (++n > 100) return 'runaway'; } return s; });
+run('array', function () { var a = []; for (var k in arr) { a.push(k); if (a.length > 100) return 'runaway'; } return a.join(''); });
+run('big', function () {
+    var b = {}, n = 0, s = 0;
+    for (var i = 0; i < 1000; i++)
+        b['k' + i] = i;
+    for (var k in b) { s += b[k]; if (++n > 2000) return 'runaway'; }
+    return n + '/' + s;
+});
+document.title = 'forin ' + r.join(' ');
+</script></body></html>

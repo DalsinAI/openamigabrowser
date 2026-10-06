@@ -1,0 +1,27 @@
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+index 3c3934af8a..dcbe958183 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+@@ -2224,7 +2224,10 @@ llintOpWithReturn(op_jeq_ptr, OpJeqPtr, macro (size, get, dispatch, return)
+     get(m_value, t0)
+     get(m_specialPointer, t1)
+     loadConstant(size, t1, t2)
+-    bpeq t2, [cfr, t0, 8], .opJeqPtrTarget
++    # Compare the whole value: with 32-bit pointers on a big-endian CPU, a
++    # pointer-sized load from the 8-byte slot reads its high half.
++    loadq [cfr, t0, 8], t0
++    bqeq t2, t0, .opJeqPtrTarget
+     dispatch()
+ 
+ .opJeqPtrTarget:
+@@ -2237,7 +2240,9 @@ llintOpWithMetadata(op_jneq_ptr, OpJneqPtr, macro (size, get, dispatch, metadata
+     get(m_value, t0)
+     get(m_specialPointer, t1)
+     loadConstant(size, t1, t2)
+-    bpneq t2, [cfr, t0, 8], .opJneqPtrTarget
++    # As in op_jeq_ptr: compare the whole value.
++    loadq [cfr, t0, 8], t0
++    bqneq t2, t0, .opJneqPtrTarget
+     dispatch()
+ 
+ .opJneqPtrTarget:

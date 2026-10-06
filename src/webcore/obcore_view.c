@@ -6,24 +6,70 @@
  *
  *   obcore-view <file.html> [width height] [page.png]
  *   obcore-view -url <address> [width height] [page.png]
+ *   obcore-view -dl ...   also paint through WebKit's display list (twice:
+ *                         the second time with caches warm), report the
+ *                         commands and timings, and save the replayed
+ *                         picture as page-dl.png beside page.png
  *
  * MIT, Copyright (c) 2026 Dalsin Limited.
  */
 #include <stdio.h>
 #include <time.h>
+#include <sys/time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <cairo.h>
 #include <proto/dos.h>
+#include <proto/exec.h>
+#include <dos/dosextens.h>
+#include <unistd.h>
 
 #include "ob_webview.h"
 #include "oam_stack.h"
 
 static const char version[] __attribute__((used)) = "$VER: obcore-view 0.1 (4.10.2026)";
 
+/* abort(), replaced so a crash says where it came from: the return
+ * addresses on the stack that lie in our code, as offsets for the link map. */
+static ULONG codeStart, codeEnd;
+
+void abort(void)
+{
+    struct Task *task = FindTask(NULL);
+    ULONG here = 0, *p = &here, *top = (ULONG *)task->tc_SPUpper;
+    int n = 0;
+    printf("OBVIEW_ABORT in %s:", task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "?");
+    for (; p < top && n < 160; p++)
+        if (*p >= codeStart && *p < codeEnd) {
+            printf(" %lx", (unsigned long)(*p - codeStart));
+            n++;
+        }
+    printf("\n");
+    fflush(stdout);
+    Wait(SIGBREAKF_CTRL_C);
+    _exit(20);
+}
+
+static void findCode(void)
+{
+    struct Process *process = (struct Process *)FindTask(NULL);
+    BPTR segList = 0;
+    if (process->pr_CLI)
+        segList = ((struct CommandLineInterface *)BADDR(process->pr_CLI))->cli_Module;
+    if (!segList && process->pr_SegList)
+        segList = ((BPTR *)BADDR(process->pr_SegList))[3];
+    if (segList) {
+        ULONG *segment = BADDR(segList);
+        codeStart = (ULONG)(segment + 1);
+        codeEnd = (ULONG)segment - 4 + segment[-1];
+    }
+}
+
+static const char *tlsFile;  /* -tls: TLS sessions kept across runs */
 static int loading = -1;   /* -1 not started yet, 1 loading, 0 done */
 static int invalidations;
 static long busyCycles, waits;  /* run loop turns with work waiting, and waits */
+static time_t startTime;        /* for the seconds in OBVIEW_CREATED and OBVIEW_RAN */
 
 static void onInvalidate(void *context, int x, int y, int w, int h)
 {
@@ -69,10 +115,21 @@ static void onConsole(void *context, const char *message, int line, const char *
     printf("OBVIEW_CONSOLE %s (%s:%d)\n", message, source, line);
 }
 
+/* Milliseconds since the program started, for the resource lines. */
+static long sinceStart(void)
+{
+    static struct timeval first;
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    if (!first.tv_sec)
+        first = now;
+    return (now.tv_sec - first.tv_sec) * 1000L + (now.tv_usec - first.tv_usec) / 1000L;
+}
+
 static void onResource(void *context, const char *url, int started, const char *error)
 {
     (void)context;
-    printf("OBVIEW_%s %.200s%s%s\n", started ? "REQUEST" : "LOADED", url, error ? " FAILED: " : "", error ? error : "");
+    printf("OBVIEW_%s [%ld ms] %.200s%s%s\n", started ? "REQUEST" : "LOADED", sinceStart(), url, error ? " FAILED: " : "", error ? error : "");
     fflush(stdout);
 }
 
@@ -163,11 +220,51 @@ static void typeText(OBWebView *view, const char *text)
     }
 }
 
+/* -dl: paint directly and through the display list, twice, then compare
+ * the two pictures pixel by pixel and save the replayed one. */
+static void reportDisplayList(OBWebView *view, int width, int height, const char *png)
+{
+    size_t size = (size_t)width * height * 4, i, differing = 0;
+    unsigned char *direct = calloc(size, 1), *replayed = calloc(size, 1);
+    int pass;
+    if (!direct || !replayed) {
+        printf("OBVIEW_DL no memory\n");
+        free(direct);
+        free(replayed);
+        return;
+    }
+    for (pass = 1; pass <= 2; pass++) {
+        printf("OBVIEW_DL_PASS %d\n", pass);
+        ob_webview_report_display_list(view, direct, replayed, width * 4, 0, 0, width, height);
+    }
+    for (i = 0; i < size; i += 4) {
+        if (memcmp(direct + i, replayed + i, 4))
+            differing++;
+    }
+    printf("OBVIEW_DL_DIFF %lu of %lu pixels differ\n", (unsigned long)differing, (unsigned long)(size / 4));
+    if (png) {
+        char name[256];
+        const char *dot = strrchr(png, '.');
+        size_t stem = dot ? (size_t)(dot - png) : strlen(png);
+        cairo_surface_t *surface;
+        if (stem > sizeof(name) - 8)
+            stem = sizeof(name) - 8;
+        memcpy(name, png, stem);
+        strcpy(name + stem, "-dl.png");
+        surface = cairo_image_surface_create_for_data(replayed, CAIRO_FORMAT_ARGB32, width, height, width * 4);
+        printf("OBVIEW_DL_PNG %s %s\n", name, cairo_status_to_string(cairo_surface_write_to_png(surface, name)));
+        cairo_surface_destroy(surface);
+    }
+    fflush(stdout);
+    free(direct);
+    free(replayed);
+}
+
 static int viewMain(int argc, char **argv)
 {
     OBWebViewCallbacks callbacks = { 0 };
     OBWebView *view;
-    int width = 800, height = 600, argi = 1, isURL = 0, inputTest = 0;
+    int width = 800, height = 600, argi = 1, isURL = 0, inputTest = 0, displayList = 0;
     double seconds = 120.0;
     const char *source, *png = NULL;
     unsigned char *pixels;
@@ -177,9 +274,17 @@ static int viewMain(int argc, char **argv)
         seconds = atof(argv[argi + 1]);
         argi += 2;
     }
+    if (argc > argi + 1 && !strcmp(argv[argi], "-tls")) {
+        tlsFile = argv[argi + 1];          /* TLS sessions: read before, saved after */
+        argi += 2;
+    }
     if (argc > argi && !strcmp(argv[argi], "-input")) {
         /* After the load: click at (30, 35), type an address, click at (30, 110). */
         inputTest = 1;
+        argi++;
+    }
+    if (argc > argi && !strcmp(argv[argi], "-dl")) {
+        displayList = 1;
         argi++;
     }
     if (argc > argi && !strcmp(argv[argi], "-url")) {
@@ -187,7 +292,7 @@ static int viewMain(int argc, char **argv)
         argi++;
     }
     if (argc <= argi) {
-        printf("usage: obcore-view [-wait seconds] [-input] [-url] <file.html|address> [width height] [page.png]\n");
+        printf("usage: obcore-view [-wait seconds] [-tls file] [-input] [-dl] [-url] <file.html|address> [width height] [page.png]\n");
         return 10;
     }
     source = argv[argi++];
@@ -211,6 +316,9 @@ static int viewMain(int argc, char **argv)
         printf("OBVIEW_FAIL init%s\n", isURL ? " (bsdsocket.library or AmiSSL)" : "");
         return 20;
     }
+    sinceStart();
+    if (isURL && tlsFile)
+        printf("OBVIEW_TLS %d sessions read\n", ob_webview_load_tls_sessions(tlsFile));
     callbacks.invalidate = onInvalidate;
     callbacks.title = onTitle;
     callbacks.url = onURL;
@@ -220,7 +328,7 @@ static int viewMain(int argc, char **argv)
     callbacks.console = onConsole;
     callbacks.resource = onResource;
     view = ob_webview_create(width, height, &callbacks);
-    printf("OBVIEW_CREATED %dx%d\n", width, height);
+    printf("OBVIEW_CREATED %dx%d after %lds\n", width, height, (long)(time(NULL) - startTime));
     fflush(stdout);
 
     if (isURL)
@@ -239,9 +347,12 @@ static int viewMain(int argc, char **argv)
         click(view, 30, 110);
         run(3.0);
     }
-    printf("OBVIEW_RAN loading=%d invalidations=%d cycles=%ld waits=%ld\n", loading, invalidations, busyCycles, waits);
+    printf("OBVIEW_RAN loading=%d invalidations=%d cycles=%ld waits=%ld at %lds\n", loading, invalidations, busyCycles, waits,
+        (long)(time(NULL) - startTime));
     fflush(stdout);
 
+    if (displayList)
+        reportDisplayList(view, width, height, png);
     pixels = calloc((size_t)width * height, 4);
     if (pixels) {
         ob_webview_paint(view, pixels, width * 4, 0, 0, width, height);
@@ -255,8 +366,12 @@ static int viewMain(int argc, char **argv)
         free(pixels);
     }
     ob_webview_destroy(view);
+    if (isURL && tlsFile)
+        ob_webview_save_tls_sessions(tlsFile);
     if (isURL)
         ob_webcore_shutdown();
+    else
+        ob_webcore_stop_threads();
     free(html);
     printf("OBVIEW_DONE\n");
     fflush(stdout);
@@ -265,5 +380,7 @@ static int viewMain(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    findCode();
+    startTime = time(NULL);
     return oam_run_with_stack(2 * 1024 * 1024, viewMain, argc, argv);
 }

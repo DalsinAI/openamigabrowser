@@ -73,10 +73,21 @@ OpenBrowser on WebCore needs, besides the compiler and ICU above, the
 libraries from the OpenAmiga ports (cairo and pixman, FreeType, HarfBuzz,
 fontconfig, Expat, libxml2, SQLite, curl, libpsl, zlib and libpng; see
 https://github.com/DalsinAI/openamiga) built into one prefix, and the AmiSSL 5
-SDK. Then apply all three patches in `webkit/` and run
+SDK. Then apply the patches in `webkit/` and run
 `WEBKIT_SOURCE=... OAB_DEPS=... AMISSL_SDK=... scripts/build-webcore.sh`.
-The programs are large (about 120 MB each, stripped) and need a 68020 or
+The programs are large (about 100 MB each, stripped) and need a 68020 or
 better with an FPU and plenty of Fast RAM.
+
+The build has two halves. The engine (WebKit's WebCore, JavaScriptCore,
+WTF, PAL and bmalloc) is built by `build-webcore.sh build-engine`, and only
+when its fingerprint changes: the WebKit tree, the compiler, the libraries'
+headers or the build options. OpenBrowser's own code is built by
+`build-webcore.sh build-browser` (and `build-tests` for `obcore-view` and
+`obcore-dump`), which compiles only OpenBrowser's files and relinks: about
+15 seconds for a one-file change. The compiler runs through ccache when it is
+installed, and a new build folder uses Ninja when it is installed. Every
+build adds a line to `build-report.txt` in the build folder. The commands
+and settings are listed at the top of `scripts/build-webcore.sh`.
 
 ## Licence
 
