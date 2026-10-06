@@ -35,6 +35,15 @@ If the engine crashes, the programs waiting on it get `WBERR_NOENGINE`, and
 the engine prints the code offsets of the crash (for its link map) on its
 output.
 
+## OpenBrowser uses it too
+
+The OpenBrowser icon starts a small launcher that calls `WB_OpenBrowser()`:
+the engine opens OpenBrowser's window (the same code as the stand-alone
+browser, `src/webcore/ob_browser.c`), or shows the page in the window
+already open. The first launch loads the engine (about 8 s on the 68040
+bench); later launches, while it is in memory, open in about 2 s. Closing
+the window leaves the engine resident; `WB_Shutdown()` ends it.
+
 ## Installing
 
 ```
@@ -47,6 +56,11 @@ LIBS:WebBrowser/fontconfig/fonts.conf  (its dir is PROGDIR:Fonts)
 The engine keeps its cookies in `LIBS:WebBrowser/Cookies.db` and its TLS
 sessions in `LIBS:WebBrowser/TLSSessions`. Without the fonts it stops at
 the first page.
+
+Not installed, OpenBrowser still works from its drawer as unpacked: the
+launcher opens `PROGDIR:Libs/webbrowser.library`, and the library starts
+`PROGDIR:Libs/WebBrowser/WebBrowserEngine` when `LIBS:WebBrowser` has no
+engine.
 
 ## Calls
 
@@ -68,6 +82,7 @@ the first page.
 | `WB_Key(view, down, rawKey, text, qualifiers)` | -108 | |
 | `WB_Scroll(view, dx, dy)` | -114 | |
 | `WB_Shutdown()` | -120 | ends the engine |
+| `WB_OpenBrowser(url, tags)` | -126 | OpenBrowser's window (1.1); tags `WBA_Scripts`, `WBA_Pictures`, `WBA_WebFonts`, `WBA_Lite` |
 
 Headers: `src/webbrowser/include` (`libraries/webbrowser.h`,
 `proto/webbrowser.h`, `inline/webbrowser.h`, `clib/webbrowser_protos.h`).
