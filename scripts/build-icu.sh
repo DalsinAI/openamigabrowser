@@ -55,7 +55,7 @@ if [ "$KEEP" != all ]; then
     rm -rf "$WORK/icudata-items" && mkdir -p "$WORK/icudata-items"
     LD_LIBRARY_PATH="$ICU_HOST_BUILD/lib" "$ICU_HOST_BUILD/bin/icupkg" -x '*' -d "$WORK/icudata-items" data/out/icudt78b.dat
     rm -f "$D/icudt78b.dat"
-    LD_LIBRARY_PATH="$ICU_HOST_BUILD/lib" "$ICU_HOST_BUILD/bin/icupkg" -tb -s "$WORK/icudata-items" -a "$KEEP" new "$D/icudt78b.dat"
+    LD_LIBRARY_PATH="$ICU_HOST_BUILD/lib" "$ICU_HOST_BUILD/bin/icupkg" --ignore-deps -tb -s "$WORK/icudata-items" -a "$KEEP" new "$D/icudt78b.dat"
 fi
 cat > "$D/icudt78_dat.s" <<'S'
 	.globl	_icudt78_dat
