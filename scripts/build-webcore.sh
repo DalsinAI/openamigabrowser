@@ -256,6 +256,7 @@ configure_engine() {
       -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain/amigaos3-gcc16.cmake" \
       -DCMAKE_BUILD_TYPE=MinSizeRel \
       -DENABLE_WEBCORE=ON \
+      -DJSC_M68K_LLINT=ON \
       -DOPENBROWSER_WEBCORE_DIR="$ROOT/src/webcore" \
       -DOPENSSL_INCLUDE_DIR="$AMISSL_SDK/include" \
       -DOPENSSL_SSL_LIBRARY="$AMISSL_SDK/lib/AmigaOS3/libamisslstubs.a" \
