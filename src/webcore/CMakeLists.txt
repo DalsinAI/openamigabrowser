@@ -144,6 +144,9 @@ OB_LINK(obcore-view)
 set(WebBrowserEngine_SOURCES
     ${OB_PROGRAM_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/../webbrowser/wb_engine.c
+    ob_blit.c
+    ob_browser_engine.c
+    ob_splash.c
 )
 set(WebBrowserEngine_FRAMEWORKS ${OB_FRAMEWORKS})
 set(WebBrowserEngine_PRIVATE_INCLUDE_DIRECTORIES ${OB_PRIVATE_INCLUDE_DIRECTORIES}
@@ -175,5 +178,6 @@ OB_LINK(OpenBrowser)
 # the stove's compat library (the toolchain wraps malloc) and libpthread
 # (the toolchain links with -fexceptions, whose frame tables use it).
 add_executable(OpenBrowserLauncher ob_launcher.c ob_splash.c)
+target_include_directories(OpenBrowserLauncher PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../webbrowser/include)
 set_target_properties(OpenBrowserLauncher PROPERTIES OUTPUT_NAME OpenBrowser)
 target_link_libraries(OpenBrowserLauncher PRIVATE -L${AC_OS32_STOVE}/compat -los32compat pthread)

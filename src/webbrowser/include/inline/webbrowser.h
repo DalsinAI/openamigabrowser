@@ -43,5 +43,7 @@
     LP3(0x72, LONG, WB_Scroll, APTR, view, a0, LONG, dx, d0, LONG, dy, d1, , WEBBROWSER_BASE_NAME)
 #define WB_Shutdown() \
     LP0(0x78, LONG, WB_Shutdown, , WEBBROWSER_BASE_NAME)
+#define WB_OpenBrowser(url, tags) \
+    LP2(0x7e, LONG, WB_OpenBrowser, CONST_STRPTR, url, a0, struct TagItem *, tags, a1, , WEBBROWSER_BASE_NAME)
 
 #endif
