@@ -1,0 +1,1741 @@
+From be55d1e2421b4ce129b396ab1cca1faf056de93a Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 17:09:43 +0100
+Subject: [PATCH] JSC: the C loop's interpreter as 68k code (offlineasm M68K
+ back end)
+
+CMake's JSC_M68K_LLINT turns it on for CPU(M68K) with the C loop. The C++
+side keeps all its C-loop plumbing; offlineasm emits the C loop's version of
+LowLevelInterpreter*.asm as 68k assembly instead of C, and CLoop::execute
+enters it. Interpreter registers live in a 64-bit register file in memory
+(cfr in a5); slow paths are plain C calls.
+---
+ Source/JavaScriptCore/CMakeLists.txt          |   16 +
+ .../llint/LLIntOfflineAsmConfig.h             |    8 +
+ .../llint/LowLevelInterpreter.cpp             |  187 +++
+ Source/JavaScriptCore/offlineasm/backends.rb  |    3 +
+ Source/JavaScriptCore/offlineasm/m68k.rb      | 1363 +++++++++++++++++
+ Source/JavaScriptCore/offlineasm/settings.rb  |    5 +
+ 6 files changed, 1582 insertions(+)
+ create mode 100644 Source/JavaScriptCore/offlineasm/m68k.rb
+
+diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
+index bd4af3836c..041afb7eb7 100644
+--- a/Source/JavaScriptCore/CMakeLists.txt
++++ b/Source/JavaScriptCore/CMakeLists.txt
+@@ -258,6 +258,7 @@ set(OFFLINE_ASM
+     offlineasm/cloop.rb
+     offlineasm/config.rb
+     offlineasm/instructions.rb
++    offlineasm/m68k.rb
+     offlineasm/offsets.rb
+     offlineasm/opt.rb
+     offlineasm/parser.rb
+@@ -330,6 +331,12 @@ if (NOT ENABLE_JIT)
+     endif ()
+ endif ()
+ 
++# 68k: the C loop's interpreter as 68k code (offlineasm/m68k.rb) instead of C.
++option(JSC_M68K_LLINT "Build the 68k interpreter instead of the C loop's C code" OFF)
++if (JSC_M68K_LLINT AND WTF_CPU_M68K AND ENABLE_C_LOOP)
++    set(OFFLINE_ASM_BACKEND "M68K")
++endif ()
++
+ add_custom_command(
+     OUTPUT ${JavaScriptCore_DERIVED_SOURCES_DIR}/AirOpcode.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/AirOpcodeGenerated.h
+     MAIN_DEPENDENCY ${JAVASCRIPTCORE_DIR}/b3/air/AirOpcode.opcodes
+@@ -453,6 +460,9 @@ set(LLIntSettingsExtractor_DEPENDENCIES
+ set_property(TARGET LLIntSettingsExtractor PROPERTY SKIP_CODESIGN YES)
+ set_property(TARGET LLIntSettingsExtractor PROPERTY SKIP_DSYM YES)
+ WEBKIT_EXECUTABLE(LLIntSettingsExtractor)
++if (OFFLINE_ASM_BACKEND STREQUAL "M68K")
++    target_compile_definitions(LLIntSettingsExtractor PRIVATE JSC_M68K_LLINT=1)
++endif ()
+ 
+ # LLIntSettingsExtractor target needs to have a direct or indirect
+ # dependency to Bytecodes target for CMake Visual Studio generator to
+@@ -483,6 +493,9 @@ set(LLIntOffsetsExtractor_DEPENDENCIES
+ set_property(TARGET LLIntOffsetsExtractor PROPERTY SKIP_CODESIGN YES)
+ set_property(TARGET LLIntOffsetsExtractor PROPERTY SKIP_DSYM YES)
+ WEBKIT_EXECUTABLE(LLIntOffsetsExtractor)
++if (OFFLINE_ASM_BACKEND STREQUAL "M68K")
++    target_compile_definitions(LLIntOffsetsExtractor PRIVATE JSC_M68K_LLINT=1)
++endif ()
+ 
+ # The build system will execute asm.rb every time LLIntOffsetsExtractor's mtime is newer than
+ # LLIntAssembly.h's mtime. The problem we have here is: asm.rb has some built-in optimization
+@@ -522,6 +535,9 @@ add_custom_command(
+ # single source file, so we need to create a separate target for it.
+ add_library(LowLevelInterpreterLib OBJECT llint/LowLevelInterpreter.cpp
+     ${JavaScriptCore_DERIVED_SOURCES_DIR}/${LLIntOutput})
++if (OFFLINE_ASM_BACKEND STREQUAL "M68K")
++    target_compile_definitions(LowLevelInterpreterLib PRIVATE JSC_M68K_LLINT=1)
++endif ()
+ 
+ # WebAssembly generator
+ 
+diff --git a/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h b/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
+index 1872e8cf35..a57d1c9544 100644
+--- a/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
++++ b/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
+@@ -37,10 +37,18 @@
+ #define OFFLINE_ASM_ARM64E 0
+ #define OFFLINE_ASM_X86_64 0
+ #define OFFLINE_ASM_RISCV64 0
++// The C loop's interpreter as 68k code (offlineasm/m68k.rb), built when
++// CMake's JSC_M68K_LLINT is on.
++#if CPU(M68K) && defined(JSC_M68K_LLINT) && JSC_M68K_LLINT
++#define OFFLINE_ASM_M68K 1
++#else
++#define OFFLINE_ASM_M68K 0
++#endif
+ 
+ #else // ENABLE(C_LOOP)
+ 
+ #define OFFLINE_ASM_C_LOOP 0
++#define OFFLINE_ASM_M68K 0
+ 
+ #if CPU(X86_64)
+ #define OFFLINE_ASM_X86_64 1
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+index 5bfbbd9142..ba7377f512 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+@@ -92,6 +92,37 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
+ using WebConfig::g_config;
+ 
++#if OFFLINE_ASM_M68K
++
++// The C loop's interpreter as 68k code (offlineasm/m68k.rb): the generated
++// LLIntAssembly.h is one top-level asm statement, and every opcode and glue
++// label is a global symbol, so CLoop::execute below can fill the opcode maps
++// with their addresses.
++#undef SYMBOL_STRING
++#define SYMBOL_STRING(name) "_" #name
++#undef LABEL_REFERENCE
++#define LABEL_REFERENCE(name) SYMBOL_STRING(name)
++#undef LOCAL_LABEL_STRING
++#define LOCAL_LABEL_STRING(name) "L" #name
++
++#define OFFLINE_ASM_BEGIN __asm__(".text\n"
++#define OFFLINE_ASM_END );
++
++#define OFFLINE_ASM_M68K_GLOBAL(label) \
++    ".text\n.balign 2\n.globl " SYMBOL_STRING(label) "\n" SYMBOL_STRING(label) ":\n"
++
++// Opcode and glue labels are also referred to as local labels.
++#define OFFLINE_ASM_OPCODE_LABEL(__opcode) OFFLINE_ASM_M68K_GLOBAL(llint_##__opcode) LOCAL_LABEL_STRING(llint_##__opcode) ":\n"
++#define OFFLINE_ASM_GLUE_LABEL(__opcode) OFFLINE_ASM_M68K_GLOBAL(__opcode) LOCAL_LABEL_STRING(__opcode) ":\n"
++#define OFFLINE_ASM_GLOBAL_LABEL(label) OFFLINE_ASM_M68K_GLOBAL(label)
++#define OFFLINE_ASM_UNALIGNED_GLOBAL_LABEL(label) OFFLINE_ASM_M68K_GLOBAL(label)
++#define OFFLINE_ASM_ALIGNED_GLOBAL_LABEL(label, align) ".balign " #align "\n" OFFLINE_ASM_M68K_GLOBAL(label)
++#define OFFLINE_ASM_GLOBAL_EXPORT_LABEL(label) OFFLINE_ASM_M68K_GLOBAL(label)
++#define OFFLINE_ASM_UNALIGNED_GLOBAL_EXPORT_LABEL(label) OFFLINE_ASM_M68K_GLOBAL(label)
++#define OFFLINE_ASM_LOCAL_LABEL(label) LOCAL_LABEL_STRING(label) ":\n"
++
++#else // !OFFLINE_ASM_M68K
++
+ // These are for building a C Loop interpreter:
+ #define OFFLINE_ASM_BEGIN
+ #define OFFLINE_ASM_END
+@@ -128,6 +159,8 @@ using WebConfig::g_config;
+ 
+ #define OFFLINE_ASM_LOCAL_LABEL(label) label: TRACE_LABEL("OFFLINE_ASM_LOCAL_LABEL", #label); USE_LABEL(label);
+ 
++#endif // OFFLINE_ASM_M68K
++
+ namespace JSC {
+ 
+ class CallLinkInfo;
+@@ -234,6 +267,158 @@ static void decodeResult(UGPRPair result, CLoopRegister& t0, CLoopRegister& t1)
+ // The llint C++ interpreter loop:
+ //
+ 
++#if OFFLINE_ASM_M68K
++
++// The 68k interpreter's register file (offlineasm/m68k.rb): one 64-bit slot
++// per interpreter register, big-endian, in this order.
++enum M68KSlot : unsigned {
++    M68KSlotT0 = 0, M68KSlotT1 = 1, M68KSlotT2 = 2,
++    M68KSlotSP = 13, M68KSlotLR = 14,
++    M68KSlotCSR1 = 18, M68KSlotCSR2 = 19,
++    M68KSlotCount = 28,
++};
++
++extern "C" {
++alignas(8) uint64_t jsc_m68k_vrf[M68KSlotCount];
++// Where the C loop's stack pointer is kept (CLoopStack), stored before every
++// call into C so the garbage collector sees the JavaScript stack's extent.
++void* jsc_m68k_cloop_sp_field;
++EncodedJSValue jsc_m68k_llint_enter(const void* opcode, CallFrame*);
++}
++
++// Saves the C registers the ABI asks to keep (the interpreter uses all of
++// them), sets cfr (a5) and jumps to the first opcode. The interpreter comes
++// back through llint_return_to_host with its result in t0.
++__asm__(
++    ".text\n"
++    ".balign 2\n"
++    ".globl _jsc_m68k_llint_enter\n"
++    "_jsc_m68k_llint_enter:\n"
++    "    movem.l d2-d7/a2-a6,-(sp)\n"
++    "    fmovem.x fp2-fp7,-(sp)\n"
++    "    move.l 120(sp),a0\n"
++    "    move.l 124(sp),a5\n"
++    "    jmp (a0)\n"
++    ".globl _llint_return_to_host\n"
++    "_llint_return_to_host:\n"
++    "    move.l _jsc_m68k_vrf,d0\n"
++    "    move.l _jsc_m68k_vrf+4,d1\n"
++    "    fmovem.x (sp)+,fp2-fp7\n"
++    "    movem.l (sp)+,d2-d7/a2-a6\n"
++    "    rts\n"
++);
++
++#include "LLIntAssembly.h"
++
++namespace M68KLabels {
++extern "C" {
++#define M68K_DECLARE_OPCODE(__opcode, length) \
++    void llint_##__opcode(); void llint_##__opcode##_wide16(); void llint_##__opcode##_wide32();
++#define M68K_DECLARE_HELPER(__opcode, length) \
++    void __opcode(); void __opcode##_wide16(); void __opcode##_wide32();
++#define M68K_DECLARE_GLUE(__opcode, length) void __opcode();
++FOR_EACH_BYTECODE_ID(M68K_DECLARE_OPCODE)
++FOR_EACH_BYTECODE_HELPER_ID(M68K_DECLARE_HELPER)
++FOR_EACH_CLOOP_BYTECODE_HELPER_ID(M68K_DECLARE_GLUE)
++FOR_EACH_LLINT_NATIVE_HELPER(M68K_DECLARE_GLUE)
++FOR_EACH_CLOOP_RETURN_HELPER_ID(M68K_DECLARE_GLUE)
++#undef M68K_DECLARE_OPCODE
++#undef M68K_DECLARE_HELPER
++#undef M68K_DECLARE_GLUE
++}
++} // namespace M68KLabels
++
++// The address of CLoopStack's stack pointer: found by setting a marker
++// through its setter, as the field itself is private.
++static void* findCLoopStackPointerField(CLoopStack& stack)
++{
++    void* saved = stack.currentStackPointer();
++    void* marker = reinterpret_cast<void*>(0x6d36386bu);
++    stack.setCurrentStackPointer(marker);
++    // Fields are only 2-byte aligned on the 68k: look at every halfword.
++    uint8_t* bytes = reinterpret_cast<uint8_t*>(&stack);
++    void* field = nullptr;
++    for (size_t i = 0; i + sizeof(void*) <= sizeof(CLoopStack); i += 2) {
++        void* value;
++        memcpy(&value, bytes + i, sizeof(value));
++        if (value == marker) {
++            field = bytes + i;
++            break;
++        }
++    }
++    stack.setCurrentStackPointer(saved);
++    RELEASE_ASSERT(field);
++    return field;
++}
++
++static void setM68KSlot(M68KSlot slot, uint64_t value)
++{
++    jsc_m68k_vrf[slot] = value;
++}
++
++JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm, ProtoCallFrame* protoCallFrame, bool isInitializationPass)
++{
++    if (isInitializationPass) [[unlikely]] {
++        Opcode* opcodeMap = LLInt::opcodeMap();
++        Opcode* opcodeMapWide16 = LLInt::opcodeMapWide16();
++        Opcode* opcodeMapWide32 = LLInt::opcodeMapWide32();
++
++#define OPCODE_ENTRY(__opcode, length) \
++        opcodeMap[__opcode] = reinterpret_cast<void*>(M68KLabels::llint_##__opcode); \
++        opcodeMapWide16[__opcode] = reinterpret_cast<void*>(M68KLabels::llint_##__opcode##_wide16); \
++        opcodeMapWide32[__opcode] = reinterpret_cast<void*>(M68KLabels::llint_##__opcode##_wide32);
++#define HELPER_ENTRY(__opcode, length) \
++        opcodeMap[__opcode] = reinterpret_cast<void*>(M68KLabels::__opcode); \
++        opcodeMapWide16[__opcode] = reinterpret_cast<void*>(M68KLabels::__opcode##_wide16); \
++        opcodeMapWide32[__opcode] = reinterpret_cast<void*>(M68KLabels::__opcode##_wide32);
++#define LLINT_OPCODE_ENTRY(__opcode, length) \
++        opcodeMap[__opcode] = reinterpret_cast<void*>(M68KLabels::__opcode);
++
++        FOR_EACH_BYTECODE_ID(OPCODE_ENTRY)
++        FOR_EACH_BYTECODE_HELPER_ID(HELPER_ENTRY)
++        FOR_EACH_CLOOP_BYTECODE_HELPER_ID(LLINT_OPCODE_ENTRY)
++        FOR_EACH_LLINT_NATIVE_HELPER(LLINT_OPCODE_ENTRY)
++        FOR_EACH_CLOOP_RETURN_HELPER_ID(LLINT_OPCODE_ENTRY)
++#undef OPCODE_ENTRY
++#undef HELPER_ENTRY
++#undef LLINT_OPCODE_ENTRY
++
++        uint8_t* exceptionInstructions = reinterpret_cast<uint8_t*>(LLInt::exceptionInstructions());
++        for (unsigned i = 0; i < maxBytecodeStructLength + 1; ++i)
++            exceptionInstructions[i] = llint_throw_from_slow_path_trampoline;
++
++        return JSValue();
++    }
++
++    CLoopStack& cloopStack = vm->cloopStack();
++    void* spAtEntry = cloopStack.currentStackPointer();
++
++    // The outer entry's registers, as the C loop keeps them in its own locals.
++    uint64_t savedRegisters[M68KSlotCount];
++    memcpy(savedRegisters, jsc_m68k_vrf, sizeof(savedRegisters));
++    void* savedStackPointerField = jsc_m68k_cloop_sp_field;
++    jsc_m68k_cloop_sp_field = findCLoopStackPointerField(cloopStack);
++
++    // The incoming arguments of doVMEntryToJavaScript, and the C loop's
++    // initial registers.
++    setM68KSlot(M68KSlotT0, reinterpret_cast<uintptr_t>(executableAddress));
++    setM68KSlot(M68KSlotT1, reinterpret_cast<uintptr_t>(vm));
++    setM68KSlot(M68KSlotT2, reinterpret_cast<uintptr_t>(protoCallFrame));
++    setM68KSlot(M68KSlotSP, reinterpret_cast<uintptr_t>(spAtEntry));
++    setM68KSlot(M68KSlotLR, reinterpret_cast<uintptr_t>(M68KLabels::llint_return_to_host));
++    setM68KSlot(M68KSlotCSR1, JSValue::NumberTag);
++    setM68KSlot(M68KSlotCSR2, JSValue::NotCellMask);
++
++    EncodedJSValue result = jsc_m68k_llint_enter(getOpcode(entryOpcodeID), vm->topCallFrame);
++
++    memcpy(jsc_m68k_vrf, savedRegisters, sizeof(savedRegisters));
++    jsc_m68k_cloop_sp_field = savedStackPointerField;
++    cloopStack.setCurrentStackPointer(spAtEntry);
++    return JSValue::decode(result);
++}
++
++#else // !OFFLINE_ASM_M68K
++
+ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm, ProtoCallFrame* protoCallFrame, bool isInitializationPass)
+ {
+     // WARNING: it is critical to avoid 'std::bit_cast' in the CAST macro that follows and in
+@@ -449,6 +634,8 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm,
+     return JSValue(); // to suppress a compiler warning.
+ } // Interpreter::llintCLoopExecute()
+ 
++#endif // OFFLINE_ASM_M68K
++
+ } // namespace JSC
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+diff --git a/Source/JavaScriptCore/offlineasm/backends.rb b/Source/JavaScriptCore/offlineasm/backends.rb
+index ffdc362123..31c6adda01 100644
+--- a/Source/JavaScriptCore/offlineasm/backends.rb
++++ b/Source/JavaScriptCore/offlineasm/backends.rb
+@@ -26,6 +26,7 @@ require "arm64"
+ require "ast"
+ require "x86"
+ require "riscv64"
++require "m68k"
+ require "cloop"
+ 
+ begin
+@@ -39,6 +40,7 @@ BACKENDS =
+      "ARM64",
+      "ARM64E",
+      "RISCV64",
++     "M68K",
+      "C_LOOP"
+     ]
+ 
+@@ -53,6 +55,7 @@ WORKING_BACKENDS =
+      "ARM64",
+      "ARM64E",
+      "RISCV64",
++     "M68K",
+      "C_LOOP"
+     ]
+ 
+diff --git a/Source/JavaScriptCore/offlineasm/m68k.rb b/Source/JavaScriptCore/offlineasm/m68k.rb
+new file mode 100644
+index 0000000000..a32ed0cc88
+--- /dev/null
++++ b/Source/JavaScriptCore/offlineasm/m68k.rb
+@@ -0,0 +1,1363 @@
++# MIT License
++#
++# Copyright (c) 2026 Dalsin Limited
++#
++# Permission is hereby granted, free of charge, to any person obtaining a copy
++# of this software and associated documentation files (the "Software"), to
++# deal in the Software without restriction, including without limitation the
++# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
++# sell copies of the Software, and to permit persons to whom the Software is
++# furnished to do so, subject to the following conditions:
++#
++# The above copyright notice and this permission notice shall be included in
++# all copies or substantial portions of the Software.
++#
++# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
++# IN THE SOFTWARE.
++
++require "config"
++require "ast"
++require "opt"
++
++# The Motorola 68020-68060 back end (AmigaOS, GNU as, Motorola syntax).
++#
++# It runs the C loop's version of the interpreter (the C_LOOP setting stays
++# on, so JavaScriptCore keeps its C-interpreter plumbing: its own JavaScript
++# stack, slow paths called as plain C functions, no assembler), but as 68k
++# code instead of C.
++#
++# The interpreter is written for 64-bit registers; the 68k has eight 32-bit
++# data registers and seven address registers. So:
++#
++# - cfr lives in a5; it only ever holds a pointer.
++# - Every other interpreter register (t0-t12, sp, lr, csr0-csr10, ...) is a
++#   64-bit slot in a register file in memory, _jsc_m68k_vrf, big-endian: the
++#   high word at +0, the low word at +4. 32-bit and pointer operations use the
++#   low word and clear the high word when they write, as 32-bit operations do
++#   on 64-bit machines. sp is the C loop's JavaScript stack pointer, not a7;
++#   push and pop move pointer-sized slots on it, as the C loop does.
++# - ft0-ft5 are fp0-fp5 (fp7 is scratch). Double arithmetic uses the 68040's
++#   fdadd/fdsub/fdmul/fddiv/fdsqrt, which round to double whatever the FPCR
++#   says.
++# - d0-d7, a0, a1 are scratch inside each instruction. a2-a4 and a6 are not
++#   used, so C functions called from here keep them, as the ABI asks.
++#
++# One register file serves the whole program: JavaScript runs on one thread
++# here. CLoop::execute (LowLevelInterpreter.cpp) saves it on the way in and
++# restores it on the way out, so a nested entry from C (C -> JavaScript -> C
++# -> JavaScript) leaves the outer one's registers as they were, like the C
++# loop's local variables.
++
++M68K_VRF = "_jsc_m68k_vrf"
++
++M68K_GPR_SLOTS = [
++    "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12",
++    "sp", "lr", "pc", "zr",
++    "csr0", "csr1", "csr2", "csr3", "csr4", "csr5", "csr6", "csr7", "csr8", "csr9", "csr10",
++]
++
++M68K_VRF_SIZE = M68K_GPR_SLOTS.size * 8
++M68K_VRF_SP = "#{M68K_VRF}+#{M68K_GPR_SLOTS.index("sp") * 8 + 4}"
++M68K_VRF_LR = "#{M68K_VRF}+#{M68K_GPR_SLOTS.index("lr") * 8 + 4}"
++M68K_VRF_LR_HI = "#{M68K_VRF}+#{M68K_GPR_SLOTS.index("lr") * 8}"
++
++# ft0-ft5 are fp0-fp5; fp7 is the back end's own scratch.
++M68K_FP_SCRATCH = "fp7"
++
++def m68kHex(value)
++    "0x%x" % (value & 0xffffffff)
++end
++
++$m68kLabelCounter = 0
++
++def m68kNewLabel
++    $m68kLabelCounter += 1
++    "Lm68k#{$m68kLabelCounter}"
++end
++
++class RegisterID
++    def m68kPinned
++        name == "cfr" ? "a5" : nil
++    end
++
++    def m68kSlot
++        index = M68K_GPR_SLOTS.index(name)
++        raise "Bad register #{name} for M68K at #{codeOriginString}" unless index
++        index * 8
++    end
++
++    def m68kHi
++        raise "No high word for #{name}" if m68kPinned
++        "#{M68K_VRF}+#{m68kSlot}"
++    end
++
++    def m68kLo
++        return m68kPinned if m68kPinned
++        "#{M68K_VRF}+#{m68kSlot + 4}"
++    end
++end
++
++class FPRegisterID
++    def m68kOperand
++        case name
++        when "ft0", "fa0", "fr"
++            "fp0"
++        when "ft1", "fa1"
++            "fp1"
++        when "ft2", "fa2"
++            "fp2"
++        when "ft3", "fa3"
++            "fp3"
++        when "ft4"
++            "fp4"
++        when "ft5"
++            "fp5"
++        else
++            raise "Bad register #{name} for M68K at #{codeOriginString}"
++        end
++    end
++end
++
++class Immediate
++    def m68kLo
++        "##{m68kHex(value)}"
++    end
++
++    def m68kHi
++        "##{m68kHex(value >> 32)}"
++    end
++end
++
++class LabelReference
++    def m68kSymbol
++        asmLabel
++    end
++end
++
++class LocalLabelReference
++    def m68kSymbol
++        asmLabel
++    end
++end
++
++# The effective address of a memory operand, extra bytes on. Loads the base
++# (and index) into areg (and ireg) first when they are not already in
++# hardware registers.
++def m68kAddress(operand, extra = 0, areg = "a0", ireg = "d7")
++    case operand
++    when Address
++        base = operand.base
++        offset = operand.offset.value + extra
++        if base.m68kPinned
++            "#{offset}(#{base.m68kPinned})"
++        else
++            $asm.puts "move.l #{base.m68kLo},#{areg}"
++            "#{offset}(#{areg})"
++        end
++    when BaseIndex
++        base = operand.base
++        offset = operand.offset.value + extra
++        baseRegister = base.m68kPinned
++        unless baseRegister
++            $asm.puts "move.l #{base.m68kLo},#{areg}"
++            baseRegister = areg
++        end
++        $asm.puts "move.l #{operand.index.m68kLo},#{ireg}"
++        "(#{offset},#{baseRegister},#{ireg}.l*#{operand.scaleValue})"
++    when AbsoluteAddress
++        "#{m68kHex(operand.address.value + extra)}"
++    else
++        raise "Not an address: #{operand.inspect} at #{operand.codeOriginString}"
++    end
++end
++
++# Both words of a 64-bit memory operand, computing the base only once.
++def m68kAddressPair(operand, areg = "a0", ireg = "d7")
++    hi = m68kAddress(operand, 0, areg, ireg)
++    lo = case operand
++         when Address
++             hi.sub(/\A(-?\d+)/) { ($1.to_i + 4).to_s }
++         when BaseIndex
++             hi.sub(/\A\((-?\d+),/) { "(#{$1.to_i + 4}," }
++         when AbsoluteAddress
++             m68kHex(operand.address.value + 4)
++         end
++    [hi, lo]
++end
++
++# A 32-bit source operand as a string, emitting a load when it lives in
++# memory behind an address.
++def m68kSource32(operand, scratch = "d1")
++    case operand
++    when RegisterID, Immediate
++        operand.m68kLo
++    when Address, BaseIndex, AbsoluteAddress
++        $asm.puts "move.l #{m68kAddress(operand, 0, "a1", "d6")},#{scratch}"
++        scratch
++    when LabelReference, LocalLabelReference
++        "##{operand.m68kSymbol}"
++    else
++        raise "Bad 32-bit operand #{operand.inspect}"
++    end
++end
++
++# Loads a 64-bit operand into hi:lo data registers.
++def m68kLoad64(operand, hi, lo)
++    case operand
++    when RegisterID
++        if operand.m68kPinned
++            $asm.puts "move.l #{operand.m68kPinned},#{lo}"
++            $asm.puts "moveq #0,#{hi}"
++        else
++            $asm.puts "move.l #{operand.m68kHi},#{hi}"
++            $asm.puts "move.l #{operand.m68kLo},#{lo}"
++        end
++    when Immediate
++        $asm.puts "move.l #{operand.m68kHi},#{hi}"
++        $asm.puts "move.l #{operand.m68kLo},#{lo}"
++    when LabelReference, LocalLabelReference
++        $asm.puts "move.l ##{operand.m68kSymbol},#{lo}"
++        $asm.puts "moveq #0,#{hi}"
++    when Address, BaseIndex, AbsoluteAddress
++        hiAddress, loAddress = m68kAddressPair(operand, "a1", "d6")
++        $asm.puts "move.l #{hiAddress},#{hi}"
++        $asm.puts "move.l #{loAddress},#{lo}"
++    else
++        raise "Bad 64-bit operand #{operand.class} at #{operand.codeOriginString}"
++    end
++end
++
++# Stores hi:lo into a 64-bit destination register.
++def m68kStore64(hi, lo, operand)
++    unless operand.is_a? RegisterID
++        hiAddress, loAddress = m68kAddressPair(operand)
++        $asm.puts "move.l #{hi},#{hiAddress}"
++        $asm.puts "move.l #{lo},#{loAddress}"
++        return
++    end
++    if operand.m68kPinned
++        $asm.puts "move.l #{lo},#{operand.m68kPinned}"
++    else
++        $asm.puts "move.l #{hi},#{operand.m68kHi}"
++        $asm.puts "move.l #{lo},#{operand.m68kLo}"
++    end
++end
++
++# Stores a 32-bit result, zero-extended, into a destination register.
++def m68kStore32(value, operand)
++    unless operand.is_a? RegisterID
++        $asm.puts "move.l #{value},#{m68kAddress(operand)}"
++        return
++    end
++    if operand.m68kPinned
++        $asm.puts "move.l #{value},#{operand.m68kPinned}"
++    else
++        $asm.puts "move.l #{value},#{operand.m68kLo}"
++        $asm.puts "clr.l #{operand.m68kHi}"
++    end
++end
++
++def m68kStore32Signed(value, operand)
++    unless operand.is_a? RegisterID
++        $asm.puts "move.l #{value},#{m68kAddress(operand)}"
++        return
++    end
++    if operand.m68kPinned
++        $asm.puts "move.l #{value},#{operand.m68kPinned}"
++    else
++        $asm.puts "move.l #{value},#{operand.m68kLo}"
++        $asm.puts "smi d5"
++        $asm.puts "extb.l d5"
++        $asm.puts "move.l d5,#{operand.m68kHi}"
++    end
++end
++
++def m68kJcc(condition)
++    {
++        "eq" => "jeq", "neq" => "jne",
++        "a" => "jhi", "aeq" => "jcc", "b" => "jcs", "beq" => "jls",
++        "gt" => "jgt", "gteq" => "jge", "lt" => "jlt", "lteq" => "jle",
++    }[condition] or raise "Bad condition #{condition}"
++end
++
++def m68kScc(condition)
++    {
++        "eq" => "seq", "neq" => "sne",
++        "a" => "shi", "aeq" => "scc", "b" => "scs", "beq" => "sls",
++        "gt" => "sgt", "gteq" => "sge", "lt" => "slt", "lteq" => "sle",
++    }[condition] or raise "Bad condition #{condition}"
++end
++
++class Instruction
++    def m68kTarget(operand)
++        case operand
++        when LabelReference, LocalLabelReference
++            operand.m68kSymbol
++        else
++            raise "Bad branch target #{operand.inspect} at #{codeOriginString}"
++        end
++    end
++
++    # dst = a op b (three operands) or dst = dst op src (two).
++    def m68kBinary32(opcode, signExtendResult = false)
++        if operands.size == 3
++            a, b, dst = operands
++        else
++            a, b, dst = operands[1], operands[0], operands[1]
++        end
++        $asm.puts "move.l #{m68kSource32(a, "d0")},d0"
++        $asm.puts "#{opcode} #{m68kSource32(b, "d1")},d0"
++        signExtendResult ? m68kStore32Signed("d0", dst) : m68kStore32("d0", dst)
++    end
++
++    def m68kLogical64(opcode)
++        if operands.size == 3
++            a, b, dst = operands
++        else
++            a, b, dst = operands[1], operands[0], operands[1]
++        end
++        m68kLoad64(a, "d0", "d1")
++        m68kLoad64(b, "d2", "d3")
++        $asm.puts "#{opcode} d2,d0"
++        $asm.puts "#{opcode} d3,d1"
++        m68kStore64("d0", "d1", dst)
++    end
++
++    def m68kAdd64
++        if operands.size == 3
++            a, b, dst = operands
++        else
++            a, b, dst = operands[1], operands[0], operands[1]
++        end
++        m68kLoad64(a, "d0", "d1")
++        m68kLoad64(b, "d2", "d3")
++        $asm.puts "add.l d3,d1"
++        $asm.puts "addx.l d2,d0"
++        m68kStore64("d0", "d1", dst)
++    end
++
++    def m68kSub64
++        if operands.size == 3
++            a, b, dst = operands
++        else
++            a, b, dst = operands[1], operands[0], operands[1]
++        end
++        m68kLoad64(a, "d0", "d1")
++        m68kLoad64(b, "d2", "d3")
++        $asm.puts "sub.l d3,d1"
++        $asm.puts "subx.l d2,d0"
++        m68kStore64("d0", "d1", dst)
++    end
++
++    # 64 x 64 -> low 64 bits: lo*lo (full) + (hi*lo + lo*hi) << 32.
++    def m68kMul64
++        if operands.size == 3
++            a, b, dst = operands
++        else
++            a, b, dst = operands[1], operands[0], operands[1]
++        end
++        if b.is_a? Immediate and a.is_a? RegisterID
++            a, b = b, a
++        end
++        if a.is_a? Immediate and a.value != 0 and isPowerOfTwo(a.value.abs) and a.value.abs < (1 << 31)
++            shift = Math.log2(a.value.abs).to_i
++            m68kLoad64(b, "d0", "d1")
++            m68kShiftLeft64Constant(shift, "d0", "d1")
++            if a.value < 0
++                $asm.puts "neg.l d1"
++                $asm.puts "negx.l d0"
++            end
++            m68kStore64("d0", "d1", dst)
++            return
++        end
++        m68kLoad64(a, "d0", "d1")
++        m68kLoad64(b, "d2", "d3")
++        $asm.puts "move.l d0,d4"
++        $asm.puts "muls.l d3,d4"          # a.hi * b.lo, low word
++        $asm.puts "move.l d2,d5"
++        $asm.puts "muls.l d1,d5"          # b.hi * a.lo, low word
++        $asm.puts "add.l d5,d4"
++        $asm.puts "mulu.l d3,d0:d1"       # a.lo * b.lo, 64 bits
++        $asm.puts "add.l d4,d0"
++        m68kStore64("d0", "d1", dst)
++    end
++
++    def m68kShiftLeft64Constant(shift, hi, lo)
++        shift &= 63
++        return if shift == 0
++        if shift >= 32
++            $asm.puts "move.l #{lo},#{hi}"
++            m68kShift32Constant("lsl.l", shift - 32, hi)
++            $asm.puts "moveq #0,#{lo}"
++        else
++            $asm.puts "move.l #{lo},d4"
++            m68kShift32Constant("lsl.l", shift, hi)
++            m68kShift32Constant("lsr.l", 32 - shift, "d4")
++            $asm.puts "or.l d4,#{hi}"
++            m68kShift32Constant("lsl.l", shift, lo)
++        end
++    end
++
++    def m68kShift32Constant(opcode, shift, register)
++        while shift > 0
++            step = shift > 8 ? 8 : shift
++            $asm.puts "#{opcode} ##{step},#{register}"
++            shift -= step
++        end
++    end
++
++    # 32-bit shifts and rotates; the count is taken mod 32.
++    def m68kShift32(opcode)
++        if operands.size == 3
++            value, amount, dst = operands
++        else
++            value, amount, dst = operands[1], operands[0], operands[1]
++        end
++        $asm.puts "move.l #{m68kSource32(value, "d0")},d0"
++        if amount.is_a? Immediate
++            m68kShift32Constant(opcode, amount.value & 31, "d0")
++        else
++            $asm.puts "move.l #{m68kSource32(amount, "d1")},d1"
++            $asm.puts "and.l #31,d1"
++            $asm.puts "#{opcode} d1,d0"
++        end
++        m68kStore32("d0", dst)
++    end
++
++    # 64-bit shifts: kind is :left, :right (arithmetic) or :uright.
++    def m68kShift64(kind)
++        if operands.size == 3
++            value, amount, dst = operands
++        else
++            value, amount, dst = operands[1], operands[0], operands[1]
++        end
++        m68kLoad64(value, "d0", "d1")
++        if amount.is_a? Immediate
++            shift = amount.value & 63
++            case kind
++            when :left
++                m68kShiftLeft64Constant(shift, "d0", "d1")
++            when :right, :uright
++                hiShift = kind == :right ? "asr.l" : "lsr.l"
++                if shift >= 32
++                    $asm.puts "move.l d0,d1"
++                    m68kShift32Constant(hiShift, shift - 32, "d1")
++                    if kind == :right
++                        $asm.puts "tst.l d0"
++                        $asm.puts "smi d0"
++                        $asm.puts "extb.l d0"
++                    else
++                        $asm.puts "moveq #0,d0"
++                    end
++                elsif shift > 0
++                    $asm.puts "move.l d0,d4"
++                    m68kShift32Constant("lsr.l", shift, "d1")
++                    m68kShift32Constant("lsl.l", 32 - shift, "d4")
++                    $asm.puts "or.l d4,d1"
++                    m68kShift32Constant(hiShift, shift, "d0")
++                end
++            end
++            m68kStore64("d0", "d1", dst)
++            return
++        end
++        done = m68kNewLabel
++        big = m68kNewLabel
++        $asm.puts "move.l #{m68kSource32(amount, "d2")},d2"
++        $asm.puts "and.l #63,d2"
++        $asm.puts "jeq #{done}"
++        $asm.puts "cmp.l #32,d2"
++        $asm.puts "jge #{big}"
++        $asm.puts "moveq #32,d3"
++        $asm.puts "sub.l d2,d3"
++        case kind
++        when :left
++            $asm.puts "move.l d1,d4"
++            $asm.puts "lsr.l d3,d4"
++            $asm.puts "lsl.l d2,d0"
++            $asm.puts "or.l d4,d0"
++            $asm.puts "lsl.l d2,d1"
++        else
++            $asm.puts "move.l d0,d4"
++            $asm.puts "lsl.l d3,d4"
++            $asm.puts "lsr.l d2,d1"
++            $asm.puts "or.l d4,d1"
++            $asm.puts "#{kind == :right ? "asr.l" : "lsr.l"} d2,d0"
++        end
++        $asm.puts "jra #{done}"
++        $asm.puts "#{big}:"
++        $asm.puts "sub.l #32,d2"
++        case kind
++        when :left
++            $asm.puts "move.l d1,d0"
++            $asm.puts "lsl.l d2,d0"
++            $asm.puts "moveq #0,d1"
++        when :right
++            $asm.puts "move.l d0,d1"
++            $asm.puts "asr.l d2,d1"
++            $asm.puts "tst.l d0"
++            $asm.puts "smi d0"
++            $asm.puts "extb.l d0"
++        when :uright
++            $asm.puts "move.l d0,d1"
++            $asm.puts "lsr.l d2,d1"
++            $asm.puts "moveq #0,d0"
++        end
++        $asm.puts "#{done}:"
++        m68kStore64("d0", "d1", dst)
++    end
++
++    # 64-bit rotates through two shifts.
++    def m68kRotate64(left)
++        if operands.size == 3
++            value, amount, dst = operands
++        else
++            value, amount, dst = operands[1], operands[0], operands[1]
++        end
++        raise "Variable 64-bit rotate not supported at #{codeOriginString}" unless amount.is_a? Immediate
++        shift = amount.value & 63
++        shift = (64 - shift) & 63 unless left
++        m68kLoad64(value, "d0", "d1")
++        if shift >= 32
++            $asm.puts "exg d0,d1"
++            shift -= 32
++        end
++        if shift > 0
++            $asm.puts "move.l d0,d2"
++            $asm.puts "move.l d1,d3"
++            m68kShift32Constant("lsl.l", shift, "d0")
++            m68kShift32Constant("lsr.l", 32 - shift, "d3")
++            $asm.puts "or.l d3,d0"
++            m68kShift32Constant("lsl.l", shift, "d1")
++            m68kShift32Constant("lsr.l", 32 - shift, "d2")
++            $asm.puts "or.l d2,d1"
++        end
++        m68kStore64("d0", "d1", dst)
++    end
++
++    # Loads that widen into the destination register.
++    def m68kLoad(size, signed)
++        source, dst = operands
++        address = m68kAddress(source)
++        case size
++        when 1
++            if signed
++                $asm.puts "move.b #{address},d0"
++                $asm.puts "extb.l d0"
++            else
++                $asm.puts "moveq #0,d0"
++                $asm.puts "move.b #{address},d0"
++            end
++        when 2
++            if signed
++                $asm.puts "move.w #{address},d0"
++                $asm.puts "ext.l d0"
++            else
++                $asm.puts "moveq #0,d0"
++                $asm.puts "move.w #{address},d0"
++            end
++        when 4
++            $asm.puts "move.l #{address},d0"
++        end
++        signed == :quad ? m68kStore32Signed("d0", dst) : m68kStore32("d0", dst)
++    end
++
++    def m68kStore(size)
++        value, destination = operands
++        suffix = { 1 => "b", 2 => "w", 4 => "l" }[size]
++        source = case value
++                 when Immediate
++                     "##{m68kHex(value.value)}"
++                 when RegisterID
++                     if value.m68kPinned
++                         value.m68kPinned
++                     else
++                         $asm.puts "move.l #{value.m68kLo},d0"
++                         "d0"
++                     end
++                 else
++                     raise "Bad store value #{value.inspect} at #{codeOriginString}"
++                 end
++        $asm.puts "move.#{suffix} #{source},#{m68kAddress(destination)}"
++    end
++
++    # 32-bit compare of a against b: sets the flags for a - b.
++    def m68kCompare32(a, b, size = "l")
++        if size == "l"
++            $asm.puts "move.l #{m68kSource32(a, "d0")},d0"
++            $asm.puts "cmp.l #{m68kSource32(b, "d1")},d0"
++        else
++            m68kByteOperand(a, "d0")
++            m68kByteOperand(b, "d1")
++            $asm.puts "cmp.b d1,d0"
++        end
++    end
++
++    def m68kByteOperand(operand, register)
++        case operand
++        when Immediate
++            $asm.puts "move.b ##{operand.value & 0xff},#{register}"
++        when RegisterID
++            if operand.m68kPinned
++                $asm.puts "move.l #{operand.m68kPinned},#{register}"
++            else
++                $asm.puts "move.b #{M68K_VRF}+#{operand.m68kSlot + 7},#{register}"
++            end
++        else
++            $asm.puts "move.b #{m68kAddress(operand, 0, "a1", "d6")},#{register}"
++        end
++    end
++
++    # 64-bit compare and branch to target when a <condition> b holds.
++    def m68kBranch64(condition, a, b, target)
++        m68kLoad64(a, "d0", "d1")
++        m68kLoad64(b, "d2", "d3")
++        skip = m68kNewLabel
++        case condition
++        when "eq"
++            $asm.puts "cmp.l d2,d0"
++            $asm.puts "jne #{skip}"
++            $asm.puts "cmp.l d3,d1"
++            $asm.puts "jeq #{target}"
++        when "neq"
++            $asm.puts "cmp.l d2,d0"
++            $asm.puts "jne #{target}"
++            $asm.puts "cmp.l d3,d1"
++            $asm.puts "jne #{target}"
++        else
++            strict = { "a" => "jhi", "aeq" => "jhi", "b" => "jcs", "beq" => "jcs",
++                       "gt" => "jgt", "gteq" => "jgt", "lt" => "jlt", "lteq" => "jlt" }[condition]
++            opposite = { "a" => "jcs", "aeq" => "jcs", "b" => "jhi", "beq" => "jhi",
++                         "gt" => "jlt", "gteq" => "jlt", "lt" => "jgt", "lteq" => "jgt" }[condition]
++            low = { "a" => "jhi", "aeq" => "jcc", "b" => "jcs", "beq" => "jls",
++                    "gt" => "jhi", "gteq" => "jcc", "lt" => "jcs", "lteq" => "jls" }[condition]
++            $asm.puts "cmp.l d2,d0"
++            $asm.puts "#{strict} #{target}"
++            $asm.puts "#{opposite} #{skip}"
++            $asm.puts "cmp.l d3,d1"
++            $asm.puts "#{low} #{target}"
++        end
++        $asm.puts "#{skip}:"
++    end
++
++    def m68kBranch(kind, condition)
++        a, b, target = operands
++        target = m68kTarget(target)
++        case kind
++        when :int, :ptr
++            m68kCompare32(a, b)
++            $asm.puts "#{m68kJcc(condition)} #{target}"
++        when :byte
++            m68kCompare32(a, b, "b")
++            $asm.puts "#{m68kJcc(condition)} #{target}"
++        when :quad
++            m68kBranch64(condition, a, b, target)
++        end
++    end
++
++    def m68kCompareSet(kind, condition)
++        a, b, dst = operands
++        case kind
++        when :int, :ptr
++            m68kCompare32(a, b)
++            $asm.puts "#{m68kScc(condition)} d0"
++        when :byte
++            m68kCompare32(a, b, "b")
++            $asm.puts "#{m68kScc(condition)} d0"
++        when :quad
++            yes = m68kNewLabel
++            done = m68kNewLabel
++            m68kBranch64(condition, a, b, yes)
++            $asm.puts "moveq #0,d0"
++            $asm.puts "jra #{done}"
++            $asm.puts "#{yes}:"
++            $asm.puts "moveq #1,d0"
++            $asm.puts "#{done}:"
++            m68kStore32("d0", dst)
++            return
++        end
++        $asm.puts "and.l #1,d0"
++        m68kStore32("d0", dst)
++    end
++
++    # Sets the flags from value & mask (mask defaults to all ones).
++    def m68kTest(kind, value, mask)
++        case kind
++        when :byte
++            m68kByteOperand(value, "d0")
++            if mask
++                m68kByteOperand(mask, "d1")
++                $asm.puts "and.b d1,d0"
++            else
++                $asm.puts "tst.b d0"
++            end
++        when :int, :ptr
++            $asm.puts "move.l #{m68kSource32(value, "d0")},d0"
++            if mask
++                $asm.puts "and.l #{m68kSource32(mask, "d1")},d0"
++            else
++                $asm.puts "tst.l d0"
++            end
++        when :quad
++            m68kLoad64(value, "d0", "d1")
++            if mask
++                m68kLoad64(mask, "d2", "d3")
++                $asm.puts "and.l d2,d0"
++                $asm.puts "and.l d3,d1"
++            end
++            # N from the high word, Z from both.
++            $asm.puts "move.l d0,d4"
++            $asm.puts "or.l d1,d4"
++            $asm.puts "seq d4"
++            $asm.puts "tst.l d0"
++            $asm.puts "smi d5"
++        end
++    end
++
++    def m68kBranchTest(kind, condition)
++        if operands.size == 3
++            value, mask, target = operands
++        else
++            value, target = operands
++            mask = nil
++        end
++        target = m68kTarget(target)
++        m68kTest(kind, value, mask)
++        if kind == :quad
++            case condition
++            when "s"
++                $asm.puts "tst.b d5"
++                $asm.puts "jne #{target}"
++            when "z"
++                $asm.puts "tst.b d4"
++                $asm.puts "jne #{target}"
++            when "nz"
++                $asm.puts "tst.b d4"
++                $asm.puts "jeq #{target}"
++            end
++        else
++            $asm.puts "#{{ "s" => "jmi", "z" => "jeq", "nz" => "jne" }[condition]} #{target}"
++        end
++    end
++
++    def m68kSetTest(kind, condition)
++        if operands.size == 3
++            value, mask, dst = operands
++        else
++            value, dst = operands
++            mask = nil
++        end
++        m68kTest(kind, value, mask)
++        if kind == :quad
++            case condition
++            when "s"
++                $asm.puts "move.b d5,d0"
++            when "z"
++                $asm.puts "move.b d4,d0"
++            when "nz"
++                $asm.puts "move.b d4,d0"
++                $asm.puts "not.b d0"
++            end
++        else
++            $asm.puts "#{{ "s" => "smi", "z" => "seq", "nz" => "sne" }[condition]} d0"
++        end
++        $asm.puts "and.l #1,d0"
++        m68kStore32("d0", dst)
++    end
++
++    # Arithmetic, then branch on overflow, sign, zero or non-zero.
++    def m68kOpBranch(op, kind, condition)
++        if operands.size == 4
++            a, b, dst, target = operands
++        else
++            a, b, dst, target = operands[1], operands[0], operands[1], operands[2]
++        end
++        target = m68kTarget(target)
++        if kind == :quad
++            raise "64-bit #{op} with branch not supported" unless op == "add" or op == "sub"
++            m68kLoad64(a, "d0", "d1")
++            m68kLoad64(b, "d2", "d3")
++            if op == "add"
++                $asm.puts "add.l d3,d1"
++                $asm.puts "addx.l d2,d0"
++            else
++                $asm.puts "sub.l d3,d1"
++                $asm.puts "subx.l d2,d0"
++            end
++            $asm.puts "svs d6"
++            m68kStore64("d0", "d1", dst)
++            case condition
++            when "o"
++                $asm.puts "tst.b d6"
++                $asm.puts "jne #{target}"
++            when "s"
++                $asm.puts "tst.l d0"
++                $asm.puts "jmi #{target}"
++            when "z", "nz"
++                $asm.puts "or.l d0,d1"
++                $asm.puts "#{condition == "z" ? "jeq" : "jne"} #{target}"
++            end
++            return
++        end
++        $asm.puts "move.l #{m68kSource32(a, "d0")},d0"
++        source = m68kSource32(b, "d1")
++        case op
++        when "add"
++            $asm.puts "add.l #{source},d0"
++        when "sub"
++            $asm.puts "sub.l #{source},d0"
++        when "mul"
++            $asm.puts "muls.l #{source},d0"
++        when "or"
++            $asm.puts "or.l #{source},d0"
++        end
++        # The store must not change the flags: move to a data register
++        # register keeps V and C clear, so save the condition first.
++        $asm.puts "#{{ "o" => "svs", "s" => "smi", "z" => "seq", "nz" => "sne" }[condition]} d6"
++        m68kStore32("d0", dst)
++        $asm.puts "tst.b d6"
++        $asm.puts "jne #{target}"
++    end
++
++    # Pointer-sized slots on the C loop's JavaScript stack.
++    def m68kPush
++        $asm.puts "move.l #{M68K_VRF_SP},a1"
++        operands.each {
++            | operand |
++            $asm.puts "move.l #{m68kSource32(operand, "d0")},-(a1)"
++        }
++        $asm.puts "move.l a1,#{M68K_VRF_SP}"
++    end
++
++    def m68kPop
++        operands.each {
++            | operand |
++            $asm.puts "move.l #{M68K_VRF_SP},a1"
++            $asm.puts "move.l (a1)+,d0"
++            $asm.puts "move.l a1,#{M68K_VRF_SP}"
++            m68kStore32Signed("d0", operand)
++        }
++    end
++
++    # Calls a C function with 32-bit arguments; UGPRPair results go to t0, t1.
++    def m68kCallC(function, arguments, results)
++        $asm.puts "move.l _jsc_m68k_cloop_sp_field,a0"
++        $asm.puts "move.l #{M68K_VRF_SP},(a0)"
++        arguments.reverse.each {
++            | argument |
++            $asm.puts "move.l #{m68kSource32(argument, "d0")},-(sp)"
++        }
++        $asm.puts "jsr #{function.m68kSymbol}"
++        $asm.puts "lea #{arguments.size * 4}(sp),sp" unless arguments.empty?
++        if results
++            m68kStore32("d0", RegisterID.forName(codeOrigin, "t0"))
++            m68kStore32("d1", RegisterID.forName(codeOrigin, "t1"))
++        end
++    end
++
++    # Arithmetic is in extended precision, as GCC's own code here does; a
++    # float result is rounded to single through memory.
++    def m68kFP2(opcode, kind)
++        if operands.size == 3
++            a, b, dst = operands
++            if dst.m68kOperand == b.m68kOperand and dst.m68kOperand != a.m68kOperand
++                $asm.puts "fmove.x #{b.m68kOperand},#{M68K_FP_SCRATCH}"
++                b = nil
++            end
++            if dst.m68kOperand != a.m68kOperand
++                $asm.puts "fmove.x #{a.m68kOperand},#{dst.m68kOperand}"
++            end
++            $asm.puts "#{opcode} #{b ? b.m68kOperand : M68K_FP_SCRATCH},#{dst.m68kOperand}"
++        else
++            dst = operands[1]
++            $asm.puts "#{opcode} #{operands[0].m68kOperand},#{dst.m68kOperand}"
++        end
++        m68kRoundToFloat(dst.m68kOperand) if kind == :float
++    end
++
++    def m68kRoundToFloat(register)
++        $asm.puts "fmove.s #{register},-(sp)"
++        $asm.puts "fmove.s (sp)+,#{register}"
++    end
++
++    # Branch on an IEEE comparison of a with b.
++    def m68kFPBranch(condition, size)
++        a, b, target = operands
++        $asm.puts "fcmp.x #{b.m68kOperand},#{a.m68kOperand}"
++        $asm.puts "#{condition} #{m68kTarget(target)}"
++    end
++
++    def m68kFPCompareSet(condition)
++        a, b, dst = operands
++        $asm.puts "fcmp.x #{b.m68kOperand},#{a.m68kOperand}"
++        $asm.puts "#{condition} d0"
++        $asm.puts "and.l #1,d0"
++        m68kStore32("d0", dst)
++    end
++
++    # Truncates fpN toward zero into d0 (fmove.l rounds with the FPCR mode).
++    def m68kTruncateToInt(source)
++        $asm.puts "fmove.l fpcr,d2"
++        $asm.puts "move.l d2,d3"
++        $asm.puts "and.l #0xffffffcf,d3"
++        $asm.puts "or.l #0x10,d3"
++        $asm.puts "fmove.l d3,fpcr"
++        $asm.puts "fmove.l #{source},d0"
++        $asm.puts "fmove.l d2,fpcr"
++    end
++
++    def lowerM68K
++        case opcode
++        when "addi", "addp"
++            m68kBinary32("add.l")
++        when "addq"
++            m68kAdd64
++        when "subi", "subp"
++            m68kBinary32("sub.l")
++        when "subq"
++            m68kSub64
++        when "andi", "andp"
++            m68kBinary32("and.l")
++        when "andq"
++            m68kLogical64("and.l")
++        when "ori", "orp"
++            m68kBinary32("or.l")
++        when "orq"
++            m68kLogical64("or.l")
++        when "xori", "xorp"
++            if operands.size == 3
++                a, b, dst = operands
++            else
++                a, b, dst = operands[1], operands[0], operands[1]
++            end
++            $asm.puts "move.l #{m68kSource32(a, "d0")},d0"
++            $asm.puts "move.l #{m68kSource32(b, "d1")},d1"
++            $asm.puts "eor.l d1,d0"
++            m68kStore32("d0", dst)
++        when "xorq"
++            if operands.size == 3
++                a, b, dst = operands
++            else
++                a, b, dst = operands[1], operands[0], operands[1]
++            end
++            m68kLoad64(a, "d0", "d1")
++            m68kLoad64(b, "d2", "d3")
++            $asm.puts "eor.l d2,d0"
++            $asm.puts "eor.l d3,d1"
++            m68kStore64("d0", "d1", dst)
++        when "orh"
++            # 16-bit or, into memory (profile bits) or a register.
++            source, dst = operands
++            value = source.is_a?(Immediate) ? "##{source.value & 0xffff}" : m68kSource32(source, "d1")
++            if dst.is_a? RegisterID
++                $asm.puts "move.l #{dst.m68kLo},d0"
++                $asm.puts "or.w #{value},d0"
++                $asm.puts "and.l #0xffff,d0"
++                m68kStore32("d0", dst)
++            else
++                $asm.puts "move.l #{value},d1" unless value =~ /\A(#|d1)/
++                $asm.puts "or.w #{value},#{m68kAddress(dst)}" if value.start_with?("#")
++                $asm.puts "or.w d1,#{m68kAddress(dst)}" unless value.start_with?("#")
++            end
++        when "muli", "mulp"
++            m68kBinary32("muls.l")
++        when "mulq"
++            m68kMul64
++        when "negi", "negp"
++            $asm.puts "move.l #{operands[0].m68kLo},d0"
++            $asm.puts "neg.l d0"
++            m68kStore32("d0", operands[0])
++        when "negq"
++            m68kLoad64(operands[0], "d0", "d1")
++            $asm.puts "neg.l d1"
++            $asm.puts "negx.l d0"
++            m68kStore64("d0", "d1", operands[0])
++        when "noti"
++            $asm.puts "move.l #{operands[0].m68kLo},d0"
++            $asm.puts "not.l d0"
++            m68kStore32("d0", operands[0])
++        when "notq"
++            m68kLoad64(operands[0], "d0", "d1")
++            $asm.puts "not.l d0"
++            $asm.puts "not.l d1"
++            m68kStore64("d0", "d1", operands[0])
++        when "lshifti", "lshiftp"
++            m68kShift32("lsl.l")
++        when "rshifti", "rshiftp"
++            m68kShift32("asr.l")
++        when "urshifti", "urshiftp"
++            m68kShift32("lsr.l")
++        when "lrotatei"
++            m68kShift32("rol.l")
++        when "rrotatei"
++            m68kShift32("ror.l")
++        when "lshiftq"
++            m68kShift64(:left)
++        when "rshiftq"
++            m68kShift64(:right)
++        when "urshiftq"
++            m68kShift64(:uright)
++        when "lrotateq"
++            m68kRotate64(true)
++        when "rrotateq"
++            m68kRotate64(false)
++        when "move"
++            source, dst = operands
++            if source.is_a? RegisterID and dst.is_a? RegisterID and source.m68kPinned and dst.m68kPinned
++                $asm.puts "move.l #{source.m68kPinned},#{dst.m68kPinned}"
++            elsif dst.m68kPinned
++                $asm.puts "move.l #{m68kSource32(source, "d1")},#{dst.m68kPinned}"
++            elsif source.is_a? Immediate and source.value >= -128 and source.value <= 127
++                $asm.puts "moveq ##{source.value},d1"
++                $asm.puts "move.l d1,#{dst.m68kLo}"
++                $asm.puts source.value < 0 ? "moveq #-1,d0" : "moveq #0,d0"
++                $asm.puts "move.l d0,#{dst.m68kHi}"
++            else
++                m68kLoad64(source, "d0", "d1")
++                m68kStore64("d0", "d1", dst)
++            end
++        when "sxi2q"
++            $asm.puts "move.l #{m68kSource32(operands[0], "d0")},d0"
++            m68kStore32Signed("d0", operands[1])
++        when "zxi2q"
++            $asm.puts "move.l #{m68kSource32(operands[0], "d0")},d0"
++            m68kStore32("d0", operands[1])
++        when "sxb2i"
++            m68kByteOperand(operands[0], "d0")
++            $asm.puts "extb.l d0"
++            m68kStore32("d0", operands[1])
++        when "sxh2i"
++            $asm.puts "move.l #{m68kSource32(operands[0], "d0")},d0"
++            $asm.puts "ext.l d0"
++            m68kStore32("d0", operands[1])
++        when "sxb2q", "sxb2p"
++            m68kByteOperand(operands[0], "d0")
++            $asm.puts "extb.l d0"
++            opcode == "sxb2p" ? m68kStore32("d0", operands[1]) : m68kStore32Signed("d0", operands[1])
++        when "sxh2q"
++            $asm.puts "move.l #{m68kSource32(operands[0], "d0")},d0"
++            $asm.puts "ext.l d0"
++            m68kStore32Signed("d0", operands[1])
++        when "loadi", "loadp"
++            m68kLoad(4, false)
++        when "loadis"
++            m68kLoad(4, :quad)
++        when "loadb"
++            m68kLoad(1, false)
++        when "loadbsi"
++            m68kLoad(1, true)
++        when "loadbsq"
++            m68kLoad(1, :quad)
++        when "loadh"
++            m68kLoad(2, false)
++        when "loadhsi"
++            m68kLoad(2, true)
++        when "loadhsq"
++            m68kLoad(2, :quad)
++        when "loadq"
++            source, dst = operands
++            hi, lo = m68kAddressPair(source)
++            $asm.puts "move.l #{hi},d0"
++            $asm.puts "move.l #{lo},d1"
++            m68kStore64("d0", "d1", dst)
++        when "storei", "storep"
++            m68kStore(4)
++        when "storeh"
++            m68kStore(2)
++        when "storeb"
++            m68kStore(1)
++        when "storeq"
++            value, destination = operands
++            m68kLoad64(value, "d0", "d1")
++            hi, lo = m68kAddressPair(destination)
++            $asm.puts "move.l d0,#{hi}"
++            $asm.puts "move.l d1,#{lo}"
++        when "transferi", "transferp"
++            $asm.puts "move.l #{m68kAddress(operands[0], 0, "a0", "d7")},d0"
++            $asm.puts "move.l d0,#{m68kAddress(operands[1], 0, "a1", "d6")}"
++        when "transferq"
++            hi, lo = m68kAddressPair(operands[0], "a0", "d7")
++            $asm.puts "move.l #{hi},d0"
++            $asm.puts "move.l #{lo},d1"
++            hi, lo = m68kAddressPair(operands[1], "a1", "d6")
++            $asm.puts "move.l d0,#{hi}"
++            $asm.puts "move.l d1,#{lo}"
++        when "leai", "leap"
++            source, dst = operands
++            case source
++            when LabelReference, LocalLabelReference
++                $asm.puts "lea #{source.m68kSymbol},a0"
++            else
++                $asm.puts "lea #{m68kAddress(source)},a0"
++            end
++            m68kStore32("a0", dst)
++        when "loadf"
++            $asm.puts "fmove.s #{m68kAddress(operands[0])},#{operands[1].m68kOperand}"
++        when "loadd"
++            $asm.puts "fmove.d #{m68kAddress(operands[0])},#{operands[1].m68kOperand}"
++        when "storef"
++            $asm.puts "fmove.s #{operands[0].m68kOperand},#{m68kAddress(operands[1])}"
++        when "stored"
++            $asm.puts "fmove.d #{operands[0].m68kOperand},#{m68kAddress(operands[1])}"
++        when "moved"
++            $asm.puts "fmove.x #{operands[0].m68kOperand},#{operands[1].m68kOperand}"
++        when "addd"
++            m68kFP2("fadd.x", :double)
++        when "subd"
++            m68kFP2("fsub.x", :double)
++        when "muld"
++            m68kFP2("fmul.x", :double)
++        when "divd"
++            m68kFP2("fdiv.x", :double)
++        when "addf"
++            m68kFP2("fadd.x", :float)
++        when "subf"
++            m68kFP2("fsub.x", :float)
++        when "mulf"
++            m68kFP2("fmul.x", :float)
++        when "divf"
++            m68kFP2("fdiv.x", :float)
++        when "sqrtd"
++            $asm.puts "fsqrt.x #{operands[0].m68kOperand},#{operands[1].m68kOperand}"
++        when "sqrtf"
++            $asm.puts "fsqrt.x #{operands[0].m68kOperand},#{operands[1].m68kOperand}"
++            m68kRoundToFloat(operands[1].m68kOperand)
++        when "absd", "absf"
++            $asm.puts "fabs.x #{operands[0].m68kOperand},#{operands[1].m68kOperand}"
++        when "negd", "negf"
++            $asm.puts "fneg.x #{operands[0].m68kOperand},#{operands[1].m68kOperand}"
++        when "ci2d", "ci2f", "ci2ds", "ci2fs"
++            $asm.puts "move.l #{m68kSource32(operands[0], "d0")},d0"
++            if opcode == "ci2d" or opcode == "ci2f"
++                # Unsigned 32-bit: add 2^32 when the sign bit is set.
++                done = m68kNewLabel
++                $asm.puts "fmove.l d0,#{operands[1].m68kOperand}"
++                $asm.puts "tst.l d0"
++                $asm.puts "jpl #{done}"
++                $asm.puts "fadd.d #0r4294967296.0,#{operands[1].m68kOperand}"
++                $asm.puts "#{done}:"
++            else
++                $asm.puts "fmove.l d0,#{operands[1].m68kOperand}"
++            end
++        when "cd2f"
++            $asm.puts "fmove.x #{operands[0].m68kOperand},#{operands[1].m68kOperand}"
++            m68kRoundToFloat(operands[1].m68kOperand)
++        when "cf2d"
++            $asm.puts "fmove.x #{operands[0].m68kOperand},#{operands[1].m68kOperand}"
++        when "fq2d"
++            m68kLoad64(operands[0], "d0", "d1")
++            $asm.puts "move.l d1,-(sp)"
++            $asm.puts "move.l d0,-(sp)"
++            $asm.puts "fmove.d (sp)+,#{operands[1].m68kOperand}"
++        when "fd2q"
++            $asm.puts "fmove.d #{operands[0].m68kOperand},-(sp)"
++            $asm.puts "move.l (sp)+,d0"
++            $asm.puts "move.l (sp)+,d1"
++            m68kStore64("d0", "d1", operands[1])
++        when "fi2f"
++            $asm.puts "move.l #{m68kSource32(operands[0], "d0")},-(sp)"
++            $asm.puts "fmove.s (sp)+,#{operands[1].m68kOperand}"
++        when "ff2i"
++            $asm.puts "fmove.s #{operands[0].m68kOperand},-(sp)"
++            $asm.puts "move.l (sp)+,d0"
++            m68kStore32("d0", operands[1])
++        when "truncated2i", "truncatef2i", "truncated2is", "truncatef2is"
++            m68kTruncateToInt(operands[0].m68kOperand)
++            m68kStore32("d0", operands[1])
++        when "td2i"
++            m68kTruncateToInt(operands[0].m68kOperand)
++            m68kStore32("d0", operands[1])
++        when "btd2i", "bcd2i"
++            # Branch when the double is not exactly an int32 (bcd2i: or is -0).
++            source, dst, target = operands
++            m68kTruncateToInt(source.m68kOperand)
++            $asm.puts "fmove.l d0,#{M68K_FP_SCRATCH}"
++            $asm.puts "fcmp.x #{source.m68kOperand},#{M68K_FP_SCRATCH}"
++            $asm.puts "fbne #{m68kTarget(target)}"
++            if opcode == "bcd2i"
++                ok = m68kNewLabel
++                $asm.puts "tst.l d0"
++                $asm.puts "jne #{ok}"
++                $asm.puts "fmove.d #{source.m68kOperand},-(sp)"
++                $asm.puts "move.l (sp)+,d1"
++                $asm.puts "addq.l #4,sp"
++                $asm.puts "tst.l d1"
++                $asm.puts "jmi #{m68kTarget(target)}"
++                $asm.puts "#{ok}:"
++            end
++            m68kStore32("d0", dst)
++        when "bdeq"
++            m68kFPBranch("fbeq", :double)
++        when "bdneq"
++            m68kFPBranch("fbogl", :double)
++        when "bdgt"
++            m68kFPBranch("fbogt", :double)
++        when "bdgteq"
++            m68kFPBranch("fboge", :double)
++        when "bdlt"
++            m68kFPBranch("fbolt", :double)
++        when "bdlteq"
++            m68kFPBranch("fbole", :double)
++        when "bdequn"
++            m68kFPBranch("fbueq", :double)
++        when "bdnequn"
++            m68kFPBranch("fbne", :double)
++        when "bdgtun"
++            m68kFPBranch("fbugt", :double)
++        when "bdgtequn"
++            m68kFPBranch("fbuge", :double)
++        when "bdltun"
++            m68kFPBranch("fbult", :double)
++        when "bdltequn"
++            m68kFPBranch("fbule", :double)
++        when "bfeq"
++            m68kFPBranch("fbeq", :float)
++        when "bfgt"
++            m68kFPBranch("fbogt", :float)
++        when "bflt"
++            m68kFPBranch("fbolt", :float)
++        when "bfgtun"
++            m68kFPBranch("fbugt", :float)
++        when "bfgtequn"
++            m68kFPBranch("fbuge", :float)
++        when "bfltun"
++            m68kFPBranch("fbult", :float)
++        when "bfltequn"
++            m68kFPBranch("fbule", :float)
++        when "cdeq", "cfeq"
++            m68kFPCompareSet("fseq")
++        when "cdneq", "cfneq"
++            m68kFPCompareSet("fsogl")
++        when "cdnequn", "cfnequn"
++            m68kFPCompareSet("fsne")
++        when "cdgt", "cfgt"
++            m68kFPCompareSet("fsogt")
++        when "cdgteq", "cfgteq"
++            m68kFPCompareSet("fsoge")
++        when "cdlt", "cflt"
++            m68kFPCompareSet("fsolt")
++        when "cdlteq", "cflteq"
++            m68kFPCompareSet("fsole")
++        when "movdz"
++            $asm.puts "fmove.l #0,#{operands[0].m68kOperand}"
++        when /^b([ipqb])(eq|neq|a|aeq|b|beq|gt|gteq|lt|lteq)$/
++            m68kBranch({ "i" => :int, "p" => :ptr, "q" => :quad, "b" => :byte }[$1], $2)
++        when /^c([ipqb])(eq|neq|a|aeq|b|beq|gt|gteq|lt|lteq)$/
++            m68kCompareSet({ "i" => :int, "p" => :ptr, "q" => :quad, "b" => :byte }[$1], $2)
++        when /^bt([ipqb])(s|z|nz)$/
++            m68kBranchTest({ "i" => :int, "p" => :ptr, "q" => :quad, "b" => :byte }[$1], $2)
++        when /^t([ipqb])(s|z|nz)$/
++            m68kSetTest({ "i" => :int, "p" => :ptr, "q" => :quad, "b" => :byte }[$1], $2)
++        when /^b(add|sub|mul|or)([ipq])(o|s|z|nz)$/
++            m68kOpBranch($1, { "i" => :int, "p" => :ptr, "q" => :quad }[$2], $3)
++        when "jmp"
++            target = operands[0]
++            case target
++            when LabelReference, LocalLabelReference
++                $asm.puts "jra #{target.m68kSymbol}"
++            when RegisterID
++                $asm.puts "move.l #{target.m68kLo},a0"
++                $asm.puts "jmp (a0)"
++            else
++                $asm.puts "move.l #{m68kAddress(target)},a0"
++                $asm.puts "jmp (a0)"
++            end
++        when "call"
++            raise "Generic call is not supported by the C loop's interpreter at #{codeOriginString}"
++        when "ret"
++            $asm.puts "move.l #{M68K_VRF_LR},a0"
++            $asm.puts "jmp (a0)"
++        when "cloopCrash"
++            $asm.puts "jsr _abort"
++        when "cloopCallJSFunction"
++            uid = $asm.newUID
++            label = "llint_cloop_did_return_from_js_#{uid}"
++            $asm.puts "move.l ##{Assembler.externOrGlobalLabelReference(label)},#{M68K_VRF_LR}"
++            $asm.puts "clr.l #{M68K_VRF_LR_HI}"
++            $asm.puts "move.l #{m68kSource32(operands[0], "d0")},a0"
++            $asm.puts "jmp (a0)"
++            $asm.putsLabel(label, true, false, false, false)
++        when "cloopCallNative"
++            # EncodedJSValue function(JSGlobalObject*, CallFrame*): t0, t1 in, t0 out.
++            $asm.puts "move.l #{m68kSource32(operands[0], "d2")},d2"
++            $asm.puts "move.l _jsc_m68k_cloop_sp_field,a0"
++            $asm.puts "move.l #{M68K_VRF_SP},(a0)"
++            $asm.puts "move.l #{RegisterID.forName(codeOrigin, "t1").m68kLo},-(sp)"
++            $asm.puts "move.l #{RegisterID.forName(codeOrigin, "t0").m68kLo},-(sp)"
++            $asm.puts "move.l d2,a0"
++            $asm.puts "jsr (a0)"
++            $asm.puts "addq.l #8,sp"
++            m68kStore64("d0", "d1", RegisterID.forName(codeOrigin, "t0"))
++        when "cloopCallSlowPath", "cloopCallSlowPath3", "cloopCallSlowPath4"
++            m68kCallC(operands[0], operands[1..-1], true)
++        when "cloopCallSlowPathVoid"
++            m68kCallC(operands[0], operands[1..-1], false)
++        when "cloopDo"
++        when "push"
++            m68kPush
++        when "pop"
++            m68kPop
++        when "nop", "memfence"
++            $asm.puts "nop" if opcode == "nop"
++        when "break"
++            $asm.puts "illegal"
++        when "tagReturnAddress", "untagReturnAddress", "removeCodePtrTag", "untagArrayPtr", "removeArrayPtrTag", "tagCodePtr"
++        when "lzcnti"
++            # bfffo finds the first set bit from the top: its offset is the count.
++            done = m68kNewLabel
++            $asm.puts "move.l #{m68kSource32(operands[0], "d1")},d1"
++            $asm.puts "moveq #32,d0"
++            $asm.puts "tst.l d1"
++            $asm.puts "jeq #{done}"
++            $asm.puts "bfffo d1{#0:#32},d0"
++            $asm.puts "#{done}:"
++            m68kStore32("d0", operands[1])
++        when "lzcntq"
++            done = m68kNewLabel
++            low = m68kNewLabel
++            m68kLoad64(operands[0], "d2", "d3")
++            $asm.puts "tst.l d2"
++            $asm.puts "jeq #{low}"
++            $asm.puts "bfffo d2{#0:#32},d0"
++            $asm.puts "jra #{done}"
++            $asm.puts "#{low}:"
++            $asm.puts "moveq #64,d0"
++            $asm.puts "tst.l d3"
++            $asm.puts "jeq #{done}"
++            $asm.puts "bfffo d3{#0:#32},d0"
++            $asm.puts "add.l #32,d0"
++            $asm.puts "#{done}:"
++            m68kStore32("d0", operands[1])
++        when "tzcnti"
++            # Isolate the lowest set bit (x & -x), then count from the top.
++            done = m68kNewLabel
++            $asm.puts "move.l #{m68kSource32(operands[0], "d1")},d1"
++            $asm.puts "moveq #32,d0"
++            $asm.puts "tst.l d1"
++            $asm.puts "jeq #{done}"
++            $asm.puts "move.l d1,d2"
++            $asm.puts "neg.l d2"
++            $asm.puts "and.l d2,d1"
++            $asm.puts "bfffo d1{#0:#32},d0"
++            $asm.puts "eor.l #31,d0"
++            $asm.puts "#{done}:"
++            m68kStore32("d0", operands[1])
++        when "peek"
++            source, dst = operands
++            $asm.puts "move.l #{source.value * 8}(sp),d0"
++            $asm.puts "move.l #{source.value * 8 + 4}(sp),d1"
++            m68kStore64("d0", "d1", dst)
++        when "poke"
++            value, slot = operands
++            m68kLoad64(value, "d0", "d1")
++            $asm.puts "move.l d0,#{slot.value * 8}(sp)"
++            $asm.puts "move.l d1,#{slot.value * 8 + 4}(sp)"
++        else
++            lowerDefault
++        end
++    end
++end
+diff --git a/Source/JavaScriptCore/offlineasm/settings.rb b/Source/JavaScriptCore/offlineasm/settings.rb
+index 24243db47e..9d6f5968bc 100644
+--- a/Source/JavaScriptCore/offlineasm/settings.rb
++++ b/Source/JavaScriptCore/offlineasm/settings.rb
+@@ -74,6 +74,8 @@ def computeSettingsCombinations(ast)
+         | backend |
+         map = allBackendsFalse.clone
+         map[backend] = true
++        # The M68K back end runs the C loop's version of the interpreter.
++        map["C_LOOP"] = true if backend == "M68K"
+         settingsCombinator(settingsCombinations, map, nonBackendSettings)
+     }
+     
+@@ -94,6 +96,9 @@ def forSettings(concreteSettings, ast)
+     BACKENDS.each {
+         | backend |
+         if concreteSettings[backend]
++            # The M68K back end runs the C loop's version of the interpreter,
++            # so C_LOOP is on with it.
++            next if backend == "C_LOOP" and concreteSettings["M68K"]
+             raise if selectedBackend
+             selectedBackend = backend
+         end
+-- 
+2.53.0
+

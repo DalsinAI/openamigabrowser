@@ -40,7 +40,38 @@ Two facts shape the work:
   comes first. The first is smaller; the second is the foundation a 68k JIT
   needs anyway.
 
-## Step 1: the 68k interpreter
+## Step 1: the 68k interpreter (done, 6 October 2026)
+
+Built as WebKit patch 0015 (`webkit/patches/0015-jsc-m68k-interpreter.patch`),
+on by default in `scripts/build-webcore.sh` (CMake `JSC_M68K_LLINT`). It took
+a shorter route than the plan below: the C loop's plumbing stays (its own
+JavaScript stack, slow paths as plain C calls, no assembler), and offlineasm's
+new M68K back end (`offlineasm/m68k.rb`) emits the C loop's version of the
+interpreter as 68k assembly instead of C. Interpreter registers are 64-bit
+slots in a register file in memory, cfr is in a5.
+
+Same answers as the C interpreter on a semantics page (integers, doubles,
+NaN and -0, strings, objects, closures, exceptions, regular expressions),
+and on the bench:
+
+| Loop body (100,000 times) | C interpreter | 68k interpreter |
+| --- | --- | --- |
+| `s = o.a` | 700 ms | 60 ms |
+| `s = a[0]` | 720 ms | 60 ms |
+| `s = i * 3` | 880 ms | 40 ms |
+| `s = f()` | 1,060 ms | 100 ms |
+| `tests/jsbench.html` int loop (200,000) | 1,960 ms | 100 ms |
+| `tests/jsbench.html` properties | 2,460 ms | 200 ms |
+| `tests/jsbench.html` array sort | 1,420 ms | 600 ms |
+
+Wikipedia's Amiga article loads completely in 40 s (97 s before), BBC and the
+Microsoft sign-in page render as before. The slow opcodes were not the
+emulator after all: they were GCC's code for the C loop, a 384 KB function.
+
+Still to do: keep the hottest registers (PC, PB, t0-t3) in 68k registers
+instead of the register file, and measure on a real 68040.
+
+The original plan, for reference:
 
 JavaScriptCore's interpreter is written once in offlineasm
 (`llint/LowLevelInterpreter*.asm`) and turned into machine code by a back
