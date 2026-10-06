@@ -88,7 +88,48 @@ generator lists every object's precompiled-header options in the target's
 file. A new file in `PlatformAmiga.cmake` therefore recompiles all of WebCore,
 about an hour on the build PC. New Amiga code goes into a file that is
 already listed (by `#include`), or waits for a change that needs a full
-rebuild anyway.
+rebuild anyway. Ninja has no such file: a build folder made with it
+(`GENERATOR=Ninja`, the default when ninja is installed) recompiles only
+what changed.
+
+**ccache and the precompiled header (5 October 2026).** WebKit turns ccache
+on by itself when it is installed, but on Linux without the `pch_defines`
+and `time_macros` settings, and every WebCore file uses the precompiled
+header: ccache gave up on all of them ("could not use precompiled header")
+and compiled each one again. `build-webcore.sh` now runs the compiler
+through a launcher in the build folder (`ob-ccache`) with those settings
+and its own 20 GB cache, so an unchanged file comes from the cache (6.5 s
+of compiling becomes 0.02 s), and a rebuild that touches files without
+changing them costs little.
+
+**Engine and browser builds.** OpenBrowser's own code (src/webcore) builds
+as the library OBCore and the programs, separately from WebKit's
+libraries: `build-webcore.sh build-browser` compiles only OpenBrowser's
+files and relinks, and `build-engine` does nothing unless the engine's
+fingerprint (the WebKit tree, compiler, libraries' headers and options) has
+changed. Measured on the build PC with the Makefile generator, 5 October
+2026: a build with nothing to do takes under a second; one changed
+OpenBrowser file 13 to 14 s (one compile, then OBCore and OpenBrowser
+linked); one changed WebCore file 13 s for the engine and 13 s to relink
+OpenBrowser. Linking the 116 MB program is most of that time.
+
+With Ninja (5 October 2026, same machine): nothing to do, 3 s for
+`build-webcore.sh all`; one changed OpenBrowser file 39 s (17 s when ccache
+has it); one changed WebCore file 10 s, then 15 s to relink; a new file in
+`PlatformAmiga.cmake` 10 s, compiling only that file; and with every object
+removed (`clean-engine --yes`), all of WebKit and the programs again in
+154 s, 1023 of WebKit's 1028 files coming from ccache. A full build with an
+empty cache is still most of an hour on one PC.
+
+**A second PC.** `OB_DISTCC_HOSTS` sends compiles to other PCs with distcc
+over SSH (the same compiler at the same path there). ccache adds
+`-fpch-preprocess` for files that use the precompiled header, which makes
+distcc's preprocessed copy name the `.gch` file that the other PC does not
+have, so every remote compile failed and fell back to this PC; the build
+folder's `ob-distcc` drops that option. Compiles here keep the precompiled
+header; the other PC compiles the headers in full. Jobs share one SSH
+connection per PC, since a burst of new logins trips the other PC's
+`MaxStartups` limit and distcc then leaves it alone for a minute.
 
 **AmigaDOS names in fontconfig.** fontconfig joins its configuration
 directory and file name with a slash, so an empty directory turned
@@ -132,6 +173,103 @@ threads runs, so the browser stops it (`stopAmigaNetwork()`) before it exits.
 variables of the Shell that started the program (`Set`), not global ones
 (`SetEnv`). WebKit's `WEBKIT_CURL_*` settings are given with `Set`.
 
+## Speed on a 68k
+
+Measured on the test instance (AmigaChrome's AC090, a 68040 with FPU, 256 MB),
+4 October 2026:
+
+| Step | Time | What it is |
+| --- | --- | --- |
+| Loading the program | about 40 s | 122 MB: 82 MB of code, 33 MB of ICU data, 1.6 million relocations, read through the emulated disk |
+| WebCore starting | 2 to 3 s | after `main()` |
+| The first text on a page | about 25 s | fontconfig scanning every font again, as its cache was never saved |
+| A page with a script and no text | 4 to 9 s | local file |
+| Each new https site | 4 to 10 s | the TLS handshake (see above) |
+
+What is done about it:
+
+- **The font cache works.** fontconfig's cache was never written under
+  libnix (openamigafontconfig's cache patch), so every start scanned all the
+  fonts. It now lives in `PROGDIR:fontconfig/cache`, which lasts across
+  reboots, with `T:fontconfig` when the program's drawer cannot be written.
+- **Less ICU data.** `scripts/build-icu.sh` keeps the items listed in
+  `icu/data-keep.lst`: the root and English locales, every break rule and
+  dictionary, normalisation, properties and converters. The data goes from
+  33 MB to under 13 MB, and the program from 122 MB to 101 MB.
+- **Fewer rendering updates while a page loads.** WebCore asks for a
+  rendering update (style and layout of the whole page) after each piece of a
+  page arrives. Until the page has loaded, OpenBrowser lets one through at
+  most every second, or every twice as long as the last one took.
+- **Cookies stay off the disk until needed.** The cookie database keeps its
+  journal in memory and does not sync, instead of writing, syncing and
+  deleting a journal file for every cookie.
+- **Scripts and pictures can be switched off** (Settings menu, or the tool
+  types `JAVASCRIPT=NO` and `PICTURES=NO`), the quickest way through a heavy
+  page.
+- **Fonts come from memory, unhinted.** FreeType read each glyph from the
+  disk through stdio and hinted every glyph as it was drawn; a window sat at
+  31% while its first text was laid out. On AmigaOS FreeType now reads a font
+  file into memory once (openamigafreetype), and `fonts.conf` turns hinting
+  off.
+- **Two connections per host** (`0007` in `webkit/`), and the C-loop
+  interpreter built with `-O2` while the rest is built for size.
+
+**Infinity on AmigaChrome's AC090 FPU (fixed in AmigaChrome 0.30.0).** On
+older AC090 builds an infinity compared unequal to itself. WTF's hash tables
+mark empty double keys with +infinity, so a table keyed by a double never
+found an empty slot and looped: www.bbc.co.uk stopped in
+`Style::Resolver::keyframeRulesForName()`, found by sampling the stuck
+task's stack (`tests` programs `fpinf` and `fpedge`, in the build tree).
+Real 68881, 68882 and 68040 FPUs were never affected.
+
+**A title window while it starts (5 October 2026).** The browser is about
+100 MB, and loading it from disk took 10 seconds or more with nothing on the
+screen. `OpenBrowser` is now a small launcher (`ob_launcher.c`): it opens a
+title window at once, loads `OpenBrowser.engine` with `InternalLoadSeg()`
+and a progress bar that follows the bytes read, then runs it in its own
+process with `RunCommand()`, so the browser keeps the launcher's icon, tool
+types, Shell arguments and `PROGDIR:`. Started from Workbench, the launcher
+puts a copy of its Workbench message on its own port for the engine's
+start-up code. The engine reports its steps to the title window through the
+public port `OPENBROWSER.SPLASH` (`ob_splash.h`) and closes it when its own
+window is open; started directly, without the launcher, it simply finds no
+port. Once the window is open, the status line names each file being
+fetched, since one can take seconds (a secure connection to a new site,
+about ten).
+
+## Experiments, 5 October 2026
+
+**Drawing commands instead of pixels.** `obcore-view -dl` paints a page
+twice: directly with cairo, and through WebKit's display-list recorder
+(which keeps the drawing commands), replaying the list with cairo. On the
+test instance, 800x600, caches warm:
+
+| Page | Commands | Glyphs | Bytes of commands | Paint (cairo) | Recording | Replay |
+| --- | --- | --- | --- | --- | --- | --- |
+| `test1.html` | 148 | 334 | 4.4 KB | 440 ms | 80 ms | 360 ms |
+| example.com | 215 | 714 | 7.7 KB | 1,660 ms | 60 ms | 1,780 ms |
+| 300 paragraphs and a list | 316 | 221 | 6.4 KB | 760 ms | 180 ms | 520 ms |
+
+The replayed pictures match the direct ones pixel for pixel. 75 to 96% of
+painting is cairo and pixman turning commands into pixels; WebCore deciding
+what to draw is the rest. A screen's commands are a few kilobytes against
+1.9 MB of pixels, so handing them to something faster to draw (a GPU, the
+host) would cut painting by 4 to 25 times.
+
+**Fetching through the PC.** With `OB_FETCH_PROXY` set (patch 0010,
+`scripts/ob-fetch-proxy.py`), another PC makes the connections and the TLS
+handshakes. AmigaChrome does not let an instance reach the PC it runs on, so
+the proxy ran on a second PC on the LAN. example.com took 38 s from the
+Shell command with TLS on the 68k and 27 s through the proxy: each new https
+site costs the 68k about 10 seconds of TLS. Wikipedia's Amiga article
+fetched all its files quickly either way and was still loading after 7
+minutes: on heavy pages the 68k's own work on the page (style, layout,
+scripts) is the bottleneck, not the network.
+
+**Pictures decode on the main task.** WebKit decoded big and animated
+pictures on work-queue threads: each a 2 MB stack, no gain on one CPU, and
+threads that kept the program from exiting. Both settings are off.
+
 ## Open problems
 
 **login.live.com stalls after its page arrives (4 October 2026).** The page
@@ -144,4 +282,7 @@ idle at its higher priority leaves the main task its time. example.com, whose
 script adds paragraphs in several languages, loads and draws. Next steps:
 sample the main task's program counter while it is stuck, or load a saved
 copy of the page from disk and remove its inline scripts one at a time.
+A likely cause, not yet re-tested: until WebKit patch 0008 (5 October 2026)
+every `for (k in o)` loop ran forever on the 68k, which would leave the main
+thread inside one script exactly like this.
 

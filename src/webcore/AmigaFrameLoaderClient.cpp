@@ -42,7 +42,10 @@
 #include <WebCore/SubstituteData.h>
 #include <WebCore/UserAgent.h>
 #include <WebCore/Widget.h>
+#include <stdio.h>
 #include <wtf/HashMap.h>
+#include <wtf/HashSet.h>
+#include <wtf/NeverDestroyed.h>
 #include <wtf/RunLoop.h>
 
 namespace OpenBrowser {
@@ -61,6 +64,51 @@ private:
     // Cookies live in OpenBrowser's own jar (AmigaCookieJar), not here.
     CookieStorageSession* storageSession() const final { return nullptr; }
 };
+
+// Hosts whose requests are refused (ads and trackers): one name per line in
+// PROGDIR:blocklist, "#" for comments. A name blocks its subdomains too.
+static const HashSet<String>& blockedHosts()
+{
+    static NeverDestroyed<HashSet<String>> hosts = [] {
+        HashSet<String> set;
+        if (FILE* file = fopen("PROGDIR:blocklist", "r")) {
+            char line[256];
+            while (fgets(line, sizeof line, file)) {
+                auto host = String::fromLatin1(line).trim(deprecatedIsSpaceOrNewline);
+                if (!host.isEmpty() && !host.startsWith('#'))
+                    set.add(host.convertToASCIILowercase());
+            }
+            fclose(file);
+        }
+        return set;
+    }();
+    return hosts;
+}
+
+static bool isBlockedHost(const URL& url)
+{
+    auto& hosts = blockedHosts();
+    if (hosts.isEmpty() || !url.protocolIsInHTTPFamily())
+        return false;
+    auto host = url.host().toString().convertToASCIILowercase();
+    while (!host.isEmpty()) {
+        if (hosts.contains(host))
+            return true;
+        auto dot = host.find('.');
+        if (dot == notFound)
+            break;
+        host = host.substring(dot + 1);
+    }
+    return false;
+}
+
+// Lite: the standard user agent with "Mobile", so sites send the pages they
+// make for phones, which are smaller and carry less script.
+static const String& liteUserAgent()
+{
+    static NeverDestroyed<String> userAgent { "Mozilla/5.0 (Amiga; AmigaOS 3.2; m68k; Mobile) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile Safari/605.1.15"_s };
+    return userAgent;
+}
 
 class AmigaFrameLoaderClient final : public LocalFrameLoaderClient {
 public:
@@ -97,6 +145,12 @@ private:
     bool shouldUseCredentialStorage(DocumentLoader*, ResourceLoaderIdentifier) final { return true; }
     void dispatchWillSendRequest(DocumentLoader*, ResourceLoaderIdentifier identifier, ResourceRequest& request, const ResourceResponse&) final
     {
+        if (isBlockedHost(request.url())) {
+            // WebCore cancels a load whose request comes back empty.
+            m_view.resourceEnded(request.url().string(), "blocked"_s);
+            request = { };
+            return;
+        }
         // Also called again for each redirect, with the new address.
         auto url = request.url().string();
         m_requestURLs.set(identifier, url);
@@ -230,7 +284,7 @@ private:
     void updateCachedDocumentLoader(DocumentLoader&) final { }
     void setTitle(const StringWithDirection&, const URL&) final { }
 
-    String userAgent(const URL&) const final { return standardUserAgent(); }
+    String userAgent(const URL&) const final { return m_view.liteMode() ? liteUserAgent() : standardUserAgent(); }
 
     void savePlatformDataToCachedFrame(CachedFrame*) final { }
     void transitionToCommittedFromCachedFrame(CachedFrame*) final { }

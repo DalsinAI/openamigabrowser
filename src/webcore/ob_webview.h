@@ -51,6 +51,14 @@ enum { OB_MOUSE_MOVE, OB_MOUSE_DOWN, OB_MOUSE_UP };
 int ob_webcore_init(void);
 int ob_webcore_init_with_network(const char *cookieDatabase);
 void ob_webcore_shutdown(void);
+/* Ends WebKit's helper threads, so the program can exit (libpthread waits
+ * for every thread). ob_webcore_shutdown() does this too. */
+void ob_webcore_stop_threads(void);
+
+/* TLS sessions kept across runs (on the main task, with the network up):
+ * load returns how many came back. */
+int ob_webview_load_tls_sessions(const char *path);
+void ob_webview_save_tls_sessions(const char *path);
 
 /* The run loop: do what is due, then ask when the next timer is (seconds
  * from now; 0 means at once, a negative number means no timer). */
@@ -75,6 +83,13 @@ void ob_webview_resize(OBWebView *view, int width, int height);
 /* Paints a part of the view into a 32-bit buffer of the whole view's size:
  * bytes A, R, G, B (cybergraphics' RECTFMT_ARGB), stride bytes per row. */
 void ob_webview_paint(OBWebView *view, unsigned char *argb, int stride, int x, int y, int width, int height);
+/* The display-list experiment: paints the area directly into `direct` and,
+ * through WebKit's display list (recorded, then replayed with cairo), into
+ * `replayed`, and prints OBVIEW_DL lines: what the commands are, roughly
+ * how many bytes they take, and how long painting, recording and replaying
+ * took. */
+void ob_webview_report_display_list(OBWebView *view, unsigned char *direct, unsigned char *replayed, int stride,
+    int x, int y, int width, int height);
 /* The area changed since the last call (width 0 when none). */
 void ob_webview_dirty(OBWebView *view, int *x, int *y, int *width, int *height);
 
@@ -84,6 +99,15 @@ void ob_webview_wheel(OBWebView *view, int x, int y, int deltaX, int deltaY, int
  * characters MapRawKey() made of it (UTF-8, may be empty). */
 void ob_webview_key(OBWebView *view, int down, int rawKey, const char *text, int qualifiers);
 void ob_webview_focus(OBWebView *view, int focused);
+
+/* Page options, both on at first: scripts (JavaScript) and pictures. Off,
+ * pages load much faster on a 68k. They apply from the next page loaded. */
+void ob_webview_set_scripts(OBWebView *view, int enabled);
+void ob_webview_set_pictures(OBWebView *view, int enabled);
+/* Off at first: web fonts (pages use the Liberation and DejaVu fonts), and
+ * Lite, which asks sites for their mobile pages. */
+void ob_webview_set_web_fonts(OBWebView *view, int enabled);
+void ob_webview_set_lite(OBWebView *view, int enabled);
 
 #ifdef __cplusplus
 }

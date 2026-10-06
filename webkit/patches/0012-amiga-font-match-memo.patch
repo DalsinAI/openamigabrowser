@@ -1,0 +1,93 @@
+From d49af77bcd206268ac01e457e8b9ce1757d43a3b Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 01:10:28 +0100
+Subject: [PATCH] Amiga port: remember fontconfig's match for each family,
+ weight and slant
+
+---
+ .../graphics/freetype/FontCacheFreeType.cpp   | 43 +++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/Source/WebCore/platform/graphics/freetype/FontCacheFreeType.cpp b/Source/WebCore/platform/graphics/freetype/FontCacheFreeType.cpp
+index 16d1a38d3e..0e1754ea21 100644
+--- a/Source/WebCore/platform/graphics/freetype/FontCacheFreeType.cpp
++++ b/Source/WebCore/platform/graphics/freetype/FontCacheFreeType.cpp
+@@ -41,6 +41,9 @@
+ #include <wtf/Assertions.h>
+ #include <wtf/HashFunctions.h>
+ #include <wtf/HashMap.h>
++#include <wtf/Lock.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/text/MakeString.h>
+ #include <wtf/text/CString.h>
+ 
+ #if PLATFORM(GTK) || (PLATFORM(WPE) && ENABLE(WPE_PLATFORM))
+@@ -382,6 +385,28 @@ std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDe
+     if (!configurePatternForFontDescription(pattern.get(), fontDescription))
+         return nullptr;
+ 
++#if PLATFORM(AMIGA)
++    // Which font a family, weight and slant come to does not depend on the
++    // size (only scalable fonts are used), and FcFontMatch is slow on a 68k:
++    // a page with long font-family lists in many sizes spent over half its
++    // time in it. Remember each answer, found or not.
++    static Lock matchesLock;
++    static NeverDestroyed<HashMap<String, RefPtr<FcPattern>>> matches;
++    String matchKey = makeString(familyNameString, '|', fontWeightToFontconfigWeight(fontDescription.weight()), '|', fontDescription.fontStyleSlope() ? 1 : 0);
++    RefPtr<FcPattern> resultPattern;
++    bool remembered = false;
++    {
++        Locker locker { matchesLock };
++        auto it = matches->find(matchKey);
++        if (it != matches->end()) {
++            if (!it->value)
++                return nullptr;
++            resultPattern = adoptRef(FcPatternDuplicate(it->value.get()));
++            remembered = true;
++        }
++    }
++    if (!remembered) {
++#endif
+     // We do not normally allow fontconfig to substitute one font family for another, since this
+     // would break CSS font family fallback: the website should be in control of fallback. During
+     // normal font matching, the only font family substitution permitted is for generic families
+@@ -401,9 +426,18 @@ std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDe
+     String familyNameAfterConfiguration = String::fromUTF8(reinterpret_cast<char*>(fontConfigFamilyNameAfterConfiguration));
+ 
+     FcResult fontConfigResult;
++#if PLATFORM(AMIGA)
++    resultPattern = adoptRef(FcFontMatch(nullptr, pattern.get(), &fontConfigResult));
++    if (!resultPattern) { // No match.
++        Locker locker { matchesLock };
++        matches->set(matchKey, nullptr);
++        return nullptr;
++    }
++#else
+     RefPtr<FcPattern> resultPattern = adoptRef(FcFontMatch(nullptr, pattern.get(), &fontConfigResult));
+     if (!resultPattern) // No match.
+         return nullptr;
++#endif
+ 
+ #if FC_VERSION < 21395
+     bool matchedFontFamily = false;
+@@ -433,8 +467,17 @@ std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDe
+     }
+ #endif
+ 
++#if PLATFORM(AMIGA)
++    {
++        Locker locker { matchesLock };
++        matches->set(matchKey, matchedFontFamily ? adoptRef(FcPatternDuplicate(resultPattern.get())) : nullptr);
++    }
++#endif
+     if (!matchedFontFamily)
+         return nullptr;
++#if PLATFORM(AMIGA)
++    }
++#endif
+ 
+     bool fixedWidth, syntheticBold, syntheticOblique;
+     getFontPropertiesFromPattern(resultPattern.get(), fontDescription, options, fixedWidth, syntheticBold, syntheticOblique);
+-- 
+2.53.0
+

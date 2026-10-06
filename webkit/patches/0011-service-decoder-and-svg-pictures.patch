@@ -1,0 +1,96 @@
+From e9c831f2cea8f490d7a5c3a635fe7f676103fff2 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 00:02:25 +0100
+Subject: [PATCH] Amiga port: a service decoder before the datatypes, and SVG
+ pictures through it
+
+---
+ Source/WebCore/platform/graphics/Image.cpp    | 10 +++++++++
+ .../image-decoders/amiga/DatatypesDecode.c    | 21 +++++++++++++++++++
+ .../image-decoders/amiga/DatatypesDecode.h    |  9 ++++++++
+ 3 files changed, 40 insertions(+)
+
+diff --git a/Source/WebCore/platform/graphics/Image.cpp b/Source/WebCore/platform/graphics/Image.cpp
+index 252f5240ef..2c770d5e51 100644
+--- a/Source/WebCore/platform/graphics/Image.cpp
++++ b/Source/WebCore/platform/graphics/Image.cpp
+@@ -27,6 +27,10 @@
+ #include "config.h"
+ #include "Image.h"
+ 
++#if PLATFORM(AMIGA)
++#include "DatatypesDecode.h"
++#endif
++
+ #include "AffineTransform.h"
+ #include "BitmapImage.h"
+ #include "DeprecatedGlobalSettings.h"
+@@ -103,6 +107,12 @@ RefPtr<Image> Image::create(ImageObserver& observer)
+     ASSERT(isMainThread());
+ 
+     auto mimeType = observer.mimeType();
++#if PLATFORM(AMIGA)
++    // With a service to draw them (DatatypesDecode.h), SVG pictures become
++    // bitmaps: WebCore drawing them takes minutes on a 68k.
++    if (mimeType == "image/svg+xml"_s && obdt_has_service_decoder())
++        return BitmapImage::create(&observer);
++#endif
+     if (mimeType == "image/svg+xml"_s)
+         return SVGImage::create(&observer);
+ 
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+index 6dc4b99184..4061f0e6e1 100644
+--- a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+@@ -104,7 +104,28 @@ static int writeTemporaryFile(const void* data, unsigned long size, char* name,
+     return 1;
+ }
+ 
++static OBDTServiceDecoder serviceDecoder;
++
++void obdt_set_service_decoder(OBDTServiceDecoder decoder)
++{
++    serviceDecoder = decoder;
++}
++
++int obdt_has_service_decoder(void)
++{
++    return serviceDecoder != NULL;
++}
++
++static int obdt_decode_datatypes(const void* data, unsigned long size, OBDTImage* out);
++
+ int obdt_decode(const void* data, unsigned long size, OBDTImage* out)
++{
++    if (serviceDecoder && serviceDecoder(data, size, out))
++        return 1;
++    return obdt_decode_datatypes(data, size, out);
++}
++
++static int obdt_decode_datatypes(const void* data, unsigned long size, OBDTImage* out)
+ {
+     char fileName[64];
+     Object* object;
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
+index ed95e2e66e..165c23033e 100644
+--- a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
+@@ -48,6 +48,15 @@ typedef struct {
+ int obdt_decode(const void* data, unsigned long size, OBDTImage* out);
+ void obdt_free(OBDTImage*);
+ 
++/* A decoder elsewhere (OpenBrowser: media.decode/1 through
++ * openservice.device), tried before the datatypes. It returns 1 with out
++ * filled (pixels from malloc), or 0 to leave the picture to the datatypes.
++ * With one set, SVG pictures in <img> and CSS are decoded as bitmaps by it
++ * instead of drawn by WebCore, which is very slow on a 68k. */
++typedef int (*OBDTServiceDecoder)(const void* data, unsigned long size, OBDTImage* out);
++void obdt_set_service_decoder(OBDTServiceDecoder);
++int obdt_has_service_decoder(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+-- 
+2.53.0
+
