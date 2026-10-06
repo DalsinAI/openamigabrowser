@@ -82,6 +82,10 @@ int ob_webview_can_go_forward(OBWebView *view);
 void ob_webview_resize(OBWebView *view, int width, int height);
 /* Paints a part of the view into a 32-bit buffer of the whole view's size:
  * bytes A, R, G, B (cybergraphics' RECTFMT_ARGB), stride bytes per row. */
+/* The page's text (innerText of the document), UTF-8, cut to fit size;
+ * returns its full length in bytes. */
+int ob_webview_text(OBWebView *view, char *buffer, int size);
+
 void ob_webview_paint(OBWebView *view, unsigned char *argb, int stride, int x, int y, int width, int height);
 /* The display-list experiment: paints the area directly into `direct` and,
  * through WebKit's display list (recorded, then replayed with cairo), into
