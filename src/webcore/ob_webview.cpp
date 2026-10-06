@@ -97,6 +97,21 @@ static RefPtr<OpenBrowser::AmigaCookieJar>& cookieJar()
     return jar.get();
 }
 
+namespace WebCore {
+void setAmigaDiskCacheDirectory(const String& directory, uint64_t capacity);
+void setAmigaDiskCacheLogging(bool);
+}
+
+void ob_webcore_set_disk_cache(const char* directory, unsigned long megabytes)
+{
+    WebCore::setAmigaDiskCacheDirectory(String::fromUTF8(directory), static_cast<uint64_t>(megabytes) * 1024 * 1024);
+}
+
+void ob_webcore_log_disk_cache(int enabled)
+{
+    WebCore::setAmigaDiskCacheLogging(enabled);
+}
+
 int ob_webcore_init_with_network(const char* cookieDatabase)
 {
     ob_quiet_requesters();

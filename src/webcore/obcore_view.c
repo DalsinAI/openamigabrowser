@@ -66,6 +66,7 @@ static void findCode(void)
 }
 
 static const char *tlsFile;  /* -tls: TLS sessions kept across runs */
+static const char *cacheDirectory;  /* -cache: the disk cache */
 static int loading = -1;   /* -1 not started yet, 1 loading, 0 done */
 static int invalidations;
 static long busyCycles, waits;  /* run loop turns with work waiting, and waits */
@@ -278,6 +279,10 @@ static int viewMain(int argc, char **argv)
         tlsFile = argv[argi + 1];          /* TLS sessions: read before, saved after */
         argi += 2;
     }
+    if (argc > argi + 1 && !strcmp(argv[argi], "-cache")) {
+        cacheDirectory = argv[argi + 1];   /* the disk cache, 32 MB */
+        argi += 2;
+    }
     if (argc > argi && !strcmp(argv[argi], "-input")) {
         /* After the load: click at (30, 35), type an address, click at (30, 110). */
         inputTest = 1;
@@ -292,7 +297,7 @@ static int viewMain(int argc, char **argv)
         argi++;
     }
     if (argc <= argi) {
-        printf("usage: obcore-view [-wait seconds] [-tls file] [-input] [-dl] [-url] <file.html|address> [width height] [page.png]\n");
+        printf("usage: obcore-view [-wait seconds] [-tls file] [-cache dir] [-input] [-dl] [-url] <file.html|address> [width height] [page.png]\n");
         return 10;
     }
     source = argv[argi++];
@@ -312,11 +317,16 @@ static int viewMain(int argc, char **argv)
         return 20;
     }
 
-    if (isURL ? !ob_webcore_init_with_network(":memory:") : !ob_webcore_init()) {
+    /* A local page with -cache still loads its subresources from the network. */
+    if ((isURL || cacheDirectory) ? !ob_webcore_init_with_network(":memory:") : !ob_webcore_init()) {
         printf("OBVIEW_FAIL init%s\n", isURL ? " (bsdsocket.library or AmiSSL)" : "");
         return 20;
     }
     sinceStart();
+    if (cacheDirectory) {
+        ob_webcore_set_disk_cache(cacheDirectory, 32);
+        ob_webcore_log_disk_cache(1);
+    }
     if (isURL && tlsFile)
         printf("OBVIEW_TLS %d sessions read\n", ob_webview_load_tls_sessions(tlsFile));
     callbacks.invalidate = onInvalidate;
@@ -368,7 +378,7 @@ static int viewMain(int argc, char **argv)
     ob_webview_destroy(view);
     if (isURL && tlsFile)
         ob_webview_save_tls_sessions(tlsFile);
-    if (isURL)
+    if (isURL || cacheDirectory)
         ob_webcore_shutdown();
     else
         ob_webcore_stop_threads();
