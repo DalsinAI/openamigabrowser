@@ -27,7 +27,7 @@
 
 #include "ob_splash.h"
 
-static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.3 (5.10.2026)";
+static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.4 (6.10.2026)";
 
 #define ENGINE "PROGDIR:OpenBrowser.engine"
 #define ENGINE_STACK 400000
