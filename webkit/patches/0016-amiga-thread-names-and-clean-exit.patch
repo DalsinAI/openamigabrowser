@@ -1,0 +1,106 @@
+From c0b3f53e8fbf3e13a3fe0f10e120a6cd6053ff3c Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 18:04:41 +0100
+Subject: [PATCH] WTF (AmigaOS): name thread tasks, and let run-loop threads
+ finish before exit
+
+amigaStopAllRunLoops() also queues a stop for loops that have not started
+running yet, then waits (up to 3 s) for worker loops to end, so no thread
+is still tearing itself down while the program's static objects go away;
+libpthread waits for every thread at exit and would wait for ever.
+WTF threads now set their task names (pthread_setname_np).
+---
+ Source/WTF/wtf/generic/RunLoopGeneric.cpp | 40 ++++++++++++++++++++---
+ Source/WTF/wtf/posix/ThreadingPOSIX.cpp   |  3 ++
+ 2 files changed, 39 insertions(+), 4 deletions(-)
+
+diff --git a/Source/WTF/wtf/generic/RunLoopGeneric.cpp b/Source/WTF/wtf/generic/RunLoopGeneric.cpp
+index e0a86f8101..16a2825fc2 100644
+--- a/Source/WTF/wtf/generic/RunLoopGeneric.cpp
++++ b/Source/WTF/wtf/generic/RunLoopGeneric.cpp
+@@ -31,6 +31,10 @@
+ #include <wtf/HashSet.h>
+ #include <wtf/NeverDestroyed.h>
+ #include <wtf/ProcessID.h>
++#include <wtf/Scope.h>
++#if PLATFORM(AMIGA)
++#include <unistd.h>
++#endif
+ #include <wtf/TZoneMallocInlines.h>
+ 
+ namespace WTF {
+@@ -130,6 +134,8 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(RunLoop::TimerBase::ScheduledTask);
+ // run loop to stop first (amigaStopAllRunLoops(), declared where it is
+ // called).
+ static Lock amigaRunLoopsLock;
++// Threads other than the main one that are inside RunLoop::run().
++static std::atomic<unsigned> amigaRunningLoops;
+ static HashSet<RunLoop*>& amigaRunLoops() WTF_REQUIRES_LOCK(amigaRunLoopsLock)
+ {
+     static NeverDestroyed<HashSet<RunLoop*>> runLoops;
+@@ -139,11 +145,28 @@ static HashSet<RunLoop*>& amigaRunLoops() WTF_REQUIRES_LOCK(amigaRunLoopsLock)
+ WTF_EXPORT_PRIVATE void amigaStopAllRunLoops();
+ void amigaStopAllRunLoops()
+ {
+-    Locker locker { amigaRunLoopsLock };
+-    for (auto* runLoop : amigaRunLoops()) {
+-        if (runLoop != &RunLoop::mainSingleton())
+-            runLoop->stop();
++    {
++        Locker locker { amigaRunLoopsLock };
++        for (auto* runLoop : amigaRunLoops()) {
++            if (runLoop != &RunLoop::mainSingleton()) {
++                runLoop->stop();
++                // stop() only ends a loop that is running now; a thread that
++                // has not reached run() yet finds this task first and stops then.
++                runLoop->dispatch([] {
++                    RunLoop::currentSingleton().stop();
++                });
++            }
++        }
+     }
++    // Then wait (up to 3 s) for those threads to leave their loops, and a
++    // little more for them to finish: a thread still tearing itself down
++    // while the program's static objects are destroyed can wait for ever,
++    // and libpthread then waits for it at exit.
++    // libnix's usleep (timer.device): WTF::sleep's timed wait does not
++    // come back here.
++    for (unsigned i = 0; i < 150 && amigaRunningLoops.load(); ++i)
++        ::usleep(20000);
++    ::usleep(100000);
+ }
+ 
+ RunLoop::RunLoop()
+@@ -244,6 +267,15 @@ void RunLoop::runImpl(RunMode runMode)
+         Locker locker { m_loopLock };
+         m_mainLoops.append(&statusOfThisLoop);
+     }
++#if PLATFORM(AMIGA)
++    bool countedRunningLoop = runMode == RunMode::Drain && !isMain();
++    if (countedRunningLoop)
++        ++amigaRunningLoops;
++    auto uncount = makeScopeExit([&] {
++        if (countedRunningLoop)
++            --amigaRunningLoops;
++    });
++#endif
+ 
+     Deque<Ref<TimerBase::ScheduledTask>> firedTimers;
+     while (true) {
+diff --git a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+index 95a2ce8925..8f20f638a4 100644
+--- a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
++++ b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+@@ -512,6 +512,9 @@ void Thread::initializeCurrentThreadInternal(const char* threadName)
+     rename_thread(find_thread(nullptr), normalizeThreadName(threadName));
+ #elif OS(LINUX)
+     prctl(PR_SET_NAME, normalizeThreadName(threadName));
++#elif OS(AMIGAOS3)
++    // The task's name, so Status and debuggers say which thread is which.
++    pthread_setname_np(pthread_self(), normalizeThreadName(threadName));
+ #else
+     UNUSED_PARAM(threadName);
+ #endif
+-- 
+2.53.0
+
