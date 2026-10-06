@@ -1,0 +1,16 @@
+<!DOCTYPE html><html><body><script>
+// OpenBrowser per-opcode JavaScript timings: "JSBENCH name ms". MIT, Copyright (c) 2026 Dalsin Limited.
+function run(name, f) { var t = Date.now(), r = f(); console.log("JSBENCH " + name + " " + (Date.now() - t) + " (" + r + ")"); }
+run("empty", function () { var s = 0; for (var i = 0; i < 100000; i++); return i; });
+run("getprop-stmt", function () { var o = { a: 1 }; for (var i = 0; i < 100000; i++) o.a; return i; });
+run("getprop", function () { var o = { a: 1 }, s; for (var i = 0; i < 100000; i++) s = o.a; return s; });
+run("getprop-x2", function () { var o = { a: 1 }, s; for (var i = 0; i < 100000; i++) { s = o.a; s = o.a; } return s; });
+run("getval", function () { var a = [1, 2], s; for (var i = 0; i < 100000; i++) s = a[0]; return s; });
+run("mov", function () { var o = { a: 1 }, s; for (var i = 0; i < 100000; i++) s = o; return 1; });
+run("mul-ii", function () { var s; for (var i = 0; i < 100000; i++) s = i * i; return s; });
+run("mul-i3", function () { var s; for (var i = 0; i < 100000; i++) s = i * 3; return s; });
+run("mul-x2", function () { var s; for (var i = 0; i < 100000; i++) { s = i * 3; s = i * 3; } return s; });
+run("sub", function () { var s; for (var i = 0; i < 100000; i++) s = i - 3; return s; });
+run("call", function () { function f() { return 1; } var s; for (var i = 0; i < 100000; i++) s = f(); return s; });
+console.log("JSBENCH done");
+</script></body></html>

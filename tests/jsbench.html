@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html><head><title>jsbench</title></head><body><pre id="out"></pre>
+<script>
+// OpenBrowser JavaScript micro-benchmarks: each test prints its time in ms
+// as a console line "JSBENCH name ms". MIT, Copyright (c) 2026 Dalsin Limited.
+function run(name, f) {
+    var t = Date.now(), r = f();
+    var ms = Date.now() - t;
+    console.log("JSBENCH " + name + " " + ms + " (" + r + ")");
+}
+run("int-loop", function () { var s = 0; for (var i = 0; i < 200000; i++) s = (s + i * 3) | 0; return s; });
+run("double-loop", function () { var s = 0.5; for (var i = 0; i < 100000; i++) s = s * 1.000001 + 0.25; return Math.round(s); });
+run("calls", function () { function f(a, b) { return a + b; } var s = 0; for (var i = 0; i < 100000; i++) s = f(s, i) & 0xffff; return s; });
+run("properties", function () { var o = { a: 1, b: 2, c: 3 }, s = 0; for (var i = 0; i < 100000; i++) { o.a = o.b + o.c; s += o.a; } return s; });
+run("array", function () { var a = []; for (var i = 0; i < 20000; i++) a.push(i ^ 0x55); a.sort(function (x, y) { return x - y; }); return a[100]; });
+run("strings", function () { var s = ""; for (var i = 0; i < 5000; i++) s += String.fromCharCode(65 + i % 26); return s.length + s.indexOf("XYZ"); });
+run("regexp", function () { var re = /(\w+)@(\w+)\.com/, n = 0; for (var i = 0; i < 2000; i++) if (re.test("user" + i + "@host.com")) n++; return n; });
+run("json", function () { var o = { list: [] }; for (var i = 0; i < 500; i++) o.list.push({ id: i, name: "n" + i }); var t = JSON.stringify(o); return JSON.parse(t).list.length + t.length; });
+run("closures", function () { var fs = []; for (var i = 0; i < 5000; i++) fs.push(function (k) { return function () { return k; }; }(i)); var s = 0; for (var j = 0; j < fs.length; j++) s += fs[j](); return s; });
+console.log("JSBENCH done");
+</script></body></html>
