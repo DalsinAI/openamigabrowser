@@ -1,4 +1,4 @@
-From 2b72747e7fc6e38ed2155cba1456759828e672bf Mon Sep 17 00:00:00 2001
+From 43f601a71c2a58a2f5814a4b96b0f667702848d0 Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
 Date: Tue, 6 Oct 2026 18:07:54 +0100
 Subject: [PATCH] offlineasm M68K: pointer registers in address registers, tags
@@ -6,8 +6,8 @@ Subject: [PATCH] offlineasm M68K: pointer registers in address registers, tags
 
 PB, PC and metadataTable live in a3, a2 and a4 (C calls keep them), and
 numberTag/notCellMask, which only ever hold their constants, become
-immediates. The generated interpreter touches the register file about
-half as often.
+immediates. The generated interpreter has 27% fewer register-file
+accesses and 6% fewer instructions.
 ---
  Source/JavaScriptCore/offlineasm/m68k.rb | 56 ++++++++++++++++++++++--
  1 file changed, 52 insertions(+), 4 deletions(-)
