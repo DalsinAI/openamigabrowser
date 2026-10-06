@@ -1,4 +1,4 @@
-4abe2816484586f2e08e753062c852b558c3ffd1 OpenMail: the product's name (Dale, 4 Oct 2026), and its Aminet readme
+4abe2816484586f2e08e753062c852b558c3ffd1 OpenMail: the product's name (We, 4 Oct 2026), and its Aminet readme
 
 OpenBrowser changes: oam_html.c breaks lines at <dl>, <dt> and <dd>
 (definition lists), with <dd> indented.

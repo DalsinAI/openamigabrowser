@@ -20,7 +20,7 @@ layer, the way MorphOS's and Haiku's browsers did it:
 | Text | FreeType, HarfBuzz and fontconfig | WebCore's Cairo backend uses all three |
 | Fonts | Liberation and DejaVu, in `PROGDIR:Fonts` | Free licences; Liberation has the metrics of Arial, Times and Courier |
 | Network | libcurl with AmiSSL 5 | WebCore's curl backend handles cookies, redirects and TLS |
-| Images | the system's datatypes | Dale's rule: the formats are the ones the user has datatypes for |
+| Images | the system's datatypes | Our rule: the formats are the ones the user has datatypes for |
 | JavaScript | JavaScriptCore's C-loop interpreter | No JIT on 68k |
 
 The port lives in the WebKit tree as a patch series (see `webkit/`). The
