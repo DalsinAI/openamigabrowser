@@ -1,0 +1,112 @@
+From 2b72747e7fc6e38ed2155cba1456759828e672bf Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 18:07:54 +0100
+Subject: [PATCH] offlineasm M68K: pointer registers in address registers, tags
+ as constants
+
+PB, PC and metadataTable live in a3, a2 and a4 (C calls keep them), and
+numberTag/notCellMask, which only ever hold their constants, become
+immediates. The generated interpreter touches the register file about
+half as often.
+---
+ Source/JavaScriptCore/offlineasm/m68k.rb | 56 ++++++++++++++++++++++--
+ 1 file changed, 52 insertions(+), 4 deletions(-)
+
+diff --git a/Source/JavaScriptCore/offlineasm/m68k.rb b/Source/JavaScriptCore/offlineasm/m68k.rb
+index a32ed0cc88..249269e0c1 100644
+--- a/Source/JavaScriptCore/offlineasm/m68k.rb
++++ b/Source/JavaScriptCore/offlineasm/m68k.rb
+@@ -61,6 +61,16 @@ M68K_GPR_SLOTS = [
+     "csr0", "csr1", "csr2", "csr3", "csr4", "csr5", "csr6", "csr7", "csr8", "csr9", "csr10",
+ ]
+ 
++# Interpreter registers that only ever hold pointers live in the address
++# registers C calls keep: cfr, PB (csr0), PC (t4) and metadataTable (csr3)
++# in the C loop's register assignment (LowLevelInterpreter.asm).
++M68K_PINNED = { "cfr" => "a5", "csr0" => "a3", "t4" => "a2", "csr3" => "a4" }
++
++# numberTag (csr1) and notCellMask (csr2) only ever hold these constants
++# (JSValue::NumberTag, JSValue::NotCellMask): reads become immediates and
++# writes are dropped.
++M68K_CONSTANT_REGISTERS = { "csr1" => 0xfffe000000000000, "csr2" => 0xfffe000000000002 }
++
+ M68K_VRF_SIZE = M68K_GPR_SLOTS.size * 8
+ M68K_VRF_SP = "#{M68K_VRF}+#{M68K_GPR_SLOTS.index("sp") * 8 + 4}"
+ M68K_VRF_LR = "#{M68K_VRF}+#{M68K_GPR_SLOTS.index("lr") * 8 + 4}"
+@@ -82,7 +92,7 @@ end
+ 
+ class RegisterID
+     def m68kPinned
+-        name == "cfr" ? "a5" : nil
++        M68K_PINNED[name]
+     end
+ 
+     def m68kSlot
+@@ -167,8 +177,12 @@ def m68kAddress(operand, extra = 0, areg = "a0", ireg = "d7")
+             $asm.puts "move.l #{base.m68kLo},#{areg}"
+             baseRegister = areg
+         end
+-        $asm.puts "move.l #{operand.index.m68kLo},#{ireg}"
+-        "(#{offset},#{baseRegister},#{ireg}.l*#{operand.scaleValue})"
++        index = operand.index.m68kPinned
++        unless index
++            $asm.puts "move.l #{operand.index.m68kLo},#{ireg}"
++            index = ireg
++        end
++        "(#{offset},#{baseRegister},#{index}.l*#{operand.scaleValue})"
+     when AbsoluteAddress
+         "#{m68kHex(operand.address.value + extra)}"
+     else
+@@ -194,7 +208,11 @@ end
+ # memory behind an address.
+ def m68kSource32(operand, scratch = "d1")
+     case operand
+-    when RegisterID, Immediate
++    when RegisterID
++        return operand.m68kLo unless operand.m68kPinned
++        $asm.puts "move.l #{operand.m68kPinned},#{scratch}"
++        scratch
++    when Immediate
+         operand.m68kLo
+     when Address, BaseIndex, AbsoluteAddress
+         $asm.puts "move.l #{m68kAddress(operand, 0, "a1", "d6")},#{scratch}"
+@@ -293,6 +311,36 @@ def m68kScc(condition)
+     }[condition] or raise "Bad condition #{condition}"
+ end
+ 
++class Sequence
++    # Replaces reads of the constant registers with immediates and drops
++    # writes to them.
++    def getModifiedListM68K
++        @list.map {
++            | node |
++            next node unless node.is_a? Instruction
++            operands = node.operands
++            destinationIndex = case node.opcode
++                               when "move", "addq", "orq", "andq", "subq", "xorq"
++                                   operands.size - 1
++                               else
++                                   nil
++                               end
++            if destinationIndex and operands[destinationIndex].is_a? RegisterID and M68K_CONSTANT_REGISTERS[operands[destinationIndex].name]
++                next nil
++            end
++            newOperands = operands.map {
++                | operand |
++                if operand.is_a? RegisterID and M68K_CONSTANT_REGISTERS[operand.name]
++                    Immediate.new(operand.codeOrigin, M68K_CONSTANT_REGISTERS[operand.name])
++                else
++                    operand
++                end
++            }
++            Instruction.new(node.codeOrigin, node.opcode, newOperands, node.annotation)
++        }.compact
++    end
++end
++
+ class Instruction
+     def m68kTarget(operand)
+         case operand
+-- 
+2.53.0
+
