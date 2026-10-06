@@ -97,3 +97,7 @@ their own licences (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 
 If you fork this or base work on it, please keep the credit and say what your
 work is based on.
+
+## Contributors
+
+OpenBrowser is created and maintained by [SacredTrees](https://github.com/SacredTrees) with the AmigaChrome agent team, copyright Dalsin Limited. Everyone whose work it includes is credited in [`CONTRIBUTORS.md`](CONTRIBUTORS.md).
