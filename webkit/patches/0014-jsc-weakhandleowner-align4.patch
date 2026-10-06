@@ -1,0 +1,31 @@
+From b3a94d1fdf5a48baa69b637616d5ba37cf6fc4d7 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 06:58:43 +0100
+Subject: [PATCH] JSC: WeakHandleOwner aligned to 4 bytes
+
+WeakImpl keeps its state in the owner pointer's low two bits. On the
+68k, objects are only 2-byte aligned, so a static owner at 2 mod 4 read
+as another state: weak handles were never finalized, and freeing their
+block aborted in ~WeakSet (youtube.com).
+---
+ Source/JavaScriptCore/heap/WeakHandleOwner.h | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/Source/JavaScriptCore/heap/WeakHandleOwner.h b/Source/JavaScriptCore/heap/WeakHandleOwner.h
+index e4e4096577..69d94894e5 100644
+--- a/Source/JavaScriptCore/heap/WeakHandleOwner.h
++++ b/Source/JavaScriptCore/heap/WeakHandleOwner.h
+@@ -31,7 +31,9 @@ namespace JSC {
+ 
+ class AbstractSlotVisitor;
+ 
+-class JS_EXPORT_PRIVATE WeakHandleOwner {
++// WeakImpl keeps its state in the low two bits of the owner's address, so
++// every owner must be 4-byte aligned; a 68k compiler aligns objects to 2.
++class JS_EXPORT_PRIVATE alignas(4) WeakHandleOwner {
+ public:
+     WeakHandleOwner() = default;
+     virtual ~WeakHandleOwner();
+-- 
+2.53.0
+

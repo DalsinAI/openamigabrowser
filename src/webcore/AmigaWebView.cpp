@@ -138,6 +138,9 @@ WebView::WebView(const OBWebViewCallbacks& callbacks, const IntSize& size)
     // not exit (libpthread waits for every thread at exit).
     settings.setLargeImageAsyncDecodingEnabled(false);
     settings.setAnimatedImageAsyncDecodingEnabled(false);
+    // No IndexedDB store yet: WebCore's empty database provider aborts the
+    // moment a page opens one (youtube.com). Without the API, pages carry on.
+    settings.setIndexedDBAPIEnabled(false);
 
     RefPtr frame = m_page->localMainFrame();
     frame->init();
