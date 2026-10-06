@@ -20,11 +20,50 @@
 #include <string.h>
 #include <cairo.h>
 #include <proto/dos.h>
+#include <proto/exec.h>
+#include <dos/dosextens.h>
+#include <unistd.h>
 
 #include "ob_webview.h"
 #include "oam_stack.h"
 
 static const char version[] __attribute__((used)) = "$VER: obcore-view 0.1 (4.10.2026)";
+
+/* abort(), replaced so a crash says where it came from: the return
+ * addresses on the stack that lie in our code, as offsets for the link map. */
+static ULONG codeStart, codeEnd;
+
+void abort(void)
+{
+    struct Task *task = FindTask(NULL);
+    ULONG here = 0, *p = &here, *top = (ULONG *)task->tc_SPUpper;
+    int n = 0;
+    printf("OBVIEW_ABORT in %s:", task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "?");
+    for (; p < top && n < 160; p++)
+        if (*p >= codeStart && *p < codeEnd) {
+            printf(" %lx", (unsigned long)(*p - codeStart));
+            n++;
+        }
+    printf("\n");
+    fflush(stdout);
+    Wait(SIGBREAKF_CTRL_C);
+    _exit(20);
+}
+
+static void findCode(void)
+{
+    struct Process *process = (struct Process *)FindTask(NULL);
+    BPTR segList = 0;
+    if (process->pr_CLI)
+        segList = ((struct CommandLineInterface *)BADDR(process->pr_CLI))->cli_Module;
+    if (!segList && process->pr_SegList)
+        segList = ((BPTR *)BADDR(process->pr_SegList))[3];
+    if (segList) {
+        ULONG *segment = BADDR(segList);
+        codeStart = (ULONG)(segment + 1);
+        codeEnd = (ULONG)segment - 4 + segment[-1];
+    }
+}
 
 static const char *tlsFile;  /* -tls: TLS sessions kept across runs */
 static int loading = -1;   /* -1 not started yet, 1 loading, 0 done */
@@ -341,6 +380,7 @@ static int viewMain(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    findCode();
     startTime = time(NULL);
     return oam_run_with_stack(2 * 1024 * 1024, viewMain, argc, argv);
 }
