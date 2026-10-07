@@ -82,6 +82,15 @@ void ob_layout_view_set_pens(ob_layout_view *view, UWORD text_pen,
     view->fill_pen = fill_pen;
 }
 
+void ob_layout_view_set_image_drawer(ob_layout_view *view,
+                                     ob_layout_image_draw_fn draw,
+                                     void *userdata)
+{
+    if (!view) return;
+    view->image_draw = draw;
+    view->image_userdata = userdata;
+}
+
 int ob_layout_view_set_document(ob_layout_view *view, ol_document *document)
 {
     if (!view) return 0;
@@ -176,6 +185,13 @@ static void draw_image_op(ob_layout_view *view, const ol_display_op *op)
     int w = to_px(op->u.image.bounds.width);
     int h = to_px(op->u.image.bounds.height);
     if (w <= 0 || h <= 0 || !visible_y(view, y, h)) return;
+
+    if (view->image_draw &&
+        view->image_draw(view->image_userdata, (LONG)op->u.image.image_id,
+                         view->rp, (WORD)(view->left + x),
+                         (WORD)(view->top + y - view->scroll_px),
+                         (UWORD)w, (UWORD)h))
+        return;
 
     SetAPen(view->rp, view->text_pen);
     Move(view->rp, view->left + x, view->top + y - view->scroll_px);
