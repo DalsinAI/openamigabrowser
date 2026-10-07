@@ -46,7 +46,7 @@
 
 struct Library *GadToolsBase = NULL;
 
-#define VERSION_TEXT "OpenBrowser 0.3 (7.10.2026)"
+#define VERSION_TEXT "OpenBrowser 0.4 (7.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT;
 #define PORT_NAME "AMIGACHROME.BROWSER"
 #define HOME_PAGE "http://example.com/"
@@ -393,10 +393,56 @@ static void clear_layout(void)
     ob_layout_view_set_document(&page_view, NULL);
 }
 
+static int fetch_page_stylesheets(const ob_html_lite_result *parsed, oam_buf *css)
+{
+    int i, loaded = 0;
+    const size_t max_css = 256UL * 1024UL;
+    if (!parsed || !css) return 0;
+    for (i = 0; i < parsed->nstylesheets && i < 8; ++i) {
+        char absolute[1280], err[200];
+        ob_response resp;
+        const char *href = parsed->stylesheet_href[i];
+        if (!href || !*href || !strncasecmp(href, "data:", 5)) continue;
+        ob_url_resolve(page_url, href, absolute, sizeof absolute);
+        if (!ob_http_get(absolute, &resp, err, sizeof err)) {
+            ob_response_free(&resp);
+            continue;
+        }
+        if (resp.status == 200 && resp.body.len &&
+            (!resp.content_type[0] || strstr(resp.content_type, "css") ||
+             !strncmp(resp.content_type, "text/", 5)) &&
+            css->len + resp.body.len + 1 <= max_css) {
+            oam_buf_add(css, oam_buf_str(&resp.body), resp.body.len);
+            oam_buf_addc(css, '\n');
+            if (!css->failed) ++loaded;
+        }
+        ob_response_free(&resp);
+        if (css->failed) break;
+    }
+    return loaded;
+}
+
 static int show_html(const char *utf8, size_t len)
 {
+    oam_buf css;
+    int external = 0;
     clear_layout();
     if (!ob_html_lite_parse(utf8, len, &page_layout)) return 0;
+
+    oam_buf_init(&css);
+    if (page_layout.nstylesheets)
+        external = fetch_page_stylesheets(&page_layout, &css);
+    if (external > 0 && !css.failed) {
+        ob_html_lite_result_free(&page_layout);
+        memset(&page_layout, 0, sizeof page_layout);
+        if (!ob_html_lite_parse_with_css(utf8, len, oam_buf_str(&css), css.len,
+                                         &page_layout)) {
+            oam_buf_free(&css);
+            return 0;
+        }
+    }
+    oam_buf_free(&css);
+
     page_layout_valid = TRUE;
     if (!ob_layout_view_set_document(&page_view, page_layout.document)) {
         clear_layout();
