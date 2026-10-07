@@ -1,0 +1,43 @@
+# OpenBrowser Lite 0.2 qualification
+
+Date: 7 October 2026
+
+OpenBrowser Lite 0.2 is the first build whose page renderer uses the resident `openlayout.library` rather than linking OpenLayout into the browser.
+
+## Architecture gate
+
+- `openlayout.library` ABI 2.0 from `DalsinAI/openamigalayout`;
+- HTML Lite builds semantic nodes through the resident ABI;
+- the GadTools viewport consumes the OpenLayout display list;
+- text is measured against the active RastPort font;
+- semantic links are activated through OpenLayout hit testing;
+- the existing OpenBrowser HTTP/HTTPS, redirects, URL resolution, charset and AmiSSL stack remains intact.
+
+## Guest qualification
+
+Qualified on AmigaOS 3.2.3 under AmigaChrome AC090-native, 68040 + FPU, LAN enabled.
+
+The static and resident HTML/OpenLayout tests both passed the same paragraph, link, list, image, reflow and semantic-hit cases.
+
+The network-only `obfetch` then fetched `https://example.com/` successfully:
+
+```text
+-- Connecting
+-- resolving the name
+-- connecting
+-- TLS handshake
+-- Sending the request
+-- Receiving
+FETCH_OK status=200 type=text/html charset=utf-8 bytes=577 url=https://example.com/
+```
+
+After those gates, the real `OpenBrowser 0.2` executable was launched with the same HTTPS URL and remained present as an AmigaDOS task after the qualification delay.
+
+## Qualified build sizes
+
+- OpenBrowser: 73,816 bytes
+- openlayout.library 2.0: 11,272 bytes
+- resident HTML Lite test: 31,276 bytes
+- `obfetch`: approximately 44 KiB
+
+The HTML parser was also changed to allocate its 64-frame parser state on the heap. This removes a small-Amiga-stack failure found during guest qualification and allows the parser to be called safely from ordinary Shell utilities, not only the browser's 64 KiB worker stack.

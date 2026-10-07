@@ -45,7 +45,7 @@
 
 struct Library *GadToolsBase = NULL;
 
-#define VERSION_TEXT "OpenBrowser 0.1 (4.10.2026)"
+#define VERSION_TEXT "OpenBrowser 0.2 (7.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT;
 #define PORT_NAME "AMIGACHROME.BROWSER"
 #define HOME_PAGE "http://example.com/"
@@ -651,8 +651,13 @@ static void rexx_events(void)
 static int browser_main(int argc, char **argv)
 {
     char err[200];
+    if (!ob_openlayout_open()) {
+        PutStr((STRPTR)"OpenBrowser needs openlayout.library 2 or later\n");
+        return 20;
+    }
     if (!(GadToolsBase = OpenLibrary((STRPTR)"gadtools.library", 39))) {
         PutStr((STRPTR)"OpenBrowser needs AmigaOS 3.0 or later (gadtools.library 39)\n");
+        ob_openlayout_close();
         return 20;
     }
     Forbid();
@@ -667,6 +672,7 @@ static int browser_main(int argc, char **argv)
         close_window();
         if (rexx_port) { RemPort(rexx_port); DeleteMsgPort(rexx_port); }
         CloseLibrary(GadToolsBase);
+        ob_openlayout_close();
         return 20;
     }
     ob_http_progress = progress;
@@ -701,6 +707,7 @@ static int browser_main(int argc, char **argv)
     while (nhistory) free(history[--nhistory]);
     oam_net_cleanup();
     CloseLibrary(GadToolsBase);
+    ob_openlayout_close();
     return 0;
 }
 

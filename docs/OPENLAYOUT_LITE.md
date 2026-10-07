@@ -87,3 +87,16 @@ The semantic HTML/link test remains 37,216 bytes on m68k and verifies stable lin
 6. add the explicit `Open in Full Browser` escalation for script-heavy/unsupported pages.
 
 The full WebKit engine remains available for pages that require JavaScript or unsupported modern layout. The lightweight path does not grow into a second WebKit.
+
+## 0.2 release gate
+
+OpenBrowser 0.2 is the first resident-OpenLayout build. Its gate is:
+
+- `openlayout.library` 2.0 opens from `LIBS:` on OS 3.2.3 / AC090 68040;
+- the semantic HTML adapter passes through the resident ABI;
+- the GadTools browser renders through the OpenLayout display list;
+- scrolling and semantic link activation remain live;
+- the existing HTTP/HTTPS, AmiSSL, redirects, URL and charset plumbing remains linked;
+- a guest launch against an HTTPS page completes without falling back to the full WebKit engine.
+
+The full engine remains a separate escalation path, not a dependency of the Lite renderer.

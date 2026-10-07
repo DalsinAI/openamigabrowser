@@ -4,7 +4,7 @@
 #include <exec/types.h>
 #include <graphics/rastport.h>
 #include <graphics/text.h>
-#include "openlayout.h"
+#include "ob_openlayout_api.h"
 
 typedef struct {
     struct RastPort *rp;

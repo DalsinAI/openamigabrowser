@@ -651,7 +651,7 @@ int ob_html_lite_parse(const char *html, size_t length,
                        ob_html_lite_result *result)
 {
     const char *s, *end;
-    struct parser p;
+    struct parser *p = NULL;
     ol_style base;
 
     if (!html || !result) return 0;
@@ -664,12 +664,21 @@ int ob_html_lite_parse(const char *html, size_t length,
         return 0;
     }
 
-    memset(&p, 0, sizeof(p));
-    p.result = result;
-    p.next_image_id = 1;
+    /* Keep the parser's 64 semantic frames off the caller's C stack.  A
+     * normal Amiga Shell command may have only a few KiB of stack; the old
+     * local struct worked in the browser's 64 KiB worker stack but could
+     * overflow small utilities before parsing even <p>x</p>. */
+    p = (struct parser *)calloc(1, sizeof(*p));
+    if (!p) {
+        ob_html_lite_result_free(result);
+        return 0;
+    }
+    p->result = result;
+    p->next_image_id = 1;
     ol_style_init(&base);
     base.display = OL_DISPLAY_BLOCK;
-    if (!push_frame(&p, "#document", ol_document_root(result->document), &base, 0, 0)) {
+    if (!push_frame(p, "#document", ol_document_root(result->document), &base, 0, 0)) {
+        free(p);
         ob_html_lite_result_free(result);
         return 0;
     }
@@ -683,10 +692,10 @@ int ob_html_lite_parse(const char *html, size_t length,
         int closing, self_close = 0;
 
         if (!lt) {
-            if (!p.in_head && !emit_text(&p, s, end)) goto fail;
+            if (!p->in_head && !emit_text(p, s, end)) goto fail;
             break;
         }
-        if (lt > s && !p.in_head && !emit_text(&p, s, lt)) goto fail;
+        if (lt > s && !p->in_head && !emit_text(p, s, lt)) goto fail;
 
         if (lt + 3 < end && !strncmp(lt, "<!--", 4)) {
             const char *q = lt + 4;
@@ -697,7 +706,7 @@ int ob_html_lite_parse(const char *html, size_t length,
 
         gt = memchr(lt, '>', (size_t)(end - lt));
         if (!gt) {
-            if (!p.in_head && !emit_text(&p, lt, end)) goto fail;
+            if (!p->in_head && !emit_text(p, lt, end)) goto fail;
             break;
         }
 
@@ -748,15 +757,17 @@ int ob_html_lite_parse(const char *html, size_t length,
             continue;
         }
 
-        if (closing) handle_close(&p, tag);
-        else if (!handle_open(&p, tag, attrs, gt, self_close)) goto fail;
+        if (closing) handle_close(p, tag);
+        else if (!handle_open(p, tag, attrs, gt, self_close)) goto fail;
 
         s = gt + 1;
     }
 
+    free(p);
     return 1;
 
 fail:
+    free(p);
     ob_html_lite_result_free(result);
     return 0;
 }
