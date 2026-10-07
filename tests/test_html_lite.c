@@ -4,6 +4,21 @@
 #include <string.h>
 
 #define CHECK(x) do { if (!(x)) {     printf("HTMLLITE FAIL line=%d expr=%s\n", __LINE__, #x); return 20; } } while (0)
+#define MARK(s) do { printf("HTMLLITE stage=%s\n", (s)); fflush(stdout); } while (0)
+
+static int probe_case(const char *name, const char *html)
+{
+    ob_html_lite_result r;
+    printf("HTMLLITE probe=%s begin\n", name); fflush(stdout);
+    if (!ob_html_lite_parse(html, strlen(html), &r)) {
+        printf("HTMLLITE probe=%s parse-fail\n", name); fflush(stdout);
+        return 0;
+    }
+    printf("HTMLLITE probe=%s parsed\n", name); fflush(stdout);
+    ob_html_lite_result_free(&r);
+    printf("HTMLLITE probe=%s freed\n", name); fflush(stdout);
+    return 1;
+}
 
 static size_t count_type(const ol_document *doc, ol_op_type type)
 {
@@ -33,7 +48,15 @@ int main(void)
     ol_rect box;
     ol_unit h1, h2;
 
+    MARK("open-begin");
+    CHECK(ob_openlayout_open());
+    MARK("opened");
+    CHECK(probe_case("p", "<p>x</p>"));
+    CHECK(probe_case("link", "<p><a href=\"https://example.com/\">x</a></p>"));
+    CHECK(probe_case("list", "<ul><li>one</li><li>two</li></ul>"));
+    CHECK(probe_case("image", "<p><img src=\"x.png\" alt=\"x\" width=\"16\" height=\"16\"></p>"));
     CHECK(ob_html_lite_parse(html, sizeof(html) - 1, &r));
+    MARK("parsed");
     CHECK(r.document != NULL);
     CHECK(r.title != NULL);
     CHECK(strcmp(r.title, "OpenBrowser & OpenLayout") == 0);
@@ -41,7 +64,9 @@ int main(void)
     CHECK(r.saw_style == 1);
     CHECK(r.unsupported_tags == 0);
 
+    MARK("layout-wide-begin");
     CHECK(ol_layout(r.document, OL_CSSPX(360), NULL, NULL));
+    MARK("layout-wide-done");
     h1 = ol_document_content_height(r.document);
     CHECK(h1 > 0);
     CHECK(count_type(r.document, OL_OP_TEXT) >= 8);
@@ -56,7 +81,9 @@ int main(void)
     CHECK(ol_node_id(ol_hit_action(r.document, box.x + 1, box.y + 1,
                                 OL_ACTION_ACTIVATE)) == ol_node_id(link));
 
+    MARK("semantic-checks-done");
     CHECK(ol_layout(r.document, OL_CSSPX(180), NULL, NULL));
+    MARK("layout-narrow-done");
     h2 = ol_document_content_height(r.document);
     CHECK(h2 > h1);
     CHECK(ol_node_id(ol_find_role_name(r.document, OL_ROLE_LINK,
@@ -70,5 +97,6 @@ int main(void)
            r.saw_script);
 
     ob_html_lite_result_free(&r);
+    ob_openlayout_close();
     return 0;
 }
