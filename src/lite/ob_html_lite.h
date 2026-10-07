@@ -2,7 +2,7 @@
 #define OB_HTML_LITE_H
 
 #include <stddef.h>
-#include "openlayout.h"
+#include "ob_openlayout_api.h"
 
 #ifdef __cplusplus
 extern "C" {
