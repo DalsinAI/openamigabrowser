@@ -5,6 +5,7 @@
  * Copyright (c) 2026 Dalsin Limited. MIT.
  */
 #include "ob_html_lite.h"
+#include "ob_css_lite.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -37,6 +38,7 @@ struct parser {
     int pending_space;
     int have_text;
     int next_image_id;
+    ob_css_sheet css;
 };
 
 static int sb_reserve(struct sb *b, size_t extra)
@@ -216,6 +218,36 @@ static int attribute(const char *tag, const char *end, const char *name,
     return 0;
 }
 
+static int token_ci(const char *list, const char *want)
+{
+    const char *p = list;
+    size_t n = strlen(want);
+    if (!list || !want) return 0;
+    while (*p) {
+        const char *s;
+        while (*p && isspace((unsigned char)*p)) ++p;
+        s = p;
+        while (*p && !isspace((unsigned char)*p)) ++p;
+        if ((size_t)(p - s) == n && cieq_n(s, n, want)) return 1;
+    }
+    return 0;
+}
+
+static int add_stylesheet_ref(ob_html_lite_result *result, const char *href)
+{
+    char **refs;
+    char *copy;
+    if (!result || !href || !*href || result->nstylesheets >= 8) return 1;
+    copy = dup0(href);
+    if (!copy) return 0;
+    refs = (char **)realloc(result->stylesheet_href,
+                            (size_t)(result->nstylesheets + 1) * sizeof(*refs));
+    if (!refs) { free(copy); return 0; }
+    result->stylesheet_href = refs;
+    result->stylesheet_href[result->nstylesheets++] = copy;
+    return 1;
+}
+
 static int numeric_attr(const char *tag, const char *end, const char *name, int fallback)
 {
     char buf[32];
@@ -225,6 +257,22 @@ static int numeric_attr(const char *tag, const char *end, const char *name, int 
     v = strtol(buf, &ep, 10);
     if (ep == buf || v <= 0 || v > 4096) return fallback;
     return (int)v;
+}
+
+static void apply_element_css(struct parser *p, const char *tag,
+                              const char *attrs, const char *tag_end,
+                              ol_style *style)
+{
+    char id[96], classes[256], inline_style[512];
+    int have_id, have_classes, have_inline;
+    if (!p || !style) return;
+    have_id = attribute(attrs, tag_end, "id", id, sizeof(id));
+    have_classes = attribute(attrs, tag_end, "class", classes, sizeof(classes));
+    have_inline = attribute(attrs, tag_end, "style", inline_style, sizeof(inline_style));
+    ob_css_apply(&p->css, tag,
+                 have_id ? id : NULL,
+                 have_classes ? classes : NULL,
+                 have_inline ? inline_style : NULL, style);
 }
 
 static void inherited_inline(ol_style *out, const ol_style *parent)
@@ -454,6 +502,7 @@ static int handle_open(struct parser *p, const char *tag,
 
     if (!strcmp(tag, "html")) {
         inherited_inline(&s, parent);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         return push_frame(p, tag, current_parent(p), &s, current_pre(p), 0);
     }
     if (!strcmp(tag, "head")) {
@@ -464,9 +513,18 @@ static int handle_open(struct parser *p, const char *tag,
     if (!strcmp(tag, "body")) {
         block_from_parent(&s, parent);
         s.padding_top = s.padding_right = s.padding_bottom = s.padding_left = OL_CSSPX(8);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         return open_container(p, tag, OL_ROLE_BLOCK, &s, 0, 0);
     }
 
+    if (p->in_head && !strcmp(tag, "link")) {
+        char rel[96], href[512];
+        if (attribute(attrs, tag_end, "rel", rel, sizeof(rel)) &&
+            token_ci(rel, "stylesheet") &&
+            attribute(attrs, tag_end, "href", href, sizeof(href)))
+            return add_stylesheet_ref(p->result, href);
+        return 1;
+    }
     if (p->in_head) return 1;
 
     if (!strcmp(tag, "br")) return append_br(p);
@@ -477,6 +535,7 @@ static int handle_open(struct parser *p, const char *tag,
         int h = numeric_attr(attrs, tag_end, "height", 48);
         ol_node *node;
         inherited_inline(&s, parent);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         node = ol_node_append(p->result->document, current_parent(p), OL_ROLE_IMAGE, NULL);
         if (!node) return 0;
         ol_node_set_style(node, &s);
@@ -490,6 +549,7 @@ static int handle_open(struct parser *p, const char *tag,
         ol_node *node;
         block_from_parent(&s, parent);
         s.margin_top = s.margin_bottom = OL_CSSPX(6);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         node = ol_node_append(p->result->document, current_parent(p), OL_ROLE_PARAGRAPH,
                               "--------------------------------");
         if (!node) return 0;
@@ -505,6 +565,7 @@ static int handle_open(struct parser *p, const char *tag,
         !strcmp(tag, "main") || !strcmp(tag, "nav")) {
         block_from_parent(&s, parent);
         if (!strcmp(tag, "p")) s.margin_bottom = OL_CSSPX(8);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         return open_container(p, tag, OL_ROLE_PARAGRAPH, &s, 0, 0);
     }
 
@@ -517,6 +578,7 @@ static int handle_open(struct parser *p, const char *tag,
         s.text_flags |= OL_TEXT_BOLD;
         s.margin_top = OL_CSSPX(level < 2 ? 12 : 8);
         s.margin_bottom = OL_CSSPX(8);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         return open_container(p, tag, OL_ROLE_HEADING, &s, 0, 0);
     }
 
@@ -524,6 +586,7 @@ static int handle_open(struct parser *p, const char *tag,
         block_from_parent(&s, parent);
         s.margin_left = s.margin_right = OL_CSSPX(20);
         s.margin_bottom = OL_CSSPX(8);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         return open_container(p, tag, OL_ROLE_BLOCK, &s, 0, 0);
     }
 
@@ -533,6 +596,7 @@ static int handle_open(struct parser *p, const char *tag,
         s.padding_top = s.padding_right = s.padding_bottom = s.padding_left = OL_CSSPX(6);
         s.margin_bottom = OL_CSSPX(8);
         s.background = 0x10000000u;
+        apply_element_css(p, tag, attrs, tag_end, &s);
         return open_container(p, tag, OL_ROLE_BLOCK, &s, 1, 0);
     }
 
@@ -540,6 +604,7 @@ static int handle_open(struct parser *p, const char *tag,
         block_from_parent(&s, parent);
         s.margin_left = OL_CSSPX(20);
         s.margin_bottom = OL_CSSPX(8);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         return open_container(p, tag, OL_ROLE_LIST, &s, 0, !strcmp(tag, "ol"));
     }
 
@@ -548,6 +613,7 @@ static int handle_open(struct parser *p, const char *tag,
         ol_node *node, *text;
         block_from_parent(&s, parent);
         s.margin_bottom = OL_CSSPX(2);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         node = ol_node_append(p->result->document, current_parent(p), OL_ROLE_LIST_ITEM, NULL);
         if (!node) return 0;
         ol_node_set_style(node, &s);
@@ -571,6 +637,7 @@ static int handle_open(struct parser *p, const char *tag,
         inherited_inline(&s, parent);
         s.foreground = 0xff0000c0u;
         s.text_flags |= OL_TEXT_UNDERLINE;
+        apply_element_css(p, tag, attrs, tag_end, &s);
         node = ol_node_append(p->result->document, current_parent(p), OL_ROLE_LINK, NULL);
         if (!node) return 0;
         ol_node_set_style(node, &s);
@@ -592,6 +659,7 @@ static int handle_open(struct parser *p, const char *tag,
         if (!strcmp(tag, "em") || !strcmp(tag, "i")) s.text_flags |= OL_TEXT_ITALIC;
         if (!strcmp(tag, "u")) s.text_flags |= OL_TEXT_UNDERLINE;
         if (!strcmp(tag, "code")) s.text_flags |= OL_TEXT_MONO;
+        apply_element_css(p, tag, attrs, tag_end, &s);
         node = ol_node_append(p->result->document, current_parent(p), OL_ROLE_BLOCK, NULL);
         if (!node) return 0;
         ol_node_set_style(node, &s);
@@ -607,12 +675,14 @@ static int handle_open(struct parser *p, const char *tag,
         if (!strcmp(tag, "table")) s.margin_bottom = OL_CSSPX(8);
         else if (!strcmp(tag, "td") || !strcmp(tag, "th"))
             s.padding_left = s.padding_right = OL_CSSPX(3);
+        apply_element_css(p, tag, attrs, tag_end, &s);
         ++p->result->unsupported_tags; /* semantic preservation; grid layout comes later */
         return open_container(p, tag, role, &s, 0, 0);
     }
 
     ++p->result->unsupported_tags;
     inherited_inline(&s, parent);
+    apply_element_css(p, tag, attrs, tag_end, &s);
     if (self_close) return 1;
     return push_frame(p, tag, current_parent(p), &s, current_pre(p), 0);
 }
@@ -647,8 +717,9 @@ static const char *find_close_tag(const char *s, const char *end, const char *ta
     return NULL;
 }
 
-int ob_html_lite_parse(const char *html, size_t length,
-                       ob_html_lite_result *result)
+int ob_html_lite_parse_with_css(const char *html, size_t length,
+                                const char *extra_css, size_t extra_css_length,
+                                ob_html_lite_result *result)
 {
     const char *s, *end;
     struct parser *p = NULL;
@@ -675,9 +746,18 @@ int ob_html_lite_parse(const char *html, size_t length,
     }
     p->result = result;
     p->next_image_id = 1;
+    ob_css_init(&p->css);
+    if (extra_css && extra_css_length &&
+        !ob_css_add(&p->css, extra_css, extra_css_length)) {
+        ob_css_free(&p->css);
+        free(p);
+        ob_html_lite_result_free(result);
+        return 0;
+    }
     ol_style_init(&base);
     base.display = OL_DISPLAY_BLOCK;
     if (!push_frame(p, "#document", ol_document_root(result->document), &base, 0, 0)) {
+        ob_css_free(&p->css);
         free(p);
         ob_html_lite_result_free(result);
         return 0;
@@ -746,8 +826,14 @@ int ob_html_lite_parse(const char *html, size_t length,
 
         if (!closing && (!strcmp(tag, "script") || !strcmp(tag, "style"))) {
             const char *close = find_close_tag(gt + 1, end, tag);
-            if (!strcmp(tag, "script")) result->saw_script = 1;
-            else result->saw_style = 1;
+            if (!strcmp(tag, "script")) {
+                result->saw_script = 1;
+            } else {
+                result->saw_style = 1;
+                if (close && !ob_css_add(&p->css, gt + 1,
+                                         (size_t)(close - (gt + 1))))
+                    goto fail;
+            }
             if (close) {
                 gt = memchr(close, '>', (size_t)(end - close));
                 s = gt ? gt + 1 : end;
@@ -763,19 +849,31 @@ int ob_html_lite_parse(const char *html, size_t length,
         s = gt + 1;
     }
 
+    ob_css_free(&p->css);
     free(p);
     return 1;
 
 fail:
+    ob_css_free(&p->css);
     free(p);
     ob_html_lite_result_free(result);
     return 0;
 }
 
+int ob_html_lite_parse(const char *html, size_t length,
+                       ob_html_lite_result *result)
+{
+    return ob_html_lite_parse_with_css(html, length, NULL, 0, result);
+}
+
 void ob_html_lite_result_free(ob_html_lite_result *result)
 {
+    int i;
     if (!result) return;
     ol_document_free(result->document);
     free(result->title);
+    for (i = 0; i < result->nstylesheets; ++i)
+        free(result->stylesheet_href[i]);
+    free(result->stylesheet_href);
     memset(result, 0, sizeof(*result));
 }
