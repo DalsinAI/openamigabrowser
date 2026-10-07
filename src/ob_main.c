@@ -42,10 +42,11 @@
 #include "ob_http.h"
 #include "lite/ob_html_lite.h"
 #include "lite/ob_layout_view.h"
+#include "lite/ob_image_dt.h"
 
 struct Library *GadToolsBase = NULL;
 
-#define VERSION_TEXT "OpenBrowser 0.2 (7.10.2026)"
+#define VERSION_TEXT "OpenBrowser 0.3 (7.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT;
 #define PORT_NAME "AMIGACHROME.BROWSER"
 #define HOME_PAGE "http://example.com/"
@@ -104,6 +105,129 @@ struct rows {
 static char **links;          /* absolute addresses, links[0] is [1] */
 static int nlinks;
 static char page_url[1280];
+
+#define PAGE_IMAGE_MAX 32
+struct page_image {
+    LONG image_id;
+    ob_dt_image image;
+    char temp_path[160];
+};
+static struct page_image page_images[PAGE_IMAGE_MAX];
+static int npage_images;
+static ULONG page_image_generation;
+
+static LONG layout_px(ol_unit u)
+{
+    return (LONG)((u + OL_UNITS_PER_CSSPX / 2) / OL_UNITS_PER_CSSPX);
+}
+
+static void clear_page_images(void)
+{
+    int i;
+    for (i = 0; i < npage_images; ++i) {
+        ob_dt_image_free(&page_images[i].image);
+        if (page_images[i].temp_path[0]) remove(page_images[i].temp_path);
+    }
+    memset(page_images, 0, sizeof page_images);
+    npage_images = 0;
+    ++page_image_generation;
+}
+
+static struct page_image *find_page_image(LONG image_id)
+{
+    int i;
+    for (i = 0; i < npage_images; ++i)
+        if (page_images[i].image_id == image_id) return &page_images[i];
+    return NULL;
+}
+
+static int draw_page_image(void *userdata, LONG image_id,
+                           struct RastPort *rp, WORD x, WORD y,
+                           UWORD width, UWORD height)
+{
+    struct page_image *image;
+    (void)userdata;
+    image = find_page_image(image_id);
+    return image ? ob_dt_image_draw(&image->image, rp, x, y, width, height) : 0;
+}
+
+static const char *image_suffix(const char *content_type)
+{
+    if (!content_type) return "img";
+    if (strstr(content_type, "png")) return "png";
+    if (strstr(content_type, "jpeg") || strstr(content_type, "jpg")) return "jpg";
+    if (strstr(content_type, "gif")) return "gif";
+    if (strstr(content_type, "webp")) return "webp";
+    if (strstr(content_type, "iff") || strstr(content_type, "ilbm")) return "iff";
+    return "img";
+}
+
+static int save_image_body(const char *path, const ob_response *resp)
+{
+    FILE *f;
+    size_t wrote;
+    if (!path || !resp) return 0;
+    f = fopen(path, "wb");
+    if (!f) return 0;
+    wrote = fwrite(oam_buf_str(&resp->body), 1, resp->body.len, f);
+    if (fclose(f) != 0 || wrote != resp->body.len) {
+        remove(path);
+        return 0;
+    }
+    return 1;
+}
+
+static void load_page_images(ol_document *document)
+{
+    size_t i, count;
+    if (!document || !scr) return;
+    count = ol_display_count(document);
+    for (i = 0; i < count && npage_images < PAGE_IMAGE_MAX; ++i) {
+        const ol_display_op *op = ol_display_get(document, i);
+        const ol_node *node;
+        const char *src;
+        char absolute[1280], err[200];
+        ob_response resp;
+        struct page_image *slot;
+        LONG w, h;
+
+        if (!op || op->type != OL_OP_IMAGE) continue;
+        if (find_page_image((LONG)op->u.image.image_id)) continue;
+        node = ol_node_by_id(document, op->u.image.node_id);
+        src = node ? ol_node_value(node) : NULL;
+        if (!src || !*src || !strncasecmp(src, "data:", 5)) continue;
+        ob_url_resolve(page_url, src, absolute, sizeof absolute);
+        if (!ob_http_get(absolute, &resp, err, sizeof err)) {
+            ob_response_free(&resp);
+            continue;
+        }
+        if (resp.status != 200 ||
+            (resp.content_type[0] && strncasecmp(resp.content_type, "image/", 6))) {
+            ob_response_free(&resp);
+            continue;
+        }
+
+        slot = &page_images[npage_images];
+        memset(slot, 0, sizeof(*slot));
+        slot->image_id = (LONG)op->u.image.image_id;
+        snprintf(slot->temp_path, sizeof slot->temp_path,
+                 "T:OpenBrowser-%08lx-%ld.%s",
+                 (unsigned long)page_image_generation,
+                 (long)slot->image_id, image_suffix(resp.content_type));
+        w = layout_px(op->u.image.bounds.width);
+        h = layout_px(op->u.image.bounds.height);
+        if (save_image_body(slot->temp_path, &resp) &&
+            ob_dt_image_load(&slot->image, slot->temp_path, scr,
+                             (UWORD)(w > 0 ? w : 1),
+                             (UWORD)(h > 0 ? h : 1))) {
+            ++npage_images;
+        } else {
+            if (slot->temp_path[0]) remove(slot->temp_path);
+            memset(slot, 0, sizeof(*slot));
+        }
+        ob_response_free(&resp);
+    }
+}
 
 /* ---- small helpers ------------------------------------------------------------ */
 
@@ -262,6 +386,7 @@ static void update_scroller(void)
 
 static void clear_layout(void)
 {
+    clear_page_images();
     if (page_layout_valid) ob_html_lite_result_free(&page_layout);
     memset(&page_layout, 0, sizeof page_layout);
     page_layout_valid = FALSE;
@@ -277,6 +402,7 @@ static int show_html(const char *utf8, size_t len)
         clear_layout();
         return 0;
     }
+    load_page_images(page_layout.document);
     update_scroller();
     ob_layout_view_draw(&page_view);
     return 1;
@@ -515,6 +641,7 @@ static BOOL open_window(void)
                             drawinfo->dri_Pens[BACKGROUNDPEN],
                             drawinfo->dri_Pens[FILLPEN],
                             drawinfo->dri_Pens[SHINEPEN]);
+    ob_layout_view_set_image_drawer(&page_view, draw_page_image, NULL);
     if (menu) SetMenuStrip(win, menu);
     redo();
     return TRUE;
@@ -706,6 +833,7 @@ static int browser_main(int argc, char **argv)
     free_links();
     while (nhistory) free(history[--nhistory]);
     oam_net_cleanup();
+    ob_dt_close();
     CloseLibrary(GadToolsBase);
     ob_openlayout_close();
     return 0;
