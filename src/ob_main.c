@@ -17,6 +17,7 @@
 #include <exec/memory.h>
 #include <intuition/intuition.h>
 #include <intuition/gadgetclass.h>
+#include <intuition/screens.h>
 #include <libraries/gadtools.h>
 #include <graphics/gfxbase.h>
 #include <rexx/storage.h>
@@ -39,6 +40,8 @@
 #include "oam_stack.h"
 #include "oam_text.h"
 #include "ob_http.h"
+#include "lite/ob_html_lite.h"
+#include "lite/ob_layout_view.h"
 
 struct Library *GadToolsBase = NULL;
 
@@ -48,7 +51,7 @@ static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT;
 #define HOME_PAGE "http://example.com/"
 #define HISTORY_MAX 32
 
-enum { GID_BACK = 1, GID_RELOAD, GID_URL, GID_GO, GID_PAGE, GID_LINKS, GID_STATUS, GID_COUNT };
+enum { GID_BACK = 1, GID_RELOAD, GID_URL, GID_GO, GID_SCROLL, GID_LINKS, GID_STATUS, GID_COUNT };
 enum { M_ABOUT = 1, M_QUIT, M_OPEN, M_RELOAD, M_BACK, M_LINKS };
 
 #define PAD 4
@@ -75,8 +78,10 @@ static struct Window *win;
 static struct Menu *menu;
 static struct Gadget *glist, *gad[GID_COUNT];
 static struct TextFont *font;
+static struct DrawInfo *drawinfo;
 static struct TextAttr font_attr, fixed_attr;
-static int fh, cw, btn_h, page_cols = 70;
+static int fh, cw, btn_h;
+static WORD page_left, page_top, page_width, page_height;
 static struct MsgPort *rexx_port;
 static BOOL quit_now;
 static char status[200] = "Ready.";
@@ -85,15 +90,17 @@ static char url_text[1280] = HOME_PAGE;
 static char *history[HISTORY_MAX];
 static int nhistory;
 
-/* the page: text rows (Latin-1) for the listview, and its links */
+static ob_html_lite_result page_layout;
+static BOOL page_layout_valid;
+static ob_layout_view page_view;
+
+/* rows are retained for the separate Links... chooser. */
 struct rows {
     struct List list;
     struct Node *node;
     char **text;
     int count;
 };
-static struct rows page_rows;
-static char *page_text;       /* Latin-1, whole */
 static char **links;          /* absolute addresses, links[0] is [1] */
 static int nlinks;
 static char page_url[1280];
@@ -138,60 +145,6 @@ static void rows_link(struct rows *r)
         r->node[i].ln_Name = r->text[i];
         AddTail(&r->list, &r->node[i]);
     }
-}
-
-/* Wrap Latin-1 text to cols columns into rows. */
-static void rows_wrap(struct rows *r, const char *text, int cols)
-{
-    int cap = 64, n = 0;
-    const char *p = text;
-    char **t;
-    rows_free(r);
-    if (cols < 20) cols = 20;
-    t = malloc(cap * sizeof *t);
-    if (!t) return;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t len = eol ? (size_t)(eol - p) : strlen(p);
-        do {
-            size_t take = len;
-            if ((int)take > cols) {
-                size_t b = (size_t)cols;
-                while (b > 0 && p[b] != ' ') b--;
-                take = b ? b : (size_t)cols;
-            }
-            if (n == cap) {
-                char **nt = realloc(t, (cap *= 2) * sizeof *t);
-                if (!nt) break;
-                t = nt;
-            }
-            t[n] = malloc(take + 1);
-            if (!t[n]) break;
-            memcpy(t[n], p, take);
-            t[n][take] = 0;
-            n++;
-            p += take;
-            len -= take;
-            while (len && *p == ' ') { p++; len--; }
-        } while (len);
-        p = eol ? eol + 1 : p + len;
-        if (!eol) break;
-    }
-    r->text = t;
-    r->count = n;
-    r->node = calloc(n ? n : 1, sizeof *r->node);
-    if (!r->node) { r->count = 0; return; }
-    rows_link(r);
-}
-
-static void detach_page(void)
-{
-    if (win && gad[GID_PAGE]) GT_SetGadgetAttrs(gad[GID_PAGE], win, NULL, GTLV_Labels, ~0UL, TAG_DONE);
-}
-
-static void attach_page(void)
-{
-    if (win && gad[GID_PAGE]) GT_SetGadgetAttrs(gad[GID_PAGE], win, NULL, GTLV_Labels, (ULONG)&page_rows.list, GTLV_Top, 0, TAG_DONE);
 }
 
 static void free_links(void)
@@ -244,11 +197,28 @@ static void make_gadgets(void)
 
     y = ay + btn_h + PAD;
     h = ah - 2 * (btn_h + PAD);
-    ng.ng_LeftEdge = ax; ng.ng_TopEdge = y; ng.ng_Width = aw; ng.ng_Height = h;
-    ng.ng_GadgetText = NULL; ng.ng_GadgetID = GID_PAGE; ng.ng_Flags = 0; ng.ng_TextAttr = &fixed_attr;
-    page_cols = (aw - 24) / (cw ? cw : 8);
-    g = CreateGadget(LISTVIEW_KIND, g, &ng, GTLV_Labels, (ULONG)&page_rows.list, GTLV_ShowSelected, 0UL, TAG_DONE);
-    gad[GID_PAGE] = g;
+    page_left = ax;
+    page_top = y;
+    page_width = aw - 20 - PAD;
+    page_height = h;
+    if (page_width < 1) page_width = 1;
+    if (page_height < 1) page_height = 1;
+    ob_layout_view_set_rect(&page_view, page_left, page_top, page_width, page_height);
+    if (page_layout_valid) ob_layout_view_set_document(&page_view, page_layout.document);
+
+    ng.ng_LeftEdge = page_left + page_width + PAD; ng.ng_TopEdge = page_top;
+    ng.ng_Width = 20; ng.ng_Height = page_height;
+    ng.ng_GadgetText = NULL; ng.ng_GadgetID = GID_SCROLL; ng.ng_Flags = 0; ng.ng_TextAttr = &font_attr;
+    {
+        LONG total = ob_layout_view_content_px(&page_view);
+        if (total < page_height) total = page_height;
+        g = CreateGadget(SCROLLER_KIND, g, &ng,
+                         GTSC_Top, (ULONG)page_view.scroll_px,
+                         GTSC_Total, (ULONG)total,
+                         GTSC_Visible, (ULONG)page_height,
+                         GTSC_Arrows, 14, TAG_DONE);
+    }
+    gad[GID_SCROLL] = g;
 
     y = ay + ah - btn_h;
     bw = label_w("Links...") + 16;
@@ -273,22 +243,70 @@ static void redo(void)
     AddGList(win, glist, ~0, -1, NULL);
     RefreshGList(glist, win, NULL, -1);
     GT_RefreshWindow(win, NULL);
+    ob_layout_view_draw(&page_view);
 }
 
 /* ---- pages -------------------------------------------------------------------- */
 
-static void rewrap(void)
+static void update_scroller(void)
 {
-    detach_page();
-    rows_wrap(&page_rows, page_text ? page_text : "", page_cols);
-    attach_page();
+    LONG total;
+    if (!win || !gad[GID_SCROLL]) return;
+    total = ob_layout_view_content_px(&page_view);
+    if (total < page_height) total = page_height;
+    GT_SetGadgetAttrs(gad[GID_SCROLL], win, NULL,
+                      GTSC_Top, (ULONG)page_view.scroll_px,
+                      GTSC_Total, (ULONG)total,
+                      GTSC_Visible, (ULONG)page_height, TAG_DONE);
 }
 
-static void show_text(const char *latin1)
+static void clear_layout(void)
 {
-    free(page_text);
-    page_text = strdup(latin1 ? latin1 : "");
-    rewrap();
+    if (page_layout_valid) ob_html_lite_result_free(&page_layout);
+    memset(&page_layout, 0, sizeof page_layout);
+    page_layout_valid = FALSE;
+    ob_layout_view_set_document(&page_view, NULL);
+}
+
+static int show_html(const char *utf8, size_t len)
+{
+    clear_layout();
+    if (!ob_html_lite_parse(utf8, len, &page_layout)) return 0;
+    page_layout_valid = TRUE;
+    if (!ob_layout_view_set_document(&page_view, page_layout.document)) {
+        clear_layout();
+        return 0;
+    }
+    update_scroller();
+    ob_layout_view_draw(&page_view);
+    return 1;
+}
+
+static int show_text(const char *utf8)
+{
+    ol_node *root, *pre, *text;
+    ol_style style;
+    clear_layout();
+    page_layout.document = ol_document_new();
+    if (!page_layout.document) return 0;
+    page_layout.title = strdup("");
+    if (!page_layout.title) { clear_layout(); return 0; }
+    root = ol_document_root(page_layout.document);
+    pre = ol_node_append(page_layout.document, root, OL_ROLE_BLOCK, NULL);
+    text = pre ? ol_node_append(page_layout.document, pre, OL_ROLE_TEXT, utf8 ? utf8 : "") : NULL;
+    if (!pre || !text) { clear_layout(); return 0; }
+    ol_style_init(&style);
+    style.display = OL_DISPLAY_BLOCK;
+    style.padding_top = style.padding_right = style.padding_bottom = style.padding_left = OL_CSSPX(8);
+    ol_node_set_style(pre, &style);
+    style.display = OL_DISPLAY_INLINE;
+    style.text_flags = OL_TEXT_MONO;
+    ol_node_set_style(text, &style);
+    page_layout_valid = TRUE;
+    if (!ob_layout_view_set_document(&page_view, page_layout.document)) { clear_layout(); return 0; }
+    update_scroller();
+    ob_layout_view_draw(&page_view);
+    return 1;
 }
 
 /* links as OpenMail's converter gives them (one per line) made absolute */
@@ -333,7 +351,6 @@ static void open_url(const char *u, BOOL remember)
 {
     ob_response resp;
     char err[200];
-    char *latin1 = NULL;
     oam_buf utf8, text, linklist;
 
     if (win) SetWindowPointer(win, WA_BusyPointer, TRUE, WA_PointerDelay, TRUE, TAG_DONE);
@@ -360,17 +377,23 @@ static void open_url(const char *u, BOOL remember)
         oam_buf_clear(&utf8);
         oam_charset_to_utf8(&utf8, "iso-8859-1", oam_buf_str(&resp.body), resp.body.len);
     }
-    if (strstr(resp.content_type, "html") || !resp.content_type[0])
+    if (strstr(resp.content_type, "html") || !resp.content_type[0]) {
+        /* Keep the old converter only for the separate Links... chooser. */
         oam_html_to_text(oam_buf_str(&utf8), utf8.len, &text, &linklist);
-    else if (!strncmp(resp.content_type, "text/", 5))
-        oam_buf_add(&text, oam_buf_str(&utf8), utf8.len);
-    else
-        oam_buf_printf(&text, "This page is %s (%lu bytes), which OpenBrowser cannot show yet.",
-                       resp.content_type, (unsigned long)resp.body.len);
-    latin1 = oam_utf8_to_latin1(oam_buf_str(&text));
-    take_links(oam_buf_str(&linklist));
-    show_text(latin1 ? latin1 : "(Out of memory.)");
-    free(latin1);
+        take_links(oam_buf_str(&linklist));
+        if (!show_html(oam_buf_str(&utf8), utf8.len))
+            show_text("OpenBrowser could not lay out this page.");
+    } else if (!strncmp(resp.content_type, "text/", 5)) {
+        free_links();
+        show_text(oam_buf_str(&utf8));
+    } else {
+        char message[256];
+        free_links();
+        snprintf(message, sizeof message,
+                 "This page is %s (%lu bytes), which OpenBrowser cannot show yet.",
+                 resp.content_type, (unsigned long)resp.body.len);
+        show_text(message);
+    }
     if (resp.status == 200)
         set_status("%s: %lu bytes, %d link%s.", resp.content_type[0] ? resp.content_type : "page",
                    (unsigned long)resp.body.len, nlinks, nlinks == 1 ? "" : "s");
@@ -388,19 +411,6 @@ static void go_back(void)
     if (nhistory < 2) { set_status("There is no page to go back to."); return; }
     free(history[--nhistory]);
     open_url(history[nhistory - 1], FALSE);
-}
-
-/* the first "[n]" on a row */
-static int link_on_row(int row)
-{
-    const char *p;
-    if (row < 0 || row >= page_rows.count) return -1;
-    for (p = page_rows.text[row]; (p = strchr(p, '[')); p++) {
-        char *e;
-        long n = strtol(p + 1, &e, 10);
-        if (e > p + 1 && *e == ']' && n >= 1 && n <= nlinks) return (int)n - 1;
-    }
-    return -1;
 }
 
 static void links_window(void)
@@ -474,6 +484,8 @@ static BOOL open_window(void)
     int w, h;
     if (!(scr = LockPubScreen(NULL))) return FALSE;
     if (!(vi = GetVisualInfo(scr, TAG_DONE))) return FALSE;
+    drawinfo = GetScreenDrawInfo(scr);
+    if (!drawinfo) return FALSE;
     font_attr = *scr->Font;
     if (!(font = OpenFont(&font_attr))) return FALSE;
     fixed_attr.ta_Name = fixed->tf_Message.mn_Node.ln_Name;
@@ -492,10 +504,17 @@ static BOOL open_window(void)
                          WA_MinWidth, cw * 40, WA_MinHeight, (fh + 6) * 8, WA_MaxWidth, ~0, WA_MaxHeight, ~0,
                          WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE, WA_SizeGadget, TRUE,
                          WA_SizeBBottom, TRUE, WA_Activate, TRUE, WA_SmartRefresh, TRUE, WA_NewLookMenus, TRUE,
-                         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_MENUPICK | IDCMP_NEWSIZE |
-                                   IDCMP_REFRESHWINDOW | LISTVIEWIDCMP | BUTTONIDCMP | STRINGIDCMP | TEXTIDCMP,
+                         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_GADGETDOWN | IDCMP_MOUSEMOVE |
+                                   IDCMP_MOUSEBUTTONS | IDCMP_MENUPICK | IDCMP_NEWSIZE | IDCMP_REFRESHWINDOW |
+                                   SCROLLERIDCMP | BUTTONIDCMP | STRINGIDCMP | TEXTIDCMP,
                          TAG_DONE);
     if (!win) return FALSE;
+    ob_layout_view_init(&page_view, win->RPort, font);
+    ob_layout_view_set_pens(&page_view,
+                            drawinfo->dri_Pens[TEXTPEN],
+                            drawinfo->dri_Pens[BACKGROUNDPEN],
+                            drawinfo->dri_Pens[FILLPEN],
+                            drawinfo->dri_Pens[SHINEPEN]);
     if (menu) SetMenuStrip(win, menu);
     redo();
     return TRUE;
@@ -507,6 +526,7 @@ static void close_window(void)
     if (glist) { FreeGadgets(glist); glist = NULL; }
     if (menu) { FreeMenus(menu); menu = NULL; }
     if (font) { CloseFont(font); font = NULL; }
+    if (drawinfo) { FreeScreenDrawInfo(scr, drawinfo); drawinfo = NULL; }
     if (vi) { FreeVisualInfo(vi); vi = NULL; }
     if (scr) { UnlockPubScreen(NULL, scr); scr = NULL; }
 }
@@ -546,34 +566,57 @@ static void menu_pick(UWORD code)
     }
 }
 
+static void scroll_from_gadget(void)
+{
+    ULONG top = 0;
+    if (!win || !gad[GID_SCROLL]) return;
+    GT_GetGadgetAttrs(gad[GID_SCROLL], win, NULL, GTSC_Top, &top, TAG_DONE);
+    ob_layout_view_scroll_to(&page_view, (LONG)top);
+    ob_layout_view_draw(&page_view);
+}
+
+static void open_page_link_at(WORD x, WORD y)
+{
+    const ol_node *node = ob_layout_view_hit_action(&page_view, x, y, OL_ACTION_ACTIVATE);
+    const char *href;
+    char target[1280];
+    if (!node) return;
+    href = ol_node_href(node);
+    if (!href || !*href) return;
+    ob_url_resolve(page_url, href, target, sizeof target);
+    open_url(target, TRUE);
+}
+
 static void window_events(void)
 {
     struct IntuiMessage *m;
     while (win && (m = GT_GetIMsg(win->UserPort))) {
         ULONG cl = m->Class;
         UWORD code = m->Code;
+        WORD mx = m->MouseX, my = m->MouseY;
         struct Gadget *g = (struct Gadget *)m->IAddress;
         GT_ReplyIMsg(m);
         switch (cl) {
         case IDCMP_CLOSEWINDOW: quit_now = TRUE; break;
         case IDCMP_MENUPICK: menu_pick(code); break;
-        case IDCMP_NEWSIZE: detach_page(); redo(); rewrap(); break;
-        case IDCMP_REFRESHWINDOW: GT_BeginRefresh(win); GT_EndRefresh(win, TRUE); break;
+        case IDCMP_NEWSIZE: redo(); break;
+        case IDCMP_REFRESHWINDOW:
+            GT_BeginRefresh(win); GT_EndRefresh(win, TRUE); ob_layout_view_draw(&page_view); break;
+        case IDCMP_MOUSEBUTTONS:
+            if (code == SELECTDOWN) open_page_link_at(mx, my);
+            break;
+        case IDCMP_MOUSEMOVE:
+            if (g && g->GadgetID == GID_SCROLL) scroll_from_gadget();
+            break;
+        case IDCMP_GADGETDOWN:
         case IDCMP_GADGETUP:
+            if (g && g->GadgetID == GID_SCROLL) { scroll_from_gadget(); break; }
+            if (!g) break;
             switch (g->GadgetID) {
             case GID_BACK: go_back(); break;
             case GID_RELOAD: if (page_url[0]) open_url(page_url, FALSE); break;
             case GID_URL: case GID_GO: go_to_typed(); break;
             case GID_LINKS: links_window(); break;
-            case GID_PAGE: {
-                int l = link_on_row(code);
-                if (l >= 0) {
-                    char target[1280];
-                    snprintf(target, sizeof target, "%s", links[l]);
-                    open_url(target, TRUE);
-                }
-                break;
-            }
             }
             break;
         }
@@ -608,7 +651,6 @@ static void rexx_events(void)
 static int browser_main(int argc, char **argv)
 {
     char err[200];
-    NewList(&page_rows.list);
     if (!(GadToolsBase = OpenLibrary((STRPTR)"gadtools.library", 39))) {
         PutStr((STRPTR)"OpenBrowser needs AmigaOS 3.0 or later (gadtools.library 39)\n");
         return 20;
@@ -653,11 +695,9 @@ static int browser_main(int argc, char **argv)
         rexx_events();                  /* answer anything that came in meanwhile */
         DeleteMsgPort(rexx_port);
     }
-    detach_page();
+    clear_layout();
     close_window();
-    rows_free(&page_rows);
     free_links();
-    free(page_text);
     while (nhistory) free(history[--nhistory]);
     oam_net_cleanup();
     CloseLibrary(GadToolsBase);
