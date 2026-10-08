@@ -16,12 +16,12 @@ AMISSL=${1:?give the include folder of the AmiSSL SDK}
 OUT=${2:-"$HERE/build/os3"}
 OM="$HERE/third_party/openmail"
 mkdir -p "$OUT"
-"$CC" -noixemul -m68020 -std=gnu99 -Wall -Werror -Wno-pointer-sign -O2 -fno-common \
+"$CC" -noixemul -m68020 -std=gnu99 -Wall -Werror -Wno-pointer-sign -O2 -fno-delete-null-pointer-checks -fno-common \
     -I"$HERE/src" -I"$OM" -I"$AMISSL" \
     "$HERE"/src/*.c "$OM"/*.c -lamiga -o "$OUT/OpenBrowser"
 echo "$OUT/OpenBrowser ($(wc -c < "$OUT/OpenBrowser") bytes)"
 # obfetch: the same engine from a Shell, for tests.
-"$CC" -noixemul -m68020 -std=gnu99 -Wall -Werror -Wno-pointer-sign -O2 -fno-common \
+"$CC" -noixemul -m68020 -std=gnu99 -Wall -Werror -Wno-pointer-sign -O2 -fno-delete-null-pointer-checks -fno-common \
     -I"$HERE/src" -I"$OM" -I"$AMISSL" \
     "$HERE/src/ob_http.c" "$OM"/*.c "$HERE/tools/obfetch.c" -o "$OUT/obfetch"
 echo "$OUT/obfetch ($(wc -c < "$OUT/obfetch") bytes)"
