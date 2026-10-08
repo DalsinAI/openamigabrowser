@@ -45,8 +45,13 @@ endif ()
 # these POSIX options
 # are announced; libnix/libpthread provide what WTF links against.
 set(AC_OS32_POSIX_FLAGS "-D_DEFAULT_SOURCE=1 -D_POSIX_TIMERS=1 -D_POSIX_REALTIME_SIGNALS=1")
-set(CMAKE_C_FLAGS_INIT "${AC_OS32_CPU_FLAGS} ${AC_OS32_POSIX_FLAGS}")
-set(CMAKE_CXX_FLAGS_INIT "${AC_OS32_CPU_FLAGS} ${AC_OS32_POSIX_FLAGS}")
+# On an Amiga address 0 is memory (exec's pointer is at 4). Without this flag
+# GCC treats a pointer it can prove null as unreachable and puts TRAP #7
+# (Software Failure 80000027) in place of the access; with it, a read of
+# address 0 stays a read, as with older compilers.
+set(AC_OS32_NULL_FLAGS "-fno-delete-null-pointer-checks")
+set(CMAKE_C_FLAGS_INIT "${AC_OS32_CPU_FLAGS} ${AC_OS32_NULL_FLAGS} ${AC_OS32_POSIX_FLAGS}")
+set(CMAKE_CXX_FLAGS_INIT "${AC_OS32_CPU_FLAGS} ${AC_OS32_NULL_FLAGS} ${AC_OS32_POSIX_FLAGS}")
 # libnix has no aligned_alloc(); the stove's compat library supplies one with
 # malloc/free wrapped so free() accepts aligned blocks (os32compat_malloc.c).
 set(AC_OS32_WRAP_FLAGS "-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free -Wl,-u,___wrap_malloc -Wl,-u,___wrap_free -Wl,-u,___wrap_calloc -Wl,-u,___wrap_realloc")
