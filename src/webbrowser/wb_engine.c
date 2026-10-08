@@ -382,8 +382,10 @@ static int serve(int argc, char **argv)
     network = networkUp = ob_webcore_init_with_network("PROGDIR:Cookies.db");
     if (!network && !ob_webcore_init())
         return 20;
-    if (network)
+    if (network) {
         ob_webview_load_tls_sessions("PROGDIR:TLSSessions");
+        ob_webcore_set_disk_cache("PROGDIR:Cache", 32);
+    }
     ob_webcore_set_wakeup(wakeUp, NULL);
 
     Forbid();

@@ -18,7 +18,19 @@ git apply /path/to/openamigabrowser/webkit/patches/0007-amiga-host-connections-l
 git apply /path/to/openamigabrowser/webkit/patches/0008-jsc-for-in-big-endian.patch
 git apply /path/to/openamigabrowser/webkit/patches/0009-amiga-stop-run-loops-at-exit.patch
 git apply /path/to/openamigabrowser/webkit/patches/0010-amiga-fetch-proxy-experiment.patch
+git apply /path/to/openamigabrowser/webkit/patches/0011-service-decoder-and-svg-pictures.patch
+git apply /path/to/openamigabrowser/webkit/patches/0012-amiga-font-match-memo.patch
+git apply /path/to/openamigabrowser/webkit/patches/0013-wtf-compactvariant-big-endian.patch
+git apply /path/to/openamigabrowser/webkit/patches/0014-jsc-weakhandleowner-align4.patch
+git apply /path/to/openamigabrowser/webkit/patches/0015-jsc-m68k-interpreter.patch
+git apply /path/to/openamigabrowser/webkit/patches/0016-amiga-thread-names-and-clean-exit.patch
+git apply /path/to/openamigabrowser/webkit/patches/0017-jsc-m68k-interpreter-registers.patch
+git apply /path/to/openamigabrowser/webkit/patches/0018-amiga-visit-cache.patch
 ```
+
+Applied in order, 0001 to 0017 give exactly the tree the Team builds from
+(checked on 7 October 2026 against the working WebKit tree). 0018 is work
+in progress.
 
 The patches, in order:
 
@@ -61,6 +73,25 @@ The patches, in order:
   With the Shell variable `OB_FETCH_PROXY` set (see
   `scripts/ob-fetch-proxy.py`), requests go to a proxy on another PC, which
   makes the TLS connections. Off unless the variable is set.
+- `0011-service-decoder-and-svg-pictures.patch`: pictures go to a service
+  decoder (Nursery's `media.decode/1`) before the datatypes, and SVG
+  pictures are drawn.
+- `0012-amiga-font-match-memo.patch`: fontconfig's match is remembered for
+  each family, weight and slant, instead of being worked out again for each
+  run of text.
+- `0013-wtf-compactvariant-big-endian.patch`: `CompactVariant` keeps its
+  payload in the low bytes on big-endian CPUs.
+- `0014-jsc-weakhandleowner-align4.patch`: `WeakHandleOwner` aligned to 4
+  bytes (the 68k's default alignment is 2).
+- `0015-jsc-m68k-interpreter.patch`: the C loop's interpreter as 68k code
+  (an M68K back end for offlineasm), on by default.
+- `0016-amiga-thread-names-and-clean-exit.patch`: thread tasks are named on
+  AmigaOS, and run-loop threads finish so the engine exits cleanly.
+- `0017-jsc-m68k-interpreter-registers.patch`: the 68k interpreter keeps its
+  hot interpreter registers in 68k registers (pointers in address registers).
+- `0018-amiga-visit-cache.patch`: work in progress. An HTTP disk cache for
+  pages already visited (on), and a cache of compiled scripts (built, but
+  switched off). The browser side is `../docs/CACHE.md`.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

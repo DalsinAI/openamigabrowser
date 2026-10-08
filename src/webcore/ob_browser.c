@@ -883,8 +883,10 @@ static int browserMain(int argc, char **argv)
         closeLibraries();
         return 20;
     }
-    if (network)
+    if (network) {
         ob_webview_load_tls_sessions(TLS_SESSIONS);
+        ob_webcore_set_disk_cache("PROGDIR:Cache", 32);
+    }
     ob_webcore_set_wakeup(wakeUp, NULL);
     ob_splash("Opening the window", 90);
     openBrowserWindow(argc > 1 ? argv[1] : HOME_PAGE, network);
