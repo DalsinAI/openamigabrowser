@@ -1,20 +1,10 @@
-/* oam_net on AmigaOS 3.x and AROS 68k: bsdsocket.library (any stack:
- * Roadshow, AmiTCP, Miami, or OpenSocket, AmigaChrome's) and AmiSSL 5 (OpenSSL 3).
- * The calling task opens both in oam_net_init: their bases are the task's
- * own. Certificates are checked against AmiSSL's store (AmiSSL:Certs), and
- * the server's name against its certificate. */
+/* oam_net on AmigaOS 3.x / AROS 68k: bsdsocket.library + OpenTLS.
+ * Socket ownership stays here; OpenTLS receives only read/write callbacks. */
 #include "oam_net.h"
+#include <opentls/opentls.h>
 
 #include <proto/exec.h>
 #include <proto/bsdsocket.h>
-#include <proto/amisslmaster.h>
-#include <proto/amissl.h>
-#include <libraries/amisslmaster.h>
-#include <libraries/amissl.h>
-#include <amissl/amissl.h>
-#include <openssl/ssl.h>
-#include <openssl/x509v3.h>
-
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -23,15 +13,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct Library *SocketBase, *AmiSSLMasterBase, *AmiSSLBase, *AmiSSLExtBase;
+struct Library *SocketBase;
 void (*oam_net_progress)(const char *step);
 #define STEP(s) do { if (oam_net_progress) oam_net_progress(s); } while (0)
 
 struct oam_conn {
     long fd;
-    SSL_CTX *ctx;
-    SSL *ssl;
-    int timeout;            /* seconds a read waits; 0 for ever */
+    OTContext *tls_ctx;
+    OTConnection *tls;
+    int timeout;
     char error[200];
 };
 
@@ -40,42 +30,33 @@ static void set_err(char *err, size_t errlen, const char *what)
     if (err && errlen) snprintf(err, errlen, "%s", what);
 }
 
+static long tls_recv(void *ctx, void *buf, long len)
+{
+    struct oam_conn *c = (struct oam_conn *)ctx;
+    return recv(c->fd, buf, len, 0);
+}
+
+static long tls_send(void *ctx, const void *buf, long len)
+{
+    struct oam_conn *c = (struct oam_conn *)ctx;
+    return send(c->fd, (APTR)buf, len, 0);
+}
+
 int oam_net_init(char *err, size_t errlen)
 {
-    if (AmiSSLBase) return 1;
+    if (SocketBase) return 1;
     STEP("opening bsdsocket.library");
-    if (!SocketBase && !(SocketBase = OpenLibrary("bsdsocket.library", 4))) {
+    if (!(SocketBase = OpenLibrary("bsdsocket.library", 4))) {
         set_err(err, errlen, "No TCP/IP stack is running (bsdsocket.library).");
         return 0;
     }
     SocketBaseTags(SBTM_SETVAL(SBTC_ERRNOPTR(sizeof errno)), (ULONG)&errno, TAG_DONE);
-    STEP("opening amisslmaster.library");
-    if (!(AmiSSLMasterBase = OpenLibrary("amisslmaster.library", AMISSLMASTER_MIN_VERSION))) {
-        set_err(err, errlen, "AmiSSL 5 is not installed (amisslmaster.library).");
-        oam_net_cleanup();
-        return 0;
-    }
-    STEP("opening AmiSSL");
-    if (OpenAmiSSLTags(AMISSL_CURRENT_VERSION,
-                       AmiSSL_UsesOpenSSLStructs, FALSE,
-                       AmiSSL_GetAmiSSLBase, (ULONG)&AmiSSLBase,
-                       AmiSSL_GetAmiSSLExtBase, (ULONG)&AmiSSLExtBase,
-                       AmiSSL_SocketBase, (ULONG)SocketBase,
-                       AmiSSL_ErrNoPtr, (ULONG)&errno,
-                       TAG_DONE) != 0) {
-        AmiSSLBase = NULL;
-        set_err(err, errlen, "AmiSSL could not be opened: it may be older than OpenMail needs.");
-        oam_net_cleanup();
-        return 0;
-    }
-    STEP("network ready");
+    STEP("network ready (OpenTLS)");
     return 1;
 }
 
 void oam_net_cleanup(void)
 {
-    if (AmiSSLBase) { CloseAmiSSL(); AmiSSLBase = AmiSSLExtBase = NULL; }
-    if (AmiSSLMasterBase) { CloseLibrary(AmiSSLMasterBase); AmiSSLMasterBase = NULL; }
     if (SocketBase) { CloseLibrary(SocketBase); SocketBase = NULL; }
 }
 
@@ -83,28 +64,20 @@ void oam_net_set_timeout(oam_conn *c, int seconds) { c->timeout = seconds; }
 
 static int start_tls(oam_conn *c, const char *host, char *err, size_t errlen)
 {
-    long verify;
-    c->ctx = SSL_CTX_new(TLS_client_method());
-    if (!c->ctx) { set_err(err, errlen, "TLS could not be set up."); return 0; }
-    SSL_CTX_set_min_proto_version(c->ctx, TLS1_2_VERSION);
-    SSL_CTX_set_verify(c->ctx, SSL_VERIFY_PEER, NULL);
-    if (!SSL_CTX_set_default_verify_paths(c->ctx)) {
-        set_err(err, errlen, "AmiSSL's trusted certificates could not be loaded.");
-        return 0;
-    }
-    c->ssl = SSL_new(c->ctx);
-    if (!c->ssl) { set_err(err, errlen, "TLS could not be set up."); return 0; }
-    SSL_set_tlsext_host_name(c->ssl, host);
-    SSL_set1_host(c->ssl, host);
-    SSL_set_fd(c->ssl, (int)c->fd);
-    STEP("TLS handshake");
-    if (SSL_connect(c->ssl) != 1) {
-        verify = SSL_get_verify_result(c->ssl);
-        if (verify != X509_V_OK) {
-            char msg[200];
-            snprintf(msg, sizeof msg, "The server's certificate was not accepted: %s.", X509_verify_cert_error_string(verify));
-            set_err(err, errlen, msg);
-        } else set_err(err, errlen, "The TLS handshake failed.");
+    OTConfig cfg;
+    int rc;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.alpn = "http/1.1";
+    cfg.min_tls = 12;
+    STEP("OpenTLS context");
+    c->tls_ctx = ot_context_new(&cfg, err, errlen);
+    if (!c->tls_ctx) return 0;
+    c->tls = ot_connection_new(c->tls_ctx, host, tls_recv, tls_send, c, err, errlen);
+    if (!c->tls) return 0;
+    STEP("OpenTLS handshake");
+    rc = ot_connect(c->tls);
+    if (rc != OT_OK) {
+        set_err(err, errlen, ot_error(c->tls));
         return 0;
     }
     return 1;
@@ -148,16 +121,15 @@ oam_conn *oam_net_connect(const char *host, int port, int tls, char *err, size_t
 
 int oam_net_starttls(oam_conn *c, const char *host, char *err, size_t errlen)
 {
-    if (c->ssl) return 1;
+    if (c->tls) return 1;
     return start_tls(c, host, err, errlen);
 }
 
-/* 1 when the socket has data within the timeout */
 static int readable(oam_conn *c)
 {
     fd_set rd;
     struct timeval tv;
-    if (c->ssl && SSL_pending(c->ssl) > 0) return 1;
+    if (c->tls && ot_pending(c->tls) > 0) return 1;
     if (!c->timeout) return 1;
     FD_ZERO(&rd);
     FD_SET(c->fd, &rd);
@@ -170,27 +142,22 @@ long oam_net_read(oam_conn *c, void *buf, long len)
 {
     long n;
     if (!readable(c)) { snprintf(c->error, sizeof c->error, "The server stopped answering."); return -1; }
-    if (c->ssl) {
-        n = SSL_read(c->ssl, buf, (int)len);
-        if (n <= 0) {
-            if (SSL_get_error(c->ssl, (int)n) == SSL_ERROR_ZERO_RETURN) return 0;
-            snprintf(c->error, sizeof c->error, "Reading from the server failed (TLS).");
-            return -1;
-        }
-        return n;
-    }
-    n = recv(c->fd, buf, len, 0);
-    if (n < 0) snprintf(c->error, sizeof c->error, "Reading from the server failed (error %d).", errno);
+    n = c->tls ? ot_read(c->tls, buf, len) : recv(c->fd, buf, len, 0);
+    if (n < 0)
+        snprintf(c->error, sizeof c->error, "%s", c->tls ? ot_error(c->tls) : "Reading from the server failed.");
     return n;
 }
 
 long oam_net_write(oam_conn *c, const void *buf, long len)
 {
-    const char *p = buf;
+    const char *p = (const char *)buf;
     long left = len;
     while (left > 0) {
-        long n = c->ssl ? SSL_write(c->ssl, p, (int)left) : send(c->fd, (APTR)p, left, 0);
-        if (n <= 0) { snprintf(c->error, sizeof c->error, "Sending to the server failed."); return -1; }
+        long n = c->tls ? ot_write(c->tls, p, left) : send(c->fd, (APTR)p, left, 0);
+        if (n <= 0) {
+            snprintf(c->error, sizeof c->error, "%s", c->tls ? ot_error(c->tls) : "Sending to the server failed.");
+            return -1;
+        }
         p += n;
         left -= n;
     }
@@ -202,8 +169,8 @@ const char *oam_net_error(oam_conn *c) { return c->error[0] ? c->error : "No err
 void oam_net_close(oam_conn *c)
 {
     if (!c) return;
-    if (c->ssl) { SSL_shutdown(c->ssl); SSL_free(c->ssl); }
-    if (c->ctx) SSL_CTX_free(c->ctx);
+    if (c->tls) { ot_shutdown(c->tls); ot_connection_free(c->tls); }
+    if (c->tls_ctx) ot_context_free(c->tls_ctx);
     if (c->fd >= 0) CloseSocket(c->fd);
     free(c);
 }
