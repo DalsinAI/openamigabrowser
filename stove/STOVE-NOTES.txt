@@ -42,7 +42,8 @@ WebKit/JavaScriptCore needs C++23, which GCC 6.5 cannot do.
    need it.
 
 4. compat/ -> <stove>/compat/libos32compat.a (MIT)
-   Build every .c/.cpp with -O2 -m68020 -m68881 (ldbl/ with -fno-builtin)
+   Build every .c/.cpp with -O2 -m68020 -m68881 -fno-delete-null-pointer-checks
+   (ldbl/ with -fno-builtin)
    and archive them. Programs link
      ... -lpthread -latomic -lstdc++ -L<stove>/compat -los32compat
    and, for aligned_alloc to pair with free():

@@ -11,8 +11,8 @@ OUT=${1:-"$HERE/bin"}
 mkdir -p "$OUT/obj"
 # The library: its own ROMTag, no C library start-up; wb_start.c is linked first.
 for f in wb_start wb_library; do
-    "$CC" -m68020 -Os -Wall -fomit-frame-pointer -I"$HERE" -I"$HERE/include" -I"$HERE/../webcore" -c "$HERE/$f.c" -o "$OUT/obj/$f.o"
+    "$CC" -m68020 -Os -fno-delete-null-pointer-checks -Wall -fomit-frame-pointer -I"$HERE" -I"$HERE/include" -I"$HERE/../webcore" -c "$HERE/$f.c" -o "$OUT/obj/$f.o"
 done
 "$CC" -nostartfiles -m68020 -o "$OUT/webbrowser.library" "$OUT/obj/wb_start.o" "$OUT/obj/wb_library.o" -lamiga
-"$CC" -m68020 -mcrt=nix20 -Os -Wall -I"$HERE/include" -o "$OUT/WBGrab" "$HERE/wbgrab.c" -lamiga
+"$CC" -m68020 -mcrt=nix20 -Os -fno-delete-null-pointer-checks -Wall -I"$HERE/include" -o "$OUT/WBGrab" "$HERE/wbgrab.c" -lamiga
 ls -l "$OUT/webbrowser.library" "$OUT/WBGrab"
