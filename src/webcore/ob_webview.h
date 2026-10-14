@@ -50,6 +50,12 @@ enum { OB_MOUSE_MOVE, OB_MOUSE_DOWN, OB_MOUSE_UP };
  * (an AmigaDOS name, or ":memory:"). */
 int ob_webcore_init(void);
 int ob_webcore_init_with_network(const char *cookieDatabase);
+
+/* Keeps web pages' files on disk in directory (an AmigaDOS path, created if
+ * missing), up to megabytes, so revisits need not fetch them again. */
+void ob_webcore_set_disk_cache(const char *directory, unsigned long megabytes);
+/* Prints what the disk cache does with each request ("OBCACHE ..."). */
+void ob_webcore_log_disk_cache(int enabled);
 void ob_webcore_shutdown(void);
 /* Ends WebKit's helper threads, so the program can exit (libpthread waits
  * for every thread). ob_webcore_shutdown() does this too. */
