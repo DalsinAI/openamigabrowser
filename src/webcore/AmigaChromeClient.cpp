@@ -1,6 +1,6 @@
 /*
  * OpenBrowser: WebCore's chrome client (see AmigaChromeClient.h).
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include "config.h"
 #include "AmigaChromeClient.h"

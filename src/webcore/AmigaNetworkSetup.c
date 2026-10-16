@@ -8,7 +8,7 @@
  * thread touches sockets, so the program's one SocketBase is its base while
  * it runs.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <errno.h>
 #include <exec/types.h>

@@ -35,7 +35,7 @@ See [docs/PHASE_PLAN.md](docs/PHASE_PLAN.md) for what comes next.
 | --- | --- |
 | `src/` | OpenBrowser Lite: the GadTools window (`ob_main.c`) and HTTP fetching (`ob_http.c`) |
 | `src/webcore/` | OpenBrowser on WebCore: the window (`ob_browser.c`), the page layer (WebCore's clients, `ob_webview.h`), cookies and the network loader, and the test programs `obcore-dump` and `obcore-view` |
-| `third_party/openmail/` | Network, HTML-to-text and stack code shared with OpenMail (MIT, Dalsin Limited) |
+| `third_party/openmail/` | Network, HTML-to-text and stack code shared with OpenMail (MIT, AmigaChrome Team) |
 | `webkit/` | The pinned upstream revision and the AmigaOS/m68k patches for WebKit (JavaScriptCore and WebCore) |
 | `toolchain/` | CMake toolchain file for the os32-gcc16 compiler |
 | `scripts/` | `build-openbrowser.sh`, `build-icu.sh`, `build-jsc.sh` and `build-webcore.sh` |
@@ -91,8 +91,8 @@ and settings are listed at the top of `scripts/build-webcore.sh`.
 
 ## Licence
 
-OpenBrowser's own code and documents are MIT, Copyright (c) 2026 Dalsin
-Limited (see [LICENSE](LICENSE)). WebKit/JavaScriptCore, ICU and GCC parts keep
+OpenBrowser's own code and documents are MIT, Copyright (c) 2026 AmigaChrome
+Team (see [LICENSE](LICENSE)). WebKit/JavaScriptCore, ICU and GCC parts keep
 their own licences (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 
 If you fork this or base work on it, please keep the credit and say what your
@@ -100,4 +100,4 @@ work is based on.
 
 ## Contributors
 
-OpenBrowser is created and maintained by [SacredTrees](https://github.com/SacredTrees) with the AmigaChrome agent team, copyright Dalsin Limited. Everyone whose work it includes is credited in [`CONTRIBUTORS.md`](CONTRIBUTORS.md).
+OpenBrowser is created and maintained by [SacredTrees](https://github.com/SacredTrees) with the AmigaChrome agent team, copyright AmigaChrome Team. Everyone whose work it includes is credited in [`CONTRIBUTORS.md`](CONTRIBUTORS.md).

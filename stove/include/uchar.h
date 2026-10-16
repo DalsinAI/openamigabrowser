@@ -1,4 +1,4 @@
-/* OpenBrowser (DalsinAI/openamigabrowser). Copyright (c) 2026 Dalsin Limited. MIT licence, see LICENSE. */
+/* OpenBrowser (DalsinAI/openamigabrowser). Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE. */
 /* Minimal C11 <uchar.h> for AmigaOS 3.x (AmigaChrome os32-gcc16).
  * Types only; libnix has no mbrtoc16/c16rtomb. In C++ the types are built in. */
 #ifndef _AMIGACHROME_UCHAR_H

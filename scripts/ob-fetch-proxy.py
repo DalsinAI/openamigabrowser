@@ -14,7 +14,7 @@ For testing only. AmigaChrome lets an instance reach the internet and the
 LAN but not the PC it runs on, so the proxy runs on another PC on the LAN:
 "--listen 192.168.0.168:8810 --allow 192.168.0.195" serves the instances of
 the PC at 192.168.0.195 and refuses everyone else.
-MIT, Copyright (c) 2026 Dalsin Limited.
+MIT, Copyright (c) 2026 AmigaChrome Team.
 """
 import argparse
 import http.client

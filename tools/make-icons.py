@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # OpenBrowser (DalsinAI/openamigabrowser)
-# Copyright (c) 2026 Dalsin Limited. MIT licence, see LICENSE.
+# Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 #
 # Draws OpenBrowser's Workbench icons in the GlowIcons style and writes them
 # as OS 3.5+ colour icons (.info): a classic 4-colour image for old

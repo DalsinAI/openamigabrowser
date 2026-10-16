@@ -2,7 +2,7 @@
  * obfetch: fetch an address with OpenBrowser's engine and print it as text,
  * for testing from a Shell.   obfetch <address>...
  *
- * OpenBrowser. MIT, Copyright (c) 2026 Dalsin Limited.
+ * OpenBrowser. MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <stdio.h>
 #include <stdlib.h>

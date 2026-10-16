@@ -2,7 +2,7 @@
  * OpenBrowser: one web page in a view: WebCore's Page with OpenBrowser's
  * clients, loading, painting into a 32-bit ARGB buffer, and input. The
  * Amiga window around it talks to it through ob_webview.h.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #pragma once
 

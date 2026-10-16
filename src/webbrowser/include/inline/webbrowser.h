@@ -1,4 +1,4 @@
-/* webbrowser.library. MIT, Copyright (c) 2026 Dalsin Limited. */
+/* webbrowser.library. MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef INLINE_WEBBROWSER_H
 #define INLINE_WEBBROWSER_H
 

@@ -1,6 +1,6 @@
 /*
  * The browser's side of the title window (ob_splash.h).
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <string.h>
 #include <exec/memory.h>

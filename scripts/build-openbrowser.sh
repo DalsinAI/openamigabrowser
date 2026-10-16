@@ -1,6 +1,6 @@
 #!/bin/sh
 # OpenBrowser (DalsinAI/openamigabrowser)
-# Copyright (c) 2026 Dalsin Limited. MIT licence, see LICENSE.
+# Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 #
 # OpenBrowser Lite, the GadTools browser, for AmigaOS 3.x (68020+) with the
 # os32 stove (bebbo's m68k-amigaos-gcc 6.5, NDK 3.2) and the AmiSSL 5 SDK's

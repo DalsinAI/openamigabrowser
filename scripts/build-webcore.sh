@@ -1,6 +1,6 @@
 #!/bin/sh
 # OpenBrowser (DalsinAI/openamigabrowser)
-# Copyright (c) 2026 Dalsin Limited. MIT licence, see LICENSE.
+# Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 #
 # Build WebCore (PORT=Amiga) and OpenBrowser's WebCore programs for AmigaOS
 # 3.2.x (68020+, FPU) with the os32-gcc16 stove. The build has two halves:

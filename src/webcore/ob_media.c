@@ -5,7 +5,7 @@
  * (obdt_set_service_decoder); anything it cannot do goes to the datatypes
  * as before. With a decoder set, WebCore also hands SVG pictures here as
  * bitmaps instead of drawing them itself, which takes minutes on a 68k.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <stdlib.h>
 #include <string.h>

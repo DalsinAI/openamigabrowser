@@ -6,7 +6,7 @@
  * this same process: the engine gets this program's icon and tool types (or
  * its Shell arguments) and PROGDIR:. The engine reports its own steps to the
  * title window (ob_splash.h) and closes it once its window is open.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <stdio.h>
 #include <string.h>

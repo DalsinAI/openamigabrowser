@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# OpenBrowser (DalsinAI/openamigabrowser). Copyright (c) 2026 Dalsin Limited. MIT licence, see LICENSE.
+# OpenBrowser (DalsinAI/openamigabrowser). Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 """pc2fn.py NMFILE MAIN_RUNTIME_ADDR ADDR... : map runtime code addresses to
 functions using `nm -n` of the hunk executable (text symbols only; mangled
 names ending in 'E' are variables such as s_info and are skipped)."""

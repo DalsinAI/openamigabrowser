@@ -4,7 +4,7 @@
  * (OpenBrowser.engine). The launcher opens the window and a public message
  * port; the browser sends it what it is doing, and asks it to close when its
  * own window is open.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #ifndef OB_SPLASH_H
 #define OB_SPLASH_H

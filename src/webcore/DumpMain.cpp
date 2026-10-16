@@ -5,7 +5,7 @@
  *
  *   obcore-dump <file.html> [width] [page.png]
  *
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include "config.h"
 

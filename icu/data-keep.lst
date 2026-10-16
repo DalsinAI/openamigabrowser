@@ -5,7 +5,7 @@
 # codecs), so ICU's 190 legacy tables were never used. No Thai or
 # Chinese/Japanese word-break dictionaries for now (Dale, 6 Oct 2026): such
 # text still breaks at spaces and punctuation. Other locales fall back to root.
-# MIT, Copyright (c) 2026 Dalsin Limited.
+# MIT, Copyright (c) 2026 AmigaChrome Team.
 brkitr/burmesedict.dict
 brkitr/char.brk
 brkitr/en.res
