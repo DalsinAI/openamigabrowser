@@ -4,7 +4,7 @@
  * any number of programs, each with its own views, until WBC_SHUTDOWN or
  * Ctrl-C. Between messages it runs WebCore (its timers, the network's
  * answers), so pages go on loading while programs do other things.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <stdio.h>
 #include <string.h>

@@ -11,7 +11,7 @@
  *                         commands and timings, and save the replayed
  *                         picture as page-dl.png beside page.png
  *
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <stdio.h>
 #include <time.h>

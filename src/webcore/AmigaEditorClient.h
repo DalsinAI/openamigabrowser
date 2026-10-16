@@ -1,6 +1,6 @@
 /*
  * OpenBrowser: WebCore's editor client (typing into form fields).
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #pragma once
 

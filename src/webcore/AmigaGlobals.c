@@ -4,7 +4,7 @@
  * AmiSSL's stub library to AmiSSLBase and AmiSSLExtBase. Each task that uses
  * the network opens its own (see the network code); programs without a
  * network leave them empty.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <exec/libraries.h>
 

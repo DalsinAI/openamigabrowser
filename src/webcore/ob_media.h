@@ -1,7 +1,7 @@
 /*
  * OpenBrowser: page pictures through media.decode/1 (ob_media.c). Open after
  * the network; 1 when a board or a paired Cradle offers it.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #ifndef OB_MEDIA_H
 #define OB_MEDIA_H

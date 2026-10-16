@@ -1,7 +1,7 @@
 /*
  * OpenBrowser: the cookie jar (see AmigaCookieJar.h). The cookie string
  * logic follows WebKit's curl network session (NetworkStorageSessionCurl).
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include "config.h"
 #include "AmigaCookieJar.h"

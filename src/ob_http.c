@@ -1,6 +1,6 @@
 /* ob_http: HTTP/1.1 GET with redirects and chunked bodies.
  *
- * OpenBrowser. MIT, Copyright (c) 2026 Dalsin Limited. */
+ * OpenBrowser. MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include "ob_http.h"
 #include "oam_net.h"
 

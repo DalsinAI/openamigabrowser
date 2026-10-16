@@ -1,6 +1,6 @@
 /*
  * OpenBrowser: WebCore's frame loader client (one per frame).
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #pragma once
 

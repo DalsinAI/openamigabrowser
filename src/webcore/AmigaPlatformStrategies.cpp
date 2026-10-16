@@ -2,7 +2,7 @@
  * OpenBrowser: WebCore's platform strategies for the headless programs.
  * The loader refuses every subresource load (the headless dump has no
  * network yet); the browser itself replaces this with a curl-backed loader.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include "config.h"
 #include "AmigaPlatformStrategies.h"
