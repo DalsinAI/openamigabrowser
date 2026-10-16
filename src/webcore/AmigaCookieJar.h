@@ -1,7 +1,7 @@
 /*
  * OpenBrowser: the cookie jar. Cookies live in one SQLite database
  * (WebCore's CookieJarDB), shared by document.cookie and the network loader.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #pragma once
 

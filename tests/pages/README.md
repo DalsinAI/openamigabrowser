@@ -24,4 +24,4 @@ default), and `-url` loads an address from the network instead of a file.
 lines: the drawing commands, their size and how long painting, recording and
 replaying took (see docs/WEBCORE_PORT.md).
 
-MIT, Copyright (c) 2026 Dalsin Limited.
+MIT, Copyright (c) 2026 AmigaChrome Team.

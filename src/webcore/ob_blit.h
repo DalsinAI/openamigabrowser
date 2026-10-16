@@ -1,6 +1,6 @@
 /*
  * OpenBrowser: putting the page's 32-bit pixels into a window (ob_blit.c).
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #ifndef OB_BLIT_H
 #define OB_BLIT_H

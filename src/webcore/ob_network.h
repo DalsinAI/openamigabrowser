@@ -1,7 +1,7 @@
 /*
  * OpenBrowser: bsdsocket.library and AmiSSL for WebCore's network thread
  * (AmigaNetworkSetup.c).
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #ifndef OB_NETWORK_H
 #define OB_NETWORK_H

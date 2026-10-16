@@ -1,5 +1,5 @@
 Short:        WebKit JavaScript engine for AmigaOS 3.2
-Author:       Dalsin Limited
+Author:       AmigaChrome Team
 Uploader:     UPLOADER-PLACEHOLDER
 Type:         comm/www
 Version:      0.1
@@ -25,7 +25,7 @@ Requirements:
 Not yet: web pages. The browser window (GadTools), image support through
 datatypes and page drawing come next.
 
-Licences: OpenBrowser's own parts are MIT, Copyright (c) 2026 Dalsin Limited.
+Licences: OpenBrowser's own parts are MIT, Copyright (c) 2026 AmigaChrome Team.
 JavaScriptCore is LGPL-2/BSD and ICU is under the Unicode licence; see
 THIRD_PARTY_NOTICES.md. If you base work on this, please say what it is
 based on.

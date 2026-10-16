@@ -1,7 +1,7 @@
 /*
  * OpenBrowser: the C interface to WebCore pages (see ob_webview.h), and the
  * translation of Amiga input into WebCore's events.
- * MIT, Copyright (c) 2026 Dalsin Limited.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include "config.h"
 #include "ob_webview.h"
