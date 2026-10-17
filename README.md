@@ -1,6 +1,6 @@
 # OpenBrowser
 
-A WebKit-based web browser for AmigaOS 3.2 (68020+ with FPU).
+A WebKit-based web browser for AmigaOS 3.2 (68040 with FPU).
 
 **Status, 4 October 2026:** WebKit's engine, WebCore, draws real pages on
 AmigaOS 3.2.3. It lays out HTML and CSS, runs the page's JavaScript
@@ -50,7 +50,7 @@ No binaries are kept here, and no WebKit, ICU or AmigaOS files.
 ## Building
 
 OpenBrowser Lite needs bebbo's amiga-gcc (GCC 6.5, NDK 3.2) and the AmiSSL 5
-SDK's headers, and runs on a 68020 or better without an FPU:
+SDK's headers. It is built for the 68040, soft float (no FPU instructions):
 
 ```
 STOVE=/path/to/amiga-gcc scripts/build-openbrowser.sh /path/to/AmiSSL/Developer/include
@@ -75,8 +75,8 @@ fontconfig, Expat, libxml2, SQLite, curl, libpsl, zlib and libpng; see
 https://github.com/DalsinAI/openamiga) built into one prefix, and the AmiSSL 5
 SDK. Then apply the patches in `webkit/` and run
 `WEBKIT_SOURCE=... OAB_DEPS=... AMISSL_SDK=... scripts/build-webcore.sh`.
-The programs are large (about 100 MB each, stripped) and need a 68020 or
-better with an FPU and plenty of Fast RAM.
+The programs are large (about 100 MB each, stripped) and are built for the
+68040 with its FPU. They need plenty of Fast RAM.
 
 The build has two halves. The engine (WebKit's WebCore, JavaScriptCore,
 WTF, PAL and bmalloc) is built by `build-webcore.sh build-engine`, and only
