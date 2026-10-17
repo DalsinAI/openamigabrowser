@@ -103,10 +103,12 @@ shows fully once the slow opcodes above are fixed there.
 
 ## Step 2: compiling as a service ("code in, runtime out")
 
-> **Superseded, 17 October 2026:** AmigaChrome's
-> `docs/design/Design-OpenBrowser-JIT-on-core.md` (PR #562) runs the whole engine
-> on the host's x86-64 or ARM64 cores instead, with JavaScriptCore's own JITs.
-> This step is kept for the record and is not planned.
+> **Revised, 17 October 2026:** AmigaChrome's
+> `docs/design/Design-OpenBrowser-JIT-on-core.md` 0.4 (PR #564) replaces this
+> step. Compiling becomes J3, `js.compile/1`, an optimising tier whose 68k
+> code keeps values unboxed, after J2's 68k Baseline JIT in the program. Work
+> off the main thread becomes J4, Web Workers on extra 68k cores through Exec
+> across cores. This text is kept for the record.
 
 Like OpenMulticore's jobs: the engine sends a hot function's bytecode to a
 `js.compile/1` service on `openservice.device` and gets back ready-to-run 68k
@@ -134,10 +136,12 @@ running.
 
 ## Step 3: offload the work itself (later)
 
-> **Superseded, 17 October 2026:** AmigaChrome's
-> `docs/design/Design-OpenBrowser-JIT-on-core.md` (PR #562) runs the whole engine
-> on the host's x86-64 or ARM64 cores instead, with JavaScriptCore's own JITs.
-> This step is kept for the record and is not planned.
+> **Revised, 17 October 2026:** AmigaChrome's
+> `docs/design/Design-OpenBrowser-JIT-on-core.md` 0.4 (PR #564) replaces this
+> step. Compiling becomes J3, `js.compile/1`, an optimising tier whose 68k
+> code keeps values unboxed, after J2's 68k Baseline JIT in the program. Work
+> off the main thread becomes J4, Web Workers on extra 68k cores through Exec
+> across cores. This text is kept for the record.
 
 With OpenMulticore cores that run native code, whole scripts (a worker, a
 page's JavaScript) could run on the card with its own heap, the page's DOM
