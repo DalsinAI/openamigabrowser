@@ -90,21 +90,33 @@ already has a curl backend with cookies, redirects and TLS.
 
 **Milestone 3:** Browse a few simple real sites (text-heavy, light JS) end to end.
 
-### JavaScript's JIT: on the core underneath (17 Oct 2026)
+### JavaScript speed and the heavy work (design 0.4, 17 Oct 2026)
 
-The JIT question is answered by AmigaChrome's design
-`docs/design/Design-OpenBrowser-JIT-on-core.md` (amigachrome PR #562, 0.1 for review).
-It recommends running WebCore and JavaScriptCore together on the host's
-x86-64 or ARM64 cores, as the service `web.engine/1`, with this program as the
-front end. JavaScriptCore's own Baseline, DFG and FTL JITs then do the work:
-on loops they run 120 to 300 times the 68k interpreter (probe, measured).
+AmigaChrome's `docs/design/Design-OpenBrowser-JIT-on-core.md` 0.4 (PR #564)
+replaces 0.1's engine on the host, which the user turned down. OpenBrowser
+stays an Amiga program, WebKit's `PORT=Amiga`, on the Team's own libraries
+and SQLite. Extra power comes from discrete services on autoconfig boards
+(the services card, OpenMulticore's cores) or a paired LAN Cradle.
 
-- It **supersedes Steps 2 and 3** of `JS_ENGINE_PLAN.md`: no `js.compile/1`
-  writing 68k code, and no scripts on the cores with the DOM left here.
-- **Step 1**, the 68k interpreter, stays as the fallback for any machine
-  without the services card, such as a real 68040 or a PiStorm under Emu68.
-- This plan's Phase 4 item "a JIT-less fast path for common JS" is also met
-  by it wherever the card is present.
+- **JavaScript, J1 to J4 (decided):**
+  - **J1:** this plan's Step 1 finished: the interpreter's hot registers in
+    68k registers.
+  - **J2:** a 68k Baseline JIT, the RegExp JIT and inline caches, in the
+    program.
+  - **J3:** `js.compile/1`, an optimising tier as a service. Bytecode and
+    profiles go in; unboxed 68k code comes out.
+  - **J4:** Web Workers on extra 68k cores through Exec across cores.
+  - On the AC090, plain 68k code runs at about a quarter to a fifth of host
+    speed, so unboxed 68k code gains up to 50 to 130 times over the
+    interpreter (measured).
+- **Pictures** go through `datatypes.library` and our datatypes, never side
+  decoders in the browser. Acceleration lives inside the datatypes system,
+  which may hand a decode to a core or a LAN Cradle.
+- **No pixman in OpenBrowser:** drawing and image code target OpenGfx and
+  OpenGPU directly.
+- **Text** uses OpenFont, which also takes over the functions WebKit took
+  from ICU.
+- **The network** is `openweb.fetch` on OpenTLS and openzlib.
 
 ### Phase 4: usable
 1. Multiple windows (tabs later), find-in-page, zoom/text size, printing through OpenAmigaPrint.
