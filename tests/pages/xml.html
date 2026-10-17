@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>xml</title></head>
+<body>
+<script>
+// DOMParser and XMLSerializer over WebCore's XML parser (OXP since WebKit patch 0018).
+var r = [];
+var p = new DOMParser();
+var d = p.parseFromString('<r xmlns="urn:a" xmlns:b="urn:b"><b:x b:y="1">t&amp;u</b:x><![CDATA[c]]></r>', 'application/xml');
+r.push(d.documentElement.namespaceURI);
+var x = d.documentElement.firstChild;
+r.push(x.namespaceURI + '|' + x.localName + '|' + x.getAttributeNS('urn:b', 'y') + '|' + x.textContent);
+r.push(d.documentElement.lastChild.nodeType);
+var bad = p.parseFromString('<a><b></a>', 'application/xml');
+r.push(bad.getElementsByTagName('parsererror').length > 0 ? 'err' : 'noerr');
+var e = p.parseFromString('<!DOCTYPE a [<!ENTITY e "ent">]><a>&e;</a>', 'application/xml');
+r.push(e.documentElement.textContent);
+// 10 + 100 + 1,000 + ... references inside &a5;: past WebKit's limit of 512
+var lol = '<!DOCTYPE a [<!ENTITY a0 "x">';
+for (var i = 1; i < 6; i++)
+    lol += '<!ENTITY a' + i + ' "' + ('&a' + (i - 1) + ';').repeat(10) + '">';
+lol += ']><a>&a5;</a>';
+var l = p.parseFromString(lol, 'application/xml');
+r.push(l.getElementsByTagName('parsererror').length > 0 ? 'limit' : 'nolimit');
+r.push(new XMLSerializer().serializeToString(d).length > 0 ? 'ser' : 'noser');
+document.title = 'xml ' + r.join(' ');
+</script>
+</body></html>
