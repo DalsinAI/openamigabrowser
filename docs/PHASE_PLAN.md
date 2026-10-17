@@ -90,9 +90,9 @@ already has a curl backend with cookies, redirects and TLS.
 
 **Milestone 3:** Browse a few simple real sites (text-heavy, light JS) end to end.
 
-### JavaScript speed and the heavy work (design 0.4, 17 Oct 2026)
+### JavaScript speed and the heavy work (design 0.5, 17 Oct 2026)
 
-AmigaChrome's `docs/design/Design-OpenBrowser-JIT-on-core.md` 0.4 (PR #564)
+AmigaChrome's `docs/design/Design-OpenBrowser-JIT-on-core.md` 0.5 (PRs #564 and #565)
 replaces 0.1's engine on the host, which the user turned down. OpenBrowser
 stays an Amiga program, WebKit's `PORT=Amiga`, on the Team's own libraries
 and SQLite. Extra power comes from discrete services on autoconfig boards
@@ -109,14 +109,21 @@ and SQLite. Extra power comes from discrete services on autoconfig boards
   - On the AC090, plain 68k code runs at about a quarter to a fifth of host
     speed, so unboxed 68k code gains up to 50 to 130 times over the
     interpreter (measured).
-- **Pictures** go through `datatypes.library` and our datatypes, never side
-  decoders in the browser. Acceleration lives inside the datatypes system,
-  which may hand a decode to a core or a LAN Cradle.
+- **Every decoder is a datatype:** pictures, compression, and anything else
+  that turns one format into another. This browser decodes through
+  `datatypes.library`, never with side decoders of its own. Acceleration
+  lives inside the datatypes system, which may hand a decode to a core or a
+  LAN Cradle.
+- **Pictures:** our datatypes, PNG and JPEG first, then WebP.
+- **Compressed bodies** (`Content-Encoding`) go through a new stream class in
+  datatypes.library: our own `brotli.datatype` (clean room, from RFC 7932)
+  and `gzip.datatype` on openzlib. `openweb.fetch`'s Amiga side decodes
+  through them too.
 - **No pixman in OpenBrowser:** drawing and image code target OpenGfx and
   OpenGPU directly.
 - **Text** uses OpenFont, which also takes over the functions WebKit took
   from ICU.
-- **The network** is `openweb.fetch` on OpenTLS and openzlib.
+- **The network** is `openweb.fetch` on OpenTLS.
 
 ### Phase 4: usable
 1. Multiple windows (tabs later), find-in-page, zoom/text size, printing through OpenAmigaPrint.
