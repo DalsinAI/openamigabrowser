@@ -1,4 +1,4 @@
-From f49a2e85e24de67ab05b77336357eb1f8e950cba Mon Sep 17 00:00:00 2001
+From e5e841ef95c8d5c9bdf3ce9ef94285d87b07f746 Mon Sep 17 00:00:00 2001
 From: SacredTrees <sacredtrees@users.noreply.github.com>
 Date: Sat, 17 Oct 2026 23:09:21 +0100
 Subject: [PATCH] JSC: WebKit's Ruby generators as Python, so the 68k build
@@ -15,8 +15,8 @@ On AmigaOS CMake runs them with python3 and does not look for Ruby. Air's
 opcode generator is skipped while B3 is off. The 68k build always uses the
 M68K back end (the JSC_M68K_LLINT option is gone; the C-loop back end has no
 port and the build stops if another back end is asked for). A step that
-still asks for Ruby runs no-ruby.py, which names the script and fails,
-unless a Ruby is given with -DRuby_EXECUTABLE (WebCore's generators).
+still asks for Ruby (WebCore's generators, not ported yet) runs no-ruby.py,
+which names the script and fails.
 
 The outputs match the Ruby generators' byte for byte on the 6 October M68K
 build's inputs (LLIntAssembly.h, LLIntDesiredOffsets.h,
@@ -55,9 +55,9 @@ apart from the hash of the generator's own files in the LLInt headers.
  .../offlineasm-py/offlineasm/transform.py     |  523 ++++++
  Source/WTF/Scripts/GeneratePreferences.py     |  754 ++++++++
  Source/WTF/wtf/CMakeLists.txt                 |    1 +
- Source/cmake/WebKitCommon.cmake               |   76 +-
+ Source/cmake/WebKitCommon.cmake               |   74 +-
  Source/cmake/no-ruby.py                       |   35 +
- 33 files changed, 8720 insertions(+), 44 deletions(-)
+ 33 files changed, 8717 insertions(+), 45 deletions(-)
  create mode 100644 Source/JavaScriptCore/Scripts/PreferencesTemplates/JSCWebPreferenceOptions.h.pyerb
  create mode 100644 Source/JavaScriptCore/generator-py/Argument.py
  create mode 100644 Source/JavaScriptCore/generator-py/Assertion.py
@@ -282,12 +282,12 @@ index 0000000..6ef2995
 +<% end %>
 diff --git a/Source/JavaScriptCore/generator-py/Argument.py b/Source/JavaScriptCore/generator-py/Argument.py
 new file mode 100644
-index 0000000..bce1c09
+index 0000000..8fd320e
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/Argument.py
 @@ -0,0 +1,84 @@
 +# Copyright (C) 2018-2019 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/Argument.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/Argument.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -372,12 +372,12 @@ index 0000000..bce1c09
 +        return self._capitalized_name
 diff --git a/Source/JavaScriptCore/generator-py/Assertion.py b/Source/JavaScriptCore/generator-py/Assertion.py
 new file mode 100644
-index 0000000..6b3ba71
+index 0000000..9ec7254
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/Assertion.py
 @@ -0,0 +1,32 @@
 +# Copyright (C) 2018 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/Assertion.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/Assertion.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -410,12 +410,12 @@ index 0000000..6b3ba71
 +        raise AssertionError_(msg)
 diff --git a/Source/JavaScriptCore/generator-py/DSL.py b/Source/JavaScriptCore/generator-py/DSL.py
 new file mode 100644
-index 0000000..4d824f2
+index 0000000..6a3fa50
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/DSL.py
 @@ -0,0 +1,238 @@
 +# Copyright (C) 2018-2021 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/DSL.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/DSL.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -654,12 +654,12 @@ index 0000000..4d824f2
 +        return [op for s in self.sections if predicate(s) for op in s.opcodes]
 diff --git a/Source/JavaScriptCore/generator-py/Fits.py b/Source/JavaScriptCore/generator-py/Fits.py
 new file mode 100644
-index 0000000..916b395
+index 0000000..4a98de7
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/Fits.py
 @@ -0,0 +1,31 @@
 +# Copyright (C) 2018 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/Fits.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/Fits.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -691,12 +691,12 @@ index 0000000..916b395
 +    return "Fits<%s, %s>::check(%s)" % (type, size, name)
 diff --git a/Source/JavaScriptCore/generator-py/GeneratedFile.py b/Source/JavaScriptCore/generator-py/GeneratedFile.py
 new file mode 100644
-index 0000000..4e75f2f
+index 0000000..0cd1ba4
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/GeneratedFile.py
 @@ -0,0 +1,96 @@
 +# Copyright (C) 2018 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/GeneratedFile.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/GeneratedFile.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -793,12 +793,12 @@ index 0000000..4e75f2f
 +    file.write("\n")
 diff --git a/Source/JavaScriptCore/generator-py/Metadata.py b/Source/JavaScriptCore/generator-py/Metadata.py
 new file mode 100644
-index 0000000..de01c52
+index 0000000..7fb4462
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/Metadata.py
 @@ -0,0 +1,124 @@
 +# Copyright (C) 2018-2019 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/Metadata.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/Metadata.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -923,12 +923,12 @@ index 0000000..de01c52
 +        return "m_metadataID"
 diff --git a/Source/JavaScriptCore/generator-py/Opcode.py b/Source/JavaScriptCore/generator-py/Opcode.py
 new file mode 100644
-index 0000000..e1aa893
+index 0000000..82dcf75
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/Opcode.py
 @@ -0,0 +1,382 @@
 +# Copyright (C) 2018-2019 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/Opcode.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/Opcode.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -1311,13 +1311,13 @@ index 0000000..e1aa893
 +}""" % {"name": name, "tp": type_prefix, "cases": cases}
 diff --git a/Source/JavaScriptCore/generator-py/RubyListReader.py b/Source/JavaScriptCore/generator-py/RubyListReader.py
 new file mode 100644
-index 0000000..558e89a
+index 0000000..40f402f
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/RubyListReader.py
 @@ -0,0 +1,209 @@
 +# MIT License
 +#
-+# Copyright (c) 2026 Dalsin Limited
++# Copyright (c) 2026 AmigaChrome Team
 +#
 +# Permission is hereby granted, free of charge, to any person obtaining a copy
 +# of this software and associated documentation files (the "Software"), to
@@ -1526,12 +1526,12 @@ index 0000000..558e89a
 +                self.error("expected ',' or '}'")
 diff --git a/Source/JavaScriptCore/generator-py/Section.py b/Source/JavaScriptCore/generator-py/Section.py
 new file mode 100644
-index 0000000..47aa637
+index 0000000..060ed2f
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/Section.py
 @@ -0,0 +1,156 @@
 +# Copyright (C) 2018 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/Section.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/Section.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -1688,12 +1688,12 @@ index 0000000..47aa637
 +            "\n".join("    macro(%s) \\" % op.capitalized_name() for op in self.opcodes))
 diff --git a/Source/JavaScriptCore/generator-py/Type.py b/Source/JavaScriptCore/generator-py/Type.py
 new file mode 100644
-index 0000000..8c86298
+index 0000000..46427c8
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/Type.py
 @@ -0,0 +1,43 @@
 +# Copyright (C) 2018 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/Type.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/Type.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -1737,13 +1737,13 @@ index 0000000..8c86298
 +        return Type("%s<%s>" % (self.name, ",".join(str(t) for t in types)))
 diff --git a/Source/JavaScriptCore/generator-py/main.py b/Source/JavaScriptCore/generator-py/main.py
 new file mode 100644
-index 0000000..9c75406
+index 0000000..7372528
 --- /dev/null
 +++ b/Source/JavaScriptCore/generator-py/main.py
 @@ -0,0 +1,64 @@
 +#!/usr/bin/env python3
 +# Copyright (C) 2018 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/generator/main.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/generator/main.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -1807,13 +1807,13 @@ index 0000000..9c75406
 +    main()
 diff --git a/Source/JavaScriptCore/offlineasm-py/asm.py b/Source/JavaScriptCore/offlineasm-py/asm.py
 new file mode 100644
-index 0000000..c0fc807
+index 0000000..fb53ab6
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/asm.py
 @@ -0,0 +1,153 @@
 +#!/usr/bin/env python3
 +# Copyright (C) 2011-2022 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/asm.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/asm.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -1966,13 +1966,13 @@ index 0000000..c0fc807
 +    main()
 diff --git a/Source/JavaScriptCore/offlineasm-py/generate_offset_extractor.py b/Source/JavaScriptCore/offlineasm-py/generate_offset_extractor.py
 new file mode 100644
-index 0000000..cea51e6
+index 0000000..59810e3
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/generate_offset_extractor.py
 @@ -0,0 +1,142 @@
 +#!/usr/bin/env python3
 +# Copyright (C) 2011-2023 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/generate_offset_extractor.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/generate_offset_extractor.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -2114,13 +2114,13 @@ index 0000000..cea51e6
 +    main()
 diff --git a/Source/JavaScriptCore/offlineasm-py/generate_settings_extractor.py b/Source/JavaScriptCore/offlineasm-py/generate_settings_extractor.py
 new file mode 100644
-index 0000000..f1f9711
+index 0000000..596d035
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/generate_settings_extractor.py
 @@ -0,0 +1,104 @@
 +#!/usr/bin/env python3
 +# Copyright (C) 2011-2023 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/generate_settings_extractor.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/generate_settings_extractor.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -2227,12 +2227,12 @@ new file mode 100644
 index 0000000..e69de29
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/assembler.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/assembler.py
 new file mode 100644
-index 0000000..2aa8233
+index 0000000..591834e
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/assembler.py
 @@ -0,0 +1,273 @@
 +# Copyright (C) 2011-2022 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/asm.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/asm.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -2506,12 +2506,12 @@ index 0000000..2aa8233
 +        self.debugAnnotationStr = text
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/astnodes.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/astnodes.py
 new file mode 100644
-index 0000000..b57874f
+index 0000000..dd8f28a
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/astnodes.py
 @@ -0,0 +1,1176 @@
 +# Copyright (C) 2011-2020 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/ast.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/ast.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -3688,12 +3688,12 @@ index 0000000..b57874f
 +        return "\t%s(" % self.originalName() + ", ".join(v.dump() for v in self.operands) + ")"
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/backends.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/backends.py
 new file mode 100644
-index 0000000..2d2caac
+index 0000000..74ffbf1
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/backends.py
 @@ -0,0 +1,184 @@
 +# Copyright (C) 2011-2022 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/backends.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/backends.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -3878,12 +3878,12 @@ index 0000000..2d2caac
 +from . import m68k  # noqa: E402,F401
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/config.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/config.py
 new file mode 100644
-index 0000000..af88bdd
+index 0000000..63f1224
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/config.py
 @@ -0,0 +1,82 @@
 +# Copyright (C) 2012-2022 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/config.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/config.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -3966,12 +3966,12 @@ index 0000000..af88bdd
 +emitELFDebugDirectives = False
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/instructions.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/instructions.py
 new file mode 100644
-index 0000000..c0e459c
+index 0000000..9153d7c
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/instructions.py
 @@ -0,0 +1,523 @@
 +# Copyright (C) 2011-2022 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/instructions.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/instructions.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -4495,13 +4495,13 @@ index 0000000..c0e459c
 +    return (value & (value - 1)) == 0
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py
 new file mode 100644
-index 0000000..ce59ec9
+index 0000000..a5d3572
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py
 @@ -0,0 +1,1584 @@
 +# MIT License
 +#
-+# Copyright (c) 2026 Dalsin Limited
++# Copyright (c) 2026 AmigaChrome Team
 +# (Python port of JavaScriptCore/offlineasm/m68k.rb)
 +#
 +# Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -6085,12 +6085,12 @@ index 0000000..ce59ec9
 +    emit("move.l d1,%d(sp)" % (slot.value * 8 + 4))
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/offsets.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/offsets.py
 new file mode 100644
-index 0000000..acd93f9
+index 0000000..4d97e03
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/offsets.py
 @@ -0,0 +1,208 @@
 +# Copyright (C) 2011 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/offsets.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/offsets.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -6299,12 +6299,12 @@ index 0000000..acd93f9
 +    return map
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/parser.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/parser.py
 new file mode 100644
-index 0000000..98c5cae
+index 0000000..fc69dda
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/parser.py
 @@ -0,0 +1,964 @@
 +# Copyright (C) 2011-2023 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/parser.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/parser.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -7269,12 +7269,12 @@ index 0000000..98c5cae
 +    return fileListHash(_flattenList(fileList, []))
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/registers.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/registers.py
 new file mode 100644
-index 0000000..5b7c0da
+index 0000000..01a02d9
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/registers.py
 @@ -0,0 +1,132 @@
 +# Copyright (C) 2011 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/registers.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/registers.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -7407,12 +7407,12 @@ index 0000000..5b7c0da
 +REGISTER_PATTERN = re.compile(r'\A((' + ')|('.join(REGISTERS) + r'))\Z')
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/self_hash.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/self_hash.py
 new file mode 100644
-index 0000000..9aafec5
+index 0000000..fc7e7a3
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/self_hash.py
 @@ -0,0 +1,71 @@
 +# Copyright (C) 2011 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/self_hash.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/self_hash.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -7484,12 +7484,12 @@ index 0000000..9aafec5
 +                         dirHash(package, r"\.py$")).encode("ascii")).hexdigest()
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/settings.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/settings.py
 new file mode 100644
-index 0000000..35acb31
+index 0000000..94d97de
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/settings.py
 @@ -0,0 +1,197 @@
 +# Copyright (C) 2011 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/settings.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/settings.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -7687,12 +7687,12 @@ index 0000000..35acb31
 +    forEachValidSettingsCombination(ast, each)
 diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/transform.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/transform.py
 new file mode 100644
-index 0000000..fc08c90
+index 0000000..3b01a44
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/transform.py
 @@ -0,0 +1,523 @@
 +# Copyright (C) 2011 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of JavaScriptCore/offlineasm/transform.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of JavaScriptCore/offlineasm/transform.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -8216,7 +8216,7 @@ index 0000000..fc08c90
 +        raise Exception("Unresolved substitution in Label %s at %s" % (self.name, self.codeOrigin))
 diff --git a/Source/WTF/Scripts/GeneratePreferences.py b/Source/WTF/Scripts/GeneratePreferences.py
 new file mode 100644
-index 0000000..0558cff
+index 0000000..4b37137
 --- /dev/null
 +++ b/Source/WTF/Scripts/GeneratePreferences.py
 @@ -0,0 +1,754 @@
@@ -8224,7 +8224,7 @@ index 0000000..0558cff
 +#!/usr/bin/env ruby
 +#
 +# Copyright (c) 2017-2023 Apple Inc. All rights reserved.
-+# Copyright (C) 2026 Dalsin Limited (Python port of WTF/Scripts/GeneratePreferences.rb).
++# Copyright (C) 2026 AmigaChrome Team (Python port of WTF/Scripts/GeneratePreferences.rb).
 +#
 +# Redistribution and use in source and binary forms, with or without
 +# modification, are permitted provided that the following conditions
@@ -8987,10 +8987,10 @@ index 92ce34a..5b0e105 100644
  
      ../Scripts/Preferences/SecurityFlags.yaml
 diff --git a/Source/cmake/WebKitCommon.cmake b/Source/cmake/WebKitCommon.cmake
-index e61ecd1..aba50a9 100644
+index e61ecd1..23f1756 100644
 --- a/Source/cmake/WebKitCommon.cmake
 +++ b/Source/cmake/WebKitCommon.cmake
-@@ -291,39 +291,57 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
+@@ -291,39 +291,53 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
      # Set the variable with uppercase name to keep compatibility with code and users expecting it.
      set(PYTHON_EXECUTABLE ${Python_EXECUTABLE} CACHE FILEPATH "Path to the Python interpreter")
  
@@ -9013,14 +9013,16 @@ index e61ecd1..aba50a9 100644
 -        if (NOT _ruby_version_result EQUAL 0)
 -            set(Ruby_VERSION "")
 +    if (WTF_OS_AMIGA)
-+        # The Amiga build does not look for Ruby: JavaScriptCore's generators
-+        # run as Python ports (JavaScriptCore/offlineasm-py,
++        # The Amiga build runs no Ruby: JavaScriptCore's generators run as
++        # Python ports (JavaScriptCore/offlineasm-py,
 +        # JavaScriptCore/generator-py, WTF/Scripts/GeneratePreferences.py).
 +        # A step that still asks for Ruby (WebCore's generators, not ported
-+        # yet) runs no-ruby.py, which names the script and fails, unless a
-+        # Ruby is given with -DRuby_EXECUTABLE.
-+        if (RUBY_EXECUTABLE AND NOT Ruby_EXECUTABLE)
-+            set(Ruby_EXECUTABLE "${RUBY_EXECUTABLE}" CACHE FILEPATH "Path to the Ruby interpreter")
++        # yet) runs no-ruby.py instead, which names the script and fails.
++        message(STATUS "Ruby interpreter executable: none (Python generators)")
++        set(Ruby_EXECUTABLE "${Python_EXECUTABLE};${CMAKE_SOURCE_DIR}/Source/cmake/no-ruby.py")
++    else ()
++            message(STATUS "Ruby interpreter executable: none (Python generators)")
++            set(Ruby_EXECUTABLE "${Python_EXECUTABLE};${CMAKE_SOURCE_DIR}/Source/cmake/no-ruby.py")
          endif ()
 -        unset(_ruby_version_result)
 -    endif ()
@@ -9028,18 +9030,7 @@ index e61ecd1..aba50a9 100644
 -        if (Ruby_VERSION VERSION_LESS 2.5)
 -            message(CHECK_FAIL "${Ruby_EXECUTABLE} (version: ${Ruby_VERSION}, minimum required 2.5)")
 -            set(Ruby_EXECUTABLE NOTFOUND)
-+        if (Ruby_EXECUTABLE)
-+            message(STATUS "Ruby interpreter executable: ${Ruby_EXECUTABLE} (only for steps without a Python port)")
-         else ()
--            message(CHECK_PASS "${Ruby_EXECUTABLE} (version: ${Ruby_VERSION})")
-+            message(STATUS "Ruby interpreter executable: none (Python generators)")
-+            set(Ruby_EXECUTABLE "${Python_EXECUTABLE};${CMAKE_SOURCE_DIR}/Source/cmake/no-ruby.py")
-         endif ()
-     else ()
--        message(CHECK_FAIL "not found")
--    endif ()
--    if (NOT Ruby_EXECUTABLE)
--        message(FATAL_ERROR "Ruby 2.5 or higher is required.")
++    else ()
 +        # We only need the Ruby interpreter (to run .rb generators), not the dev
 +        # package, so find the executable and query its version directly instead of
 +        # paying find_package(Ruby)'s config probing (a dozen ruby subprocesses).
@@ -9068,24 +9059,30 @@ index e61ecd1..aba50a9 100644
 +            else ()
 +                message(CHECK_PASS "${Ruby_EXECUTABLE} (version: ${Ruby_VERSION})")
 +            endif ()
-+        else ()
+         else ()
+-            message(CHECK_PASS "${Ruby_EXECUTABLE} (version: ${Ruby_VERSION})")
 +            message(CHECK_FAIL "not found")
 +        endif ()
 +        if (NOT Ruby_EXECUTABLE)
 +            message(FATAL_ERROR "Ruby 2.5 or higher is required.")
-+        endif ()
+         endif ()
+-    else ()
+-        message(CHECK_FAIL "not found")
+-    endif ()
+-    if (NOT Ruby_EXECUTABLE)
+-        message(FATAL_ERROR "Ruby 2.5 or higher is required.")
      endif ()
  
      # -----------------------------------------------------------------------------
 diff --git a/Source/cmake/no-ruby.py b/Source/cmake/no-ruby.py
 new file mode 100644
-index 0000000..31a6898
+index 0000000..e154954
 --- /dev/null
 +++ b/Source/cmake/no-ruby.py
 @@ -0,0 +1,35 @@
 +# MIT License
 +#
-+# Copyright (c) 2026 Dalsin Limited
++# Copyright (c) 2026 AmigaChrome Team
 +#
 +# Permission is hereby granted, free of charge, to any person obtaining a copy
 +# of this software and associated documentation files (the "Software"), to
@@ -9104,7 +9101,7 @@ index 0000000..31a6898
 +# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 +# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 +# IN THE SOFTWARE.
-+# Stands in for Ruby in builds without it (the Amiga build: see
++# Stands in for Ruby in the Amiga build, which runs no Ruby (see
 +# WebKitCommon.cmake). CMake runs it as "Ruby_EXECUTABLE script.rb ...", so the
 +# script a build step wanted is the first argument: name it and fail.
 +
