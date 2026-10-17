@@ -24,7 +24,7 @@ P=$S/prefix
 OUT=${OAB_DEPS:-"$HOME/openbrowser-deps"}
 JOBS=${JOBS:-2}
 WORK=$OUT/icu-build
-F="-O2 -fno-delete-null-pointer-checks $(echo "${OS32_CPU_FLAGS:--m68020 -m68881}" | sed "s/-mcrt=[a-z0-9]*//")"
+F="-O2 -fno-delete-null-pointer-checks $(echo "${OS32_CPU_FLAGS:--m68040 -m68881}" | sed "s/-mcrt=[a-z0-9]*//")"
 
 rm -rf "$WORK" "$OUT/icu78-m68k-amigaos"
 mkdir -p "$WORK"
@@ -64,6 +64,6 @@ cat > "$D/icudt78_dat.s" <<'S'
 _icudt78_dat:
 	.incbin	"icudt78b.dat"
 S
-(cd "$D" && "$P/bin/m68k-amigaos-as" -m68020 icudt78_dat.s -o icudt78_dat.o && rm -f libicudata.a && "$P/bin/m68k-amigaos-ar" rcs libicudata.a icudt78_dat.o)
+(cd "$D" && "$P/bin/m68k-amigaos-as" -m68040 icudt78_dat.s -o icudt78_dat.o && rm -f libicudata.a && "$P/bin/m68k-amigaos-ar" rcs libicudata.a icudt78_dat.o)
 cp "$D/libicudata.a" "$OUT/icu78-m68k-amigaos/lib/libicudata.a"
 echo "ICU_OK $OUT/icu78-m68k-amigaos"
