@@ -18,6 +18,7 @@ git apply /path/to/openamigabrowser/webkit/patches/0007-amiga-host-connections-l
 git apply /path/to/openamigabrowser/webkit/patches/0008-jsc-for-in-big-endian.patch
 git apply /path/to/openamigabrowser/webkit/patches/0009-amiga-stop-run-loops-at-exit.patch
 git apply /path/to/openamigabrowser/webkit/patches/0010-amiga-fetch-proxy-experiment.patch
+# then 0011 to 0018 the same way, in order
 ```
 
 The patches, in order:
@@ -61,6 +62,14 @@ The patches, in order:
   With the Shell variable `OB_FETCH_PROXY` set (see
   `scripts/ob-fetch-proxy.py`), requests go to a proxy on another PC, which
   makes the TLS connections. Off unless the variable is set.
+- `0018-amiga-xml-parser-oxp.patch`: XML (SVG, XHTML, `DOMParser`,
+  `responseXML`) through OXP, the Team's own XML parser
+  (DalsinAI/openamigaxml, `oxp/`), in place of libxml2 (`USE(OXP)`).
+  `XMLDocumentParserOXP.cpp` is WebKit's libxml2 backend moved onto OXP.
+  `XMLDocumentParserOXPBridge.h` gives `XMLDocumentParser` OXP's events in
+  libxml2's shapes, and is tested on the host against libxml2
+  (`../tests/xml-oxp/`). No external entity or DTD is loaded; XSLT and EME
+  stay off.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

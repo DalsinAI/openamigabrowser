@@ -73,7 +73,6 @@ set(OB_SYSTEM_INCLUDE_DIRECTORIES
     ${AC_WEBCORE_DEPS}/include/cairo
     ${AC_WEBCORE_DEPS}/include/freetype2
     ${AC_WEBCORE_DEPS}/include/harfbuzz
-    ${AC_WEBCORE_DEPS}/include/libxml2
     ${AC_WEBCORE_DEPS}/include/pixman-1
     ${OB_AMISSL_SDK}/include
 )
@@ -90,7 +89,7 @@ macro(OB_LINK _target)
     target_link_libraries(${_target} PRIVATE
         -Wl,--start-group
         OBCore WebCore PAL JavaScriptCore WTF bmalloc
-        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z xml2 sqlite3 curl psl
+        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z oxp sqlite3 curl psl
         icui18n icuuc icudata
         ${OB_AMISSL_STUBS}
         amiga pthread atomic stdc++ m

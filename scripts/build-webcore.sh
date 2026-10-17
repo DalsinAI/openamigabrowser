@@ -28,7 +28,9 @@
 #   OAB_DEPS        folder holding icu78-m68k-amigaos/ (scripts/build-icu.sh)
 #                   and m68k-amigaos/, the libraries from the OpenAmiga ports
 #                   (cairo and pixman, FreeType, HarfBuzz, fontconfig, Expat,
-#                   libxml2, SQLite, curl, libpsl, zlib, libpng) in one prefix
+#                   SQLite, curl, libpsl, zlib, libpng) in one prefix, with
+#                   OXP, the XML parser (openamigaxml's oxp/build-amiga.sh with
+#                   OUT set to that prefix; WebKit patch 0018)
 #   AMISSL_SDK      the AmiSSL 5 SDK's Developer folder           (required)
 #   RUBY            Ruby >= 2.5 for WebKit's offlineasm (default: ruby on PATH)
 #   JOBS            parallel compile jobs (default: one per CPU thread, but
