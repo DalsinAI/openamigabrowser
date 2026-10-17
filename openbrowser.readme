@@ -18,7 +18,7 @@ strings, JSON, RegExp, Date, exceptions and full double-precision maths.
 
 Requirements:
   - AmigaOS 3.2 or newer
-  - a 68040 with its FPU (the build is for the 68040)
+  - a 68040 with FPU (hard float; not an LC or EC040)
   - about 80 MB of free Fast RAM (the program is 71 MB)
   - Stack 4194304 (4 MB) in the shell before running it
 
