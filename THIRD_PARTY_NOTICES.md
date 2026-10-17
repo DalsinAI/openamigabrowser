@@ -16,11 +16,11 @@ Ruby: `Source/JavaScriptCore/offlineasm-py/` (offlineasm's front end, from
 generator, from `generator/*.rb`) and `Source/WTF/Scripts/GeneratePreferences.py`
 (from `GeneratePreferences.rb`). They are derived works of Apple Inc.'s
 BSD-licensed originals (Copyright (C) 2011-2023 Apple Inc.): each file keeps
-Apple's copyright notice and licence text, with a line for Dalsin Limited's
-port, and stays under that BSD licence. The M68K back end
+Apple's copyright notice and licence text, with a line for the AmigaChrome
+Team's port, and stays under that BSD licence. The M68K back end
 (`offlineasm-py/offlineasm/m68k.py`, a port of our own `m68k.rb`), the
 BytecodeList reader (`generator-py/RubyListReader.py`) and `Source/cmake/no-ruby.py`
-are ours (MIT, Dalsin Limited).
+are ours (MIT, AmigaChrome Team).
 
 `third_party/openmail/` comes from OpenMail (AmigaChrome Team's mail client,
 MIT, same copyright); see its `FROM` and `LICENSE`.

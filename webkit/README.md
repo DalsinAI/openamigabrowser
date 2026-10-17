@@ -69,9 +69,8 @@ The patches, in order:
   and `Source/WTF/Scripts/GeneratePreferences.py`. Their output matches the
   Ruby scripts' byte for byte. The 68k build always uses the M68K back end
   (the `JSC_M68K_LLINT` option is gone). WebCore's three Ruby generators are
-  not ported yet: the browser build still needs a Ruby for them
-  (`-DRuby_EXECUTABLE`); without one, `no-ruby.py` stops the build and names
-  the script. (0018 is the visit cache, still a draft.)
+  not ported yet: until they are, the browser build stops at them with
+  `no-ruby.py`'s message, which names the script. (0018 is the visit cache, still a draft.)
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
