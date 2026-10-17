@@ -11,7 +11,8 @@ JIT) on AmigaOS 3.2.3 on a 68040, 4 Oct 2026. Upstream WebKit is pinned at
 - Compiler: bebbo's amiga-gcc framework with gcc branch `amiga16.2` (GCC
   16.2.0b), binutils `amiga-2.46`, libnix, libpthread (Szilard Biro), NDK 3.2.
   It builds hunk executables. WebKit needs C++23, so GCC 6.5 is not enough.
-- Flags: `-m68020 -m68881`. `-mhard-float` on its own picks the soft-float
+- Flags: `-m68040 -m68881` (68040 only since 17 Oct 2026; GCC still links the
+  `libm020/libm881` multilib). `-mhard-float` on its own picks the soft-float
   `libm020` libraries; mixing them with FPU code breaks.
 - GCC changes (`stove/gcc-patches/`, GPL):
   1. libstdc++ `atomic.cc`: 64-byte alignment becomes 8 (Amiga objects allow 8).

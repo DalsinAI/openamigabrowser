@@ -3,7 +3,7 @@
 # Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 #
 # Build WebCore (PORT=Amiga) and OpenBrowser's WebCore programs for AmigaOS
-# 3.2.x (68020+, FPU) with the os32-gcc16 stove. The build has two halves:
+# 3.2.x (68040, FPU) with the os32-gcc16 stove. The build has two halves:
 #
 #   the engine   WebKit's WebCore, JavaScriptCore, WTF, PAL and bmalloc.
 #                Built only when an input in its fingerprint changes: the

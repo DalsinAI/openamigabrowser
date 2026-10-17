@@ -2,7 +2,7 @@
 # OpenBrowser (DalsinAI/openamigabrowser)
 # Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 #
-# Build WebKit's JSCOnly `jsc` shell for AmigaOS 3.2.x (68020+, FPU) with the
+# Build WebKit's JSCOnly `jsc` shell for AmigaOS 3.2.x (68040, FPU) with the
 # os32-gcc16 stove. WebKit itself is not in this repository: check out the
 # pinned upstream revision (webkit/UPSTREAM) and apply webkit/patches first.
 #
