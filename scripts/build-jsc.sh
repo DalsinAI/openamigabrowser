@@ -10,7 +10,10 @@
 #   WEBKIT_BUILD   build folder                      (default ./build/JSCOnly)
 #   OS32_GCC16     stove root (prefix/, compat/)     (see toolchain/amigaos3-gcc16.cmake)
 #   OAB_DEPS       folder holding icu78-m68k-amigaos (see scripts/build-icu.sh)
-#   RUBY           Ruby >= 2.5 for WebKit's offlineasm (default: ruby on PATH)
+#
+# No Ruby: with patch 0019 the build runs Python ports of WebKit's Ruby
+# generators (offlineasm, the bytecode generator, GeneratePreferences) with
+# the python3 CMake finds.
 #   JOBS           parallel jobs (default 2)
 #
 # usage: build-jsc.sh [all|configure|build|verify]
@@ -20,7 +23,6 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 : "${WEBKIT_SOURCE:?set WEBKIT_SOURCE to the patched WebKit tree}"
 BUILD=${WEBKIT_BUILD:-"$PWD/build/JSCOnly"}
-RUBY=${RUBY:-$(command -v ruby || true)}
 GMAKE=${GMAKE:-$(command -v gmake || command -v make)}
 JOBS=${JOBS:-2}
 MODE=${1:-all}
@@ -28,7 +30,6 @@ JSC="$BUILD/bin/jsc"
 
 die() { echo "ERROR: $*" >&2; exit 2; }
 [ -f "$WEBKIT_SOURCE/CMakeLists.txt" ] || die "WebKit source missing: $WEBKIT_SOURCE"
-[ -n "$RUBY" ] || die "Ruby not found; set RUBY"
 
 configure() {
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "Unix Makefiles" \
@@ -37,8 +38,7 @@ configure() {
       -DCMAKE_BUILD_TYPE=Release \
       -DENABLE_JIT=OFF -DENABLE_DFG_JIT=OFF -DENABLE_FTL_JIT=OFF \
       -DENABLE_WEBASSEMBLY=OFF -DUSE_SYSTEM_MALLOC=ON \
-      -DEVENT_LOOP_TYPE=Generic -DENABLE_STATIC_JSC=ON -DENABLE_API_TESTS=OFF \
-      -DRuby_EXECUTABLE="$RUBY"
+      -DEVENT_LOOP_TYPE=Generic -DENABLE_STATIC_JSC=ON -DENABLE_API_TESTS=OFF
 }
 
 build() {

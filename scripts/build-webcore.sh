@@ -30,7 +30,9 @@
 #                   (cairo and pixman, FreeType, HarfBuzz, fontconfig, Expat,
 #                   libxml2, SQLite, curl, libpsl, zlib, libpng) in one prefix
 #   AMISSL_SDK      the AmiSSL 5 SDK's Developer folder           (required)
-#   RUBY            Ruby >= 2.5 for WebKit's offlineasm (default: ruby on PATH)
+#   RUBY            Ruby >= 2.5 for WebCore's three Ruby generators, which have
+#                   no Python port yet (default: ruby on PATH; JavaScriptCore's
+#                   generators run in Python, patch 0019)
 #   JOBS            parallel compile jobs (default: one per CPU thread, but
 #                   no more than one per 2 GB of free memory, since WebCore's
 #                   largest files take up to 2 GB each to compile)
@@ -250,13 +252,12 @@ configure_engine() {
         return
     fi
     RUBY=${RUBY:-$(command -v ruby || true)}
-    [ -n "$RUBY" ] || die "Ruby not found; set RUBY"
+    [ -n "$RUBY" ] || die "Ruby not found; set RUBY (WebCore's generators still need it)"
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "$(generator)" "$@" \
       -DPORT=Amiga \
       -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain/amigaos3-gcc16.cmake" \
       -DCMAKE_BUILD_TYPE=MinSizeRel \
       -DENABLE_WEBCORE=ON \
-      -DJSC_M68K_LLINT=ON \
       -DOPENBROWSER_WEBCORE_DIR="$ROOT/src/webcore" \
       -DOPENSSL_INCLUDE_DIR="$AMISSL_SDK/include" \
       -DOPENSSL_SSL_LIBRARY="$AMISSL_SDK/lib/AmigaOS3/libamisslstubs.a" \
