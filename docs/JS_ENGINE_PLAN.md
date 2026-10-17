@@ -103,6 +103,11 @@ shows fully once the slow opcodes above are fixed there.
 
 ## Step 2: compiling as a service ("code in, runtime out")
 
+> **Superseded, 17 October 2026:** AmigaChrome's
+> `docs/design/Design-OpenBrowser-JIT-on-core.md` (PR #562) runs the whole engine
+> on the host's x86-64 or ARM64 cores instead, with JavaScriptCore's own JITs.
+> This step is kept for the record and is not planned.
+
 Like OpenMulticore's jobs: the engine sends a hot function's bytecode to a
 `js.compile/1` service on `openservice.device` and gets back ready-to-run 68k
 code.
@@ -128,6 +133,11 @@ still runs on the 68k; the service removes the cost of compiling, not of
 running.
 
 ## Step 3: offload the work itself (later)
+
+> **Superseded, 17 October 2026:** AmigaChrome's
+> `docs/design/Design-OpenBrowser-JIT-on-core.md` (PR #562) runs the whole engine
+> on the host's x86-64 or ARM64 cores instead, with JavaScriptCore's own JITs.
+> This step is kept for the record and is not planned.
 
 With OpenMulticore cores that run native code, whole scripts (a worker, a
 page's JavaScript) could run on the card with its own heap, the page's DOM
