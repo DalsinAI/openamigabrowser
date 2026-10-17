@@ -90,6 +90,22 @@ already has a curl backend with cookies, redirects and TLS.
 
 **Milestone 3:** Browse a few simple real sites (text-heavy, light JS) end to end.
 
+### JavaScript's JIT: on the core underneath (17 Oct 2026)
+
+The JIT question is answered by AmigaChrome's design
+`docs/design/Design-OpenBrowser-JIT-on-core.md` (amigachrome PR #562, 0.1 for review).
+It recommends running WebCore and JavaScriptCore together on the host's
+x86-64 or ARM64 cores, as the service `web.engine/1`, with this program as the
+front end. JavaScriptCore's own Baseline, DFG and FTL JITs then do the work:
+on loops they run 120 to 300 times the 68k interpreter (probe, measured).
+
+- It **supersedes Steps 2 and 3** of `JS_ENGINE_PLAN.md`: no `js.compile/1`
+  writing 68k code, and no scripts on the cores with the DOM left here.
+- **Step 1**, the 68k interpreter, stays as the fallback for any machine
+  without the services card, such as a real 68040 or a PiStorm under Emu68.
+- This plan's Phase 4 item "a JIT-less fast path for common JS" is also met
+  by it wherever the card is present.
+
 ### Phase 4: usable
 1. Multiple windows (tabs later), find-in-page, zoom/text size, printing through OpenAmigaPrint.
 2. Performance: profile on 3.2.3, cut startup time (71 MB binary loads slowly), consider a JIT-less fast path for common JS, cache compiled bytecode.
