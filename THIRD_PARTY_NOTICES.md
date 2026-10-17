@@ -9,6 +9,19 @@ their own licences:
 | `icu/patches/` | Changes to ICU 78.3 source files | Unicode License v3 (ICU) |
 | `stove/gcc-patches/` | Changes to GCC 16 (bebbo amiga-gcc, branch amiga16.2) and its newlib headers | GPL-3.0-or-later with the GCC Runtime Library Exception (GCC); newlib's own licence for `sys-include` |
 
+Patch 0019 (`webkit/patches/0019-jsc-generators-in-python.patch`) adds Python
+ports of WebKit's Ruby build scripts so that JavaScriptCore builds without
+Ruby: `Source/JavaScriptCore/offlineasm-py/` (offlineasm's front end, from
+`offlineasm/*.rb`), `Source/JavaScriptCore/generator-py/` (the bytecode
+generator, from `generator/*.rb`) and `Source/WTF/Scripts/GeneratePreferences.py`
+(from `GeneratePreferences.rb`). They are derived works of Apple Inc.'s
+BSD-licensed originals (Copyright (C) 2011-2023 Apple Inc.): each file keeps
+Apple's copyright notice and licence text, with a line for Dalsin Limited's
+port, and stays under that BSD licence. The M68K back end
+(`offlineasm-py/offlineasm/m68k.py`, a port of our own `m68k.rb`), the
+BytecodeList reader (`generator-py/RubyListReader.py`) and `Source/cmake/no-ruby.py`
+are ours (MIT, Dalsin Limited).
+
 `third_party/openmail/` comes from OpenMail (AmigaChrome Team's mail client,
 MIT, same copyright); see its `FROM` and `LICENSE`.
 
