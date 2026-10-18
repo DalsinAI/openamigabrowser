@@ -55,9 +55,9 @@ apart from the hash of the generator's own files in the LLInt headers.
  .../offlineasm-py/offlineasm/transform.py     |  523 ++++++
  Source/WTF/Scripts/GeneratePreferences.py     |  754 ++++++++
  Source/WTF/wtf/CMakeLists.txt                 |    1 +
- Source/cmake/WebKitCommon.cmake               |   74 +-
+ Source/cmake/WebKitCommon.cmake               |   70 +-
  Source/cmake/no-ruby.py                       |   35 +
- 33 files changed, 8717 insertions(+), 45 deletions(-)
+ 33 files changed, 8713 insertions(+), 45 deletions(-)
  create mode 100644 Source/JavaScriptCore/Scripts/PreferencesTemplates/JSCWebPreferenceOptions.h.pyerb
  create mode 100644 Source/JavaScriptCore/generator-py/Argument.py
  create mode 100644 Source/JavaScriptCore/generator-py/Assertion.py
@@ -8987,10 +8987,10 @@ index 92ce34a..5b0e105 100644
  
      ../Scripts/Preferences/SecurityFlags.yaml
 diff --git a/Source/cmake/WebKitCommon.cmake b/Source/cmake/WebKitCommon.cmake
-index e61ecd1..23f1756 100644
+index e61ecd1..f1ff093 100644
 --- a/Source/cmake/WebKitCommon.cmake
 +++ b/Source/cmake/WebKitCommon.cmake
-@@ -291,39 +291,53 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
+@@ -291,39 +291,49 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
      # Set the variable with uppercase name to keep compatibility with code and users expecting it.
      set(PYTHON_EXECUTABLE ${Python_EXECUTABLE} CACHE FILEPATH "Path to the Python interpreter")
  
@@ -9021,16 +9021,6 @@ index e61ecd1..23f1756 100644
 +        message(STATUS "Ruby interpreter executable: none (Python generators)")
 +        set(Ruby_EXECUTABLE "${Python_EXECUTABLE};${CMAKE_SOURCE_DIR}/Source/cmake/no-ruby.py")
 +    else ()
-+            message(STATUS "Ruby interpreter executable: none (Python generators)")
-+            set(Ruby_EXECUTABLE "${Python_EXECUTABLE};${CMAKE_SOURCE_DIR}/Source/cmake/no-ruby.py")
-         endif ()
--        unset(_ruby_version_result)
--    endif ()
--    if (Ruby_EXECUTABLE AND Ruby_VERSION)
--        if (Ruby_VERSION VERSION_LESS 2.5)
--            message(CHECK_FAIL "${Ruby_EXECUTABLE} (version: ${Ruby_VERSION}, minimum required 2.5)")
--            set(Ruby_EXECUTABLE NOTFOUND)
-+    else ()
 +        # We only need the Ruby interpreter (to run .rb generators), not the dev
 +        # package, so find the executable and query its version directly instead of
 +        # paying find_package(Ruby)'s config probing (a dozen ruby subprocesses).
@@ -9039,7 +9029,13 @@ index e61ecd1..23f1756 100644
 +        # find_package(Ruby) accepted; some bots use it to avoid a broken PATH ruby).
 +        if (RUBY_EXECUTABLE AND NOT Ruby_EXECUTABLE)
 +            set(Ruby_EXECUTABLE "${RUBY_EXECUTABLE}" CACHE FILEPATH "Path to the Ruby interpreter")
-+        endif ()
+         endif ()
+-        unset(_ruby_version_result)
+-    endif ()
+-    if (Ruby_EXECUTABLE AND Ruby_VERSION)
+-        if (Ruby_VERSION VERSION_LESS 2.5)
+-            message(CHECK_FAIL "${Ruby_EXECUTABLE} (version: ${Ruby_VERSION}, minimum required 2.5)")
+-            set(Ruby_EXECUTABLE NOTFOUND)
 +        find_program(Ruby_EXECUTABLE NAMES ruby)
 +        if (Ruby_EXECUTABLE)
 +            execute_process(
