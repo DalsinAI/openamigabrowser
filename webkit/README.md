@@ -62,6 +62,16 @@ The patches, in order:
   `scripts/ob-fetch-proxy.py`), requests go to a proxy on another PC, which
   makes the TLS connections. Off unless the variable is set.
 
+- `0019-jsc-generators-in-python.patch`: JavaScriptCore builds without
+  Ruby. offlineasm (front end and the M68K back end), the bytecode generator
+  and GeneratePreferences run as Python 3 ports (standard library only), in
+  `Source/JavaScriptCore/offlineasm-py`, `Source/JavaScriptCore/generator-py`
+  and `Source/WTF/Scripts/GeneratePreferences.py`. Their output matches the
+  Ruby scripts' byte for byte. The 68k build always uses the M68K back end
+  (the `JSC_M68K_LLINT` option is gone). WebCore's three Ruby generators are
+  not ported yet: until they are, the browser build stops at them with
+  `no-ruby.py`'s message, which names the script. (0018 is the visit cache, still a draft.)
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;

@@ -43,7 +43,9 @@ Two facts shape the work:
 ## Step 1: the 68k interpreter (done, 6 October 2026)
 
 Built as WebKit patch 0015 (`webkit/patches/0015-jsc-m68k-interpreter.patch`),
-on by default in `scripts/build-webcore.sh` (CMake `JSC_M68K_LLINT`). It took
+on by default in `scripts/build-webcore.sh` (since patch 0019 the only
+interpreter the 68k build has; its back end is now
+`offlineasm-py/offlineasm/m68k.py`, Ruby no longer needed). It took
 a shorter route than the plan below: the C loop's plumbing stays (its own
 JavaScript stack, slow paths as plain C calls, no assembler), and offlineasm's
 new M68K back end (`offlineasm/m68k.rb`) emits the C loop's version of the
