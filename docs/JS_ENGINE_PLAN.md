@@ -70,8 +70,12 @@ Wikipedia's Amiga article loads completely in 40 s (97 s before), BBC and the
 Microsoft sign-in page render as before. The slow opcodes were not the
 emulator after all: they were GCC's code for the C loop, a 384 KB function.
 
-Still to do: keep the hottest registers (PC, PB, t0-t3) in 68k registers
-instead of the register file, and measure on a real 68040.
+PB, PC and metadataTable moved to a3, a2 and a4 in patch 0017. J1 (patch
+0020, 19 October 2026) keeps t0-t3's low words in d4-d7; their high words
+stay in the register file. On the AC090 (lab, jsbench with each test run 10
+times, median of 3): int-loop 520 -> 380 ms, properties 600 -> 440 ms, array
+sort 860 -> 800 ms, calls 540 -> 460 ms, double loop 380 -> 320 ms; the same
+results, and the same semantics checks. Still to do: measure on a real 68040.
 
 The original plan, for reference:
 
