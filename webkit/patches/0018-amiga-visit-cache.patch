@@ -1,0 +1,939 @@
+From ba37cdd4b549fa898aacf5681254c00db856777e Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 23:05:20 +0100
+Subject: [PATCH] WIP: Amiga HTTP disk cache and bytecode cache
+
+---
+ Source/WebCore/PlatformAmiga.cmake            |   3 +
+ .../bindings/js/CachedScriptSourceProvider.h  |  35 ++
+ .../js/CachedScriptSourceProviderAmiga.cpp    | 171 ++++++++
+ .../platform/network/ResourceHandleInternal.h |   5 +
+ .../platform/network/amiga/AmigaDiskCache.cpp | 395 ++++++++++++++++++
+ .../platform/network/amiga/AmigaDiskCache.h   |  90 ++++
+ .../network/amiga/ResourceHandleAmiga.cpp     |  86 +++-
+ 7 files changed, 782 insertions(+), 3 deletions(-)
+ create mode 100644 Source/WebCore/bindings/js/CachedScriptSourceProviderAmiga.cpp
+ create mode 100644 Source/WebCore/platform/network/amiga/AmigaDiskCache.cpp
+ create mode 100644 Source/WebCore/platform/network/amiga/AmigaDiskCache.h
+
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index ed29f822fe..4dfecba6cd 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -60,6 +60,9 @@ list(APPEND WebCore_SOURCES
+     platform/image-decoders/amiga/DatatypesImageDecoder.cpp
+     platform/image-decoders/cairo/ImageBackingStoreCairo.cpp
+ 
++    bindings/js/CachedScriptSourceProviderAmiga.cpp
++
++    platform/network/amiga/AmigaDiskCache.cpp
+     platform/network/amiga/CurlSSLHandleAmiga.cpp
+     platform/network/amiga/NetworkStateNotifierAmiga.cpp
+ 
+diff --git a/Source/WebCore/bindings/js/CachedScriptSourceProvider.h b/Source/WebCore/bindings/js/CachedScriptSourceProvider.h
+index 6b884b2579..ba4a778a46 100644
+--- a/Source/WebCore/bindings/js/CachedScriptSourceProvider.h
++++ b/Source/WebCore/bindings/js/CachedScriptSourceProvider.h
+@@ -25,6 +25,9 @@
+ 
+ #pragma once
+ 
++// The bytecode cache (CachedScriptSourceProviderAmiga.cpp): off, see there.
++#define ENABLE_AMIGA_BYTECODE_CACHE 0
++
+ #include "CachedResourceClient.h"
+ #include "CachedResourceHandle.h"
+ #include "CachedScript.h"
+@@ -40,6 +43,9 @@ public:
+ 
+     virtual ~CachedScriptSourceProvider()
+     {
++#if PLATFORM(AMIGA) && ENABLE_AMIGA_BYTECODE_CACHE
++        amigaUnregister();
++#endif
+         protect(m_cachedScript)->removeClient(*this);
+     }
+ 
+@@ -56,17 +62,46 @@ public:
+         SUPPRESS_UNCOUNTED_ARG m_cachedScript->withScriptConcurrently(isModuleType() ? CachedScript::ShouldDecodeAsUTF8Only::Yes : CachedScript::ShouldDecodeAsUTF8Only::No, function);
+     }
+ 
++#if PLATFORM(AMIGA) && ENABLE_AMIGA_BYTECODE_CACHE
++    // Compiled bytecode kept on disk (CachedScriptSourceProviderAmiga.cpp),
++    // so a revisit does not parse the script again.
++    RefPtr<JSC::CachedBytecode> cachedBytecode() const final;
++    void cacheBytecode(const JSC::BytecodeCacheGenerator&) const final;
++    void updateCache(const JSC::UnlinkedFunctionExecutable*, const JSC::SourceCode&, JSC::CodeSpecializationKind, const JSC::UnlinkedFunctionCodeBlock*) const final;
++    void commitCachedBytecode() const final;
++    String amigaBytecodePath() const;
++#endif
++
+ private:
+     CachedScriptSourceProvider(CachedScript* cachedScript, JSC::SourceProviderSourceType sourceType, Ref<CachedScriptFetcher>&& scriptFetcher)
+         : SourceProvider(JSC::SourceOrigin { cachedScript->response().url(), WTF::move(scriptFetcher) }, String(cachedScript->response().url().string()), cachedScript->response().isRedirected() ? String(cachedScript->url().string()) : String(), cachedScript->requiresPrivacyProtections() ? JSC::SourceTaintedOrigin::KnownTainted : JSC::SourceTaintedOrigin::Untainted, TextPosition(), sourceType)
+         , m_cachedScript(cachedScript)
+     {
+         cachedScript->addClient(*this);
++#if PLATFORM(AMIGA) && ENABLE_AMIGA_BYTECODE_CACHE
++        amigaRegister();
++#endif
+     }
+ 
++#if PLATFORM(AMIGA) && ENABLE_AMIGA_BYTECODE_CACHE
++    void amigaRegister();
++    void amigaUnregister();
++#endif
++
+     const CachedResourceHandle<CachedScript> m_cachedScript;
++#if PLATFORM(AMIGA) && ENABLE_AMIGA_BYTECODE_CACHE
++    mutable RefPtr<JSC::CachedBytecode> m_cachedBytecode;
++    mutable bool m_triedLoadingBytecode { false };
++#endif
+ };
+ 
++#if PLATFORM(AMIGA) && ENABLE_AMIGA_BYTECODE_CACHE
++// Writes every live script's new bytecode to the disk cache (after a page
++// has loaded, say).
++WEBCORE_EXPORT void commitAmigaBytecodeCaches();
++WEBCORE_EXPORT void setAmigaBytecodeCacheEnabled(bool);
++#endif
++
+ inline unsigned CachedScriptSourceProvider::hash() const
+ {
+     // Modules should always be decoded as UTF-8.
+diff --git a/Source/WebCore/bindings/js/CachedScriptSourceProviderAmiga.cpp b/Source/WebCore/bindings/js/CachedScriptSourceProviderAmiga.cpp
+new file mode 100644
+index 0000000000..3821b0b053
+--- /dev/null
++++ b/Source/WebCore/bindings/js/CachedScriptSourceProviderAmiga.cpp
+@@ -0,0 +1,171 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// The Amiga port's bytecode cache: a script's compiled bytecode (its
++// top-level code and the functions compiled while the page loaded) kept in
++// the disk cache's "js" drawer, named by the script's URL and the hash of
++// its text, so a revisit decodes it instead of parsing the script. The same
++// scheme as the jsc shell's --diskCachePath (jsc.cpp, ShellSourceProvider).
++
++#include "config.h"
++#include "CachedScriptSourceProvider.h"
++
++#if PLATFORM(AMIGA) && ENABLE_AMIGA_BYTECODE_CACHE
++
++#include "platform/network/amiga/AmigaDiskCache.h"
++#include <JavaScriptCore/CachedBytecode.h>
++#include <JavaScriptCore/BytecodeCacheError.h>
++#include <JavaScriptCore/CachedTypes.h>
++#include <JavaScriptCore/HeapCellInlines.h>
++#include <JavaScriptCore/UnlinkedFunctionExecutable.h>
++#include <wtf/FileHandle.h>
++#include <wtf/FileSystem.h>
++#include <wtf/HashSet.h>
++#include <wtf/HexNumber.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/SHA1.h>
++#include <wtf/Scope.h>
++#include <wtf/text/MakeString.h>
++
++namespace WebCore {
++
++// Off until decoding is fixed on the 68k: the cached bytecode is read but
++// JavaScriptCore compiles the script again (and appends a second copy), so
++// it costs time instead of saving it. setAmigaBytecodeCacheEnabled() turns
++// it on for testing.
++static bool bytecodeCacheEnabled;
++
++void setAmigaBytecodeCacheEnabled(bool enabled)
++{
++    bytecodeCacheEnabled = enabled;
++}
++
++static HashSet<const CachedScriptSourceProvider*>& liveProviders()
++{
++    static NeverDestroyed<HashSet<const CachedScriptSourceProvider*>> providers;
++    return providers;
++}
++
++void CachedScriptSourceProvider::amigaRegister()
++{
++    liveProviders().add(this);
++}
++
++void CachedScriptSourceProvider::amigaUnregister()
++{
++    liveProviders().remove(this);
++    commitCachedBytecode();
++}
++
++void commitAmigaBytecodeCaches()
++{
++    for (auto* provider : copyToVector(liveProviders()))
++        provider->commitCachedBytecode();
++}
++
++String CachedScriptSourceProvider::amigaBytecodePath() const
++{
++    auto& cache = AmigaDiskCache::singleton();
++    if (!bytecodeCacheEnabled || !cache.isEnabled() || !m_cachedScript->response().url().protocolIsInHTTPFamily())
++        return { };
++    auto directory = FileSystem::pathByAppendingComponent(cache.directory(), "js"_s);
++    SHA1 sha1;
++    auto url = m_cachedScript->response().url().string().utf8();
++    sha1.addBytes(byteCast<uint8_t>(url.span()));
++    SHA1::Digest digest;
++    sha1.computeHash(digest);
++    auto name = makeString(String::fromLatin1(SHA1::hexDigest(digest).data()).left(16), '-', hex(hash(), 8), ".jsbc"_s);
++    return FileSystem::pathByAppendingComponent(directory, name);
++}
++
++RefPtr<JSC::CachedBytecode> CachedScriptSourceProvider::cachedBytecode() const
++{
++    if (m_triedLoadingBytecode)
++        return m_cachedBytecode;
++    m_triedLoadingBytecode = true;
++    auto path = amigaBytecodePath();
++    if (path.isNull())
++        return nullptr;
++    auto handle = FileSystem::openFile(path, FileSystem::FileOpenMode::Read);
++    if (!handle)
++        return nullptr;
++    auto mapped = handle.map(FileSystem::MappedFileMode::Private);
++    if (!mapped || !mapped->size())
++        return nullptr;
++    m_cachedBytecode = JSC::CachedBytecode::create(WTF::move(*mapped));
++    amigaDiskCacheLog("bytecode-load", makeString(m_cachedBytecode->size(), ' ', m_cachedScript->response().url().string()));
++    return m_cachedBytecode;
++}
++
++void CachedScriptSourceProvider::cacheBytecode(const JSC::BytecodeCacheGenerator& generator) const
++{
++    if (amigaBytecodePath().isNull())
++        return;
++    if (!m_cachedBytecode)
++        m_cachedBytecode = JSC::CachedBytecode::create();
++    if (auto update = generator())
++        m_cachedBytecode->addGlobalUpdate(*update);
++}
++
++void CachedScriptSourceProvider::updateCache(const JSC::UnlinkedFunctionExecutable* executable, const JSC::SourceCode&, JSC::CodeSpecializationKind kind, const JSC::UnlinkedFunctionCodeBlock* codeBlock) const
++{
++    if (!m_cachedBytecode)
++        return;
++    JSC::BytecodeCacheError error;
++    RefPtr<JSC::CachedBytecode> cachedBytecode = JSC::encodeFunctionCodeBlock(executable->vm(), codeBlock, error);
++    if (cachedBytecode && !error.isValid())
++        m_cachedBytecode->addFunctionUpdate(executable, kind, *cachedBytecode);
++}
++
++void CachedScriptSourceProvider::commitCachedBytecode() const
++{
++    if (!m_cachedBytecode || !m_cachedBytecode->hasUpdates())
++        return;
++    auto clearBytecode = makeScopeExit([&] {
++        m_cachedBytecode = nullptr;
++    });
++    auto path = amigaBytecodePath();
++    if (path.isNull())
++        return;
++    FileSystem::makeAllDirectories(FileSystem::parentPath(path));
++    auto handle = FileSystem::openFile(path, FileSystem::FileOpenMode::ReadWrite);
++    if (!handle)
++        return;
++    auto fileSize = handle.size();
++    size_t cacheFileSize;
++    if (!fileSize || !WTF::convertSafely(*fileSize, cacheFileSize) || cacheFileSize != m_cachedBytecode->size())
++        return; // Someone else updated it meanwhile.
++    if (!handle.truncate(m_cachedBytecode->sizeForUpdate()))
++        return;
++    amigaDiskCacheLog("bytecode-store", makeString(m_cachedBytecode->sizeForUpdate(), ' ', m_cachedScript->response().url().string()));
++    m_cachedBytecode->commitUpdates([&](off_t offset, std::span<const uint8_t> data) {
++        if (handle.seek(offset, FileSystem::FileSeekOrigin::Beginning))
++            handle.write(data);
++    });
++}
++
++} // namespace WebCore
++
++#endif // PLATFORM(AMIGA)
+diff --git a/Source/WebCore/platform/network/ResourceHandleInternal.h b/Source/WebCore/platform/network/ResourceHandleInternal.h
+index 29f73c2232..4a86ca5108 100644
+--- a/Source/WebCore/platform/network/ResourceHandleInternal.h
++++ b/Source/WebCore/platform/network/ResourceHandleInternal.h
+@@ -47,6 +47,7 @@ typedef const struct __CFURLStorageSession* CFURLStorageSessionRef;
+ // WebCoreResourceLoaderImp which avoids doing work in dealloc).
+ 
+ #if PLATFORM(AMIGA)
++#include "amiga/AmigaDiskCache.h"
+ #include "CurlRequest.h"
+ #include "CurlRequestClient.h"
+ #endif
+@@ -109,6 +110,10 @@ public:
+     // A ResourceHandleCurlDelegate (ResourceHandleAmiga.cpp), kept by its base
+     // so this header needs no complete type for it.
+     RefPtr<CurlRequestClient> m_curlDelegate;
++    // The disk cache (AmigaDiskCache.h): the entry being revalidated, and the
++    // response being kept as it arrives.
++    std::unique_ptr<AmigaCacheEntry> m_amigaCacheEntry;
++    std::unique_ptr<AmigaCacheEntry> m_amigaCacheStore;
+ #endif
+     Box<NetworkLoadMetrics> m_networkLoadMetrics;
+     MonotonicTime m_startTime;
+diff --git a/Source/WebCore/platform/network/amiga/AmigaDiskCache.cpp b/Source/WebCore/platform/network/amiga/AmigaDiskCache.cpp
+new file mode 100644
+index 0000000000..0337d642a7
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/AmigaDiskCache.cpp
+@@ -0,0 +1,395 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "AmigaDiskCache.h"
++
++#include "CacheValidation.h"
++#include "HTTPHeaderNames.h"
++#include "ResourceRequest.h"
++#include "ResourceResponse.h"
++#include <algorithm>
++#include <stdio.h>
++#include <wtf/FileSystem.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/SHA1.h>
++#include <wtf/text/MakeString.h>
++
++namespace WebCore {
++
++// An entry's file: "OBC1", then big-endian fields: the time it was stored
++// (milliseconds since 1970, 8 bytes), status code, HTTP version and expected
++// length (4, 4, 8), the URL and each header line as a 4-byte length and
++// UTF-8, the number of header lines before them, and the body.
++static constexpr std::array<uint8_t, 4> magic { 'O', 'B', 'C', '1' };
++
++// The 16 drawers, "0" to "f", by the name's first hex digit.
++static String drawerName(unsigned index)
++{
++    return String::fromLatin1(std::array<char, 2> { "0123456789abcdef"[index & 15], 0 }.data());
++}
++
++// Set by the program (setAmigaDiskCacheLogging): say what the cache does
++// with each request.
++static bool loggingEnabled;
++
++static bool logging()
++{
++    return loggingEnabled;
++}
++
++void setAmigaDiskCacheLogging(bool enabled)
++{
++    loggingEnabled = enabled;
++}
++
++static void log(const char* what, const URL& url)
++{
++    if (logging()) {
++        printf("OBCACHE %s %s\n", what, url.string().utf8().data());
++        fflush(stdout);
++    }
++}
++
++void amigaDiskCacheLog(const char* what, const String& detail)
++{
++    if (logging()) {
++        printf("OBCACHE %s %s\n", what, detail.utf8().data());
++        fflush(stdout);
++    }
++}
++
++AmigaDiskCache& AmigaDiskCache::singleton()
++{
++    static NeverDestroyed<AmigaDiskCache> cache;
++    return cache;
++}
++
++void setAmigaDiskCacheDirectory(const String& directory, uint64_t capacity)
++{
++    AmigaDiskCache::singleton().setDirectory(directory, capacity);
++}
++
++void AmigaDiskCache::setDirectory(const String& directory, uint64_t capacity)
++{
++    m_directory = directory;
++    m_capacity = capacity;
++    if (m_directory.isEmpty())
++        return;
++    for (unsigned i = 0; i < 16; ++i)
++        FileSystem::makeAllDirectories(FileSystem::pathByAppendingComponent(m_directory, drawerName(i)));
++    trim();
++}
++
++String AmigaDiskCache::pathForURL(const URL& url) const
++{
++    URL key = url;
++    key.removeFragmentIdentifier();
++    SHA1 sha1;
++    auto utf8 = key.string().utf8();
++    sha1.addBytes(byteCast<uint8_t>(utf8.span()));
++    SHA1::Digest digest;
++    sha1.computeHash(digest);
++    auto name = String::fromLatin1(SHA1::hexDigest(digest).data());
++    return FileSystem::pathByAppendingComponent(FileSystem::pathByAppendingComponent(m_directory, name.left(1)), name);
++}
++
++namespace {
++
++class Writer {
++public:
++    void bytes(std::span<const uint8_t> data) { m_data.append(data); }
++    void u32(uint32_t value)
++    {
++        for (int shift = 24; shift >= 0; shift -= 8)
++            m_data.append(static_cast<uint8_t>(value >> shift));
++    }
++    void u64(uint64_t value)
++    {
++        u32(static_cast<uint32_t>(value >> 32));
++        u32(static_cast<uint32_t>(value));
++    }
++    void string(const String& value)
++    {
++        auto utf8 = value.utf8();
++        u32(utf8.length());
++        bytes(byteCast<uint8_t>(utf8.span()));
++    }
++    Vector<uint8_t>& data() { return m_data; }
++
++private:
++    Vector<uint8_t> m_data;
++};
++
++class Reader {
++public:
++    explicit Reader(std::span<const uint8_t> data)
++        : m_data(data)
++    {
++    }
++    bool ok() const { return m_ok; }
++    std::span<const uint8_t> bytes(size_t length)
++    {
++        if (!m_ok || length > m_data.size() - m_position) {
++            m_ok = false;
++            return { };
++        }
++        auto result = m_data.subspan(m_position, length);
++        m_position += length;
++        return result;
++    }
++    uint32_t u32()
++    {
++        auto data = bytes(4);
++        if (!m_ok)
++            return 0;
++        return (uint32_t(data[0]) << 24) | (uint32_t(data[1]) << 16) | (uint32_t(data[2]) << 8) | data[3];
++    }
++    uint64_t u64()
++    {
++        uint64_t high = u32();
++        return (high << 32) | u32();
++    }
++    String string()
++    {
++        auto data = bytes(u32());
++        return m_ok ? String::fromUTF8(data) : String();
++    }
++    std::span<const uint8_t> rest() { return bytes(m_data.size() - m_position); }
++
++private:
++    std::span<const uint8_t> m_data;
++    size_t m_position { 0 };
++    bool m_ok { true };
++};
++
++} // namespace
++
++bool AmigaDiskCache::read(const String& path, AmigaCacheEntry& entry) const
++{
++    auto contents = FileSystem::readEntireFile(path);
++    if (!contents)
++        return false;
++    Reader reader(contents->span());
++    auto fileMagic = reader.bytes(magic.size());
++    if (!reader.ok() || !std::ranges::equal(fileMagic, std::span { magic }))
++        return false;
++    entry.storedTime = WallTime::fromRawSeconds(static_cast<double>(reader.u64()) / 1000.0);
++    entry.response.statusCode = reader.u32();
++    entry.response.httpVersion = reader.u32();
++    entry.response.expectedContentLength = static_cast<long long>(reader.u64());
++    entry.response.url = URL { reader.string() };
++    unsigned headerCount = reader.u32();
++    entry.response.headers.clear();
++    for (unsigned i = 0; i < headerCount && reader.ok(); ++i)
++        entry.response.headers.append(reader.string());
++    auto body = reader.rest();
++    if (!reader.ok() || !entry.response.url.isValid())
++        return false;
++    entry.body = Vector<uint8_t>(body);
++    return true;
++}
++
++void AmigaDiskCache::write(const String& path, const URL& url, const CurlResponse& response, std::span<const uint8_t> body, WallTime time)
++{
++    Writer writer;
++    writer.bytes(std::span { magic });
++    writer.u64(static_cast<uint64_t>(time.secondsSinceEpoch().milliseconds()));
++    writer.u32(static_cast<uint32_t>(response.statusCode));
++    writer.u32(static_cast<uint32_t>(response.httpVersion));
++    writer.u64(static_cast<uint64_t>(response.expectedContentLength));
++    writer.string(url.string());
++    // Cookies were taken when the response arrived; a cached copy must not
++    // set them again (this is a private cache, as a browser's is).
++    Vector<String> headers;
++    for (auto& header : response.headers) {
++        if (!header.startsWithIgnoringASCIICase("set-cookie:"_s))
++            headers.append(header);
++    }
++    writer.u32(headers.size());
++    for (auto& header : headers)
++        writer.string(header);
++    writer.bytes(body);
++    auto oldSize = FileSystem::fileSize(path).value_or(0);
++    if (!FileSystem::overwriteEntireFile(path, writer.data().span()))
++        log("write-failed", url);
++    else {
++        m_size += writer.data().size();
++        m_size -= std::min<uint64_t>(m_size, oldSize);
++        if (m_size > m_capacity)
++            trim();
++    }
++}
++
++static bool requestHasConditions(const ResourceRequest& request)
++{
++    return !request.httpHeaderField(HTTPHeaderName::IfNoneMatch).isEmpty()
++        || !request.httpHeaderField(HTTPHeaderName::IfModifiedSince).isEmpty()
++        || !request.httpHeaderField(HTTPHeaderName::Range).isEmpty();
++}
++
++static bool isCacheableRequest(const ResourceRequest& request)
++{
++    return request.url().protocolIsInHTTPFamily() && request.httpMethod() == "GET"_s && !request.httpBody()
++        && request.httpHeaderField(HTTPHeaderName::Authorization).isEmpty()
++        && !requestHasConditions(request)
++        && request.cachePolicy() != ResourceRequestCachePolicy::DoNotUseAnyCache;
++}
++
++AmigaCacheUse AmigaDiskCache::lookup(const ResourceRequest& request, AmigaCacheEntry& entry)
++{
++    if (!isEnabled() || !isCacheableRequest(request) || request.cachePolicy() == ResourceRequestCachePolicy::ReloadIgnoringCacheData)
++        return AmigaCacheUse::Network;
++    if (parseCacheControlDirectives(request.httpHeaderFields()).noCache && request.cachePolicy() == ResourceRequestCachePolicy::UseProtocolCachePolicy)
++        return AmigaCacheUse::Network;
++    auto path = pathForURL(request.url());
++    if (!read(path, entry)) {
++        log("miss", request.url());
++        return AmigaCacheUse::Network;
++    }
++    if (entry.response.url != request.url()) {
++        URL a = entry.response.url, b = request.url();
++        a.removeFragmentIdentifier();
++        b.removeFragmentIdentifier();
++        if (a != b)
++            return AmigaCacheUse::Network;
++    }
++
++    ResourceResponse response(entry.response);
++    bool hasValidator = !response.httpHeaderField(HTTPHeaderName::ETag).isEmpty() || !response.httpHeaderField(HTTPHeaderName::LastModified).isEmpty();
++    switch (request.cachePolicy()) {
++    case ResourceRequestCachePolicy::ReturnCacheDataElseLoad:
++    case ResourceRequestCachePolicy::ReturnCacheDataDontLoad:
++        return AmigaCacheUse::Serve;
++    case ResourceRequestCachePolicy::RefreshAnyCacheData:
++        return hasValidator ? AmigaCacheUse::Revalidate : AmigaCacheUse::Network;
++    default:
++        break;
++    }
++    auto directives = parseCacheControlDirectives(response.httpHeaderFields());
++    if (!directives.noCache) {
++        auto lifetime = computeFreshnessLifetimeForHTTPFamily(response, entry.storedTime);
++        auto age = computeCurrentAge(response, entry.storedTime);
++        if (age < lifetime) {
++            log("fresh", request.url());
++            return AmigaCacheUse::Serve;
++        }
++    }
++    log(hasValidator ? "stale-revalidate" : "stale", request.url());
++    return hasValidator ? AmigaCacheUse::Revalidate : AmigaCacheUse::Network;
++}
++
++bool AmigaDiskCache::canStore(const ResourceRequest& request, const CurlResponse& curlResponse) const
++{
++    if (!isEnabled())
++        return false;
++    if (!isCacheableRequest(request) || curlResponse.statusCode != 200) {
++        log("not-cacheable-request", request.url());
++        return false;
++    }
++    if (parseCacheControlDirectives(request.httpHeaderFields()).noStore) {
++        log("no-store-request", request.url());
++        return false;
++    }
++    CurlResponse copy = curlResponse;
++    ResourceResponse response(copy);
++    auto directives = parseCacheControlDirectives(response.httpHeaderFields());
++    const char* reason = nullptr;
++    bool hasValidator = !response.httpHeaderField(HTTPHeaderName::ETag).isEmpty() || !response.httpHeaderField(HTTPHeaderName::LastModified).isEmpty();
++    if (directives.noStore)
++        reason = "no-store";
++    else if (response.httpHeaderField(HTTPHeaderName::Vary).contains('*'))
++        reason = "vary-star";
++    else if (response.expectedContentLength() > static_cast<long long>(maximumEntrySize))
++        reason = "too-big";
++    else if (!hasValidator && computeFreshnessLifetimeForHTTPFamily(response, WallTime::now()) <= 0_s)
++        reason = "no-lifetime";
++    if (reason) {
++        log(reason, request.url());
++        return false;
++    }
++    return true;
++}
++
++void AmigaDiskCache::store(const URL& url, const CurlResponse& response, const Vector<uint8_t>& body)
++{
++    if (!isEnabled() || body.size() > maximumEntrySize)
++        return;
++    log("store", url);
++    write(pathForURL(url), url, response, body.span(), WallTime::now());
++}
++
++void AmigaDiskCache::didRevalidate(const URL& url, AmigaCacheEntry& entry, const CurlResponse& notModified)
++{
++    // The 304's headers replace the stored ones of the same name (new Date,
++    // Expires, Cache-Control, ETag), as HTTP asks.
++    for (auto& header : notModified.headers) {
++        auto colon = header.find(':');
++        if (colon == notFound)
++            continue;
++        auto name = header.left(colon + 1);
++        entry.response.headers.removeAllMatching([&](auto& stored) {
++            return stored.startsWithIgnoringASCIICase(name);
++        });
++        entry.response.headers.append(header);
++    }
++    entry.storedTime = WallTime::now();
++    if (isEnabled())
++        write(pathForURL(url), url, entry.response, entry.body.span(), entry.storedTime);
++}
++
++// Keeps the cache within its capacity: the least recently stored entries go.
++void AmigaDiskCache::trim()
++{
++    struct File {
++        String path;
++        uint64_t size;
++        WallTime time;
++    };
++    Vector<File> files;
++    uint64_t total = 0;
++    for (unsigned i = 0; i < 16; ++i) {
++        auto drawer = FileSystem::pathByAppendingComponent(m_directory, drawerName(i));
++        for (auto& name : FileSystem::listDirectory(drawer)) {
++            auto path = FileSystem::pathByAppendingComponent(drawer, name);
++            auto size = FileSystem::fileSize(path).value_or(0);
++            files.append({ path, size, FileSystem::fileModificationTime(path).value_or(WallTime { }) });
++            total += size;
++        }
++    }
++    if (total > m_capacity) {
++        std::ranges::sort(files, [](auto& a, auto& b) { return a.time < b.time; });
++        uint64_t target = m_capacity / 10 * 9;
++        for (auto& file : files) {
++            if (total <= target)
++                break;
++            if (FileSystem::deleteFile(file.path))
++                total -= file.size;
++        }
++    }
++    m_size = total;
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/network/amiga/AmigaDiskCache.h b/Source/WebCore/platform/network/amiga/AmigaDiskCache.h
+new file mode 100644
+index 0000000000..ff890c60fb
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/AmigaDiskCache.h
+@@ -0,0 +1,90 @@
++/*
++ * Copyright (C) 2026 Dalsin Limited.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include "CurlResponse.h"
++#include <wtf/FastMalloc.h>
++#include <wtf/Vector.h>
++#include <wtf/WallTime.h>
++#include <wtf/text/WTFString.h>
++
++namespace WebCore {
++
++class ResourceRequest;
++class ResourceResponse;
++
++// The Amiga port's HTTP disk cache: responses kept as files (one per URL,
++// named by the URL's SHA-1, in 16 drawers), served again while they are
++// fresh by HTTP's rules and revalidated with the server (If-None-Match,
++// If-Modified-Since) once stale. All on the main thread.
++struct AmigaCacheEntry {
++    WTF_DEPRECATED_MAKE_STRUCT_FAST_ALLOCATED(AmigaCacheEntry);
++    CurlResponse response;
++    Vector<uint8_t> body;
++    WallTime storedTime;
++};
++
++enum class AmigaCacheUse { Network, Serve, Revalidate };
++
++class AmigaDiskCache {
++public:
++    static AmigaDiskCache& singleton();
++
++    // directory empty: off. capacity in bytes.
++    void setDirectory(const String& directory, uint64_t capacity);
++    bool isEnabled() const { return !m_directory.isEmpty(); }
++    const String& directory() const { return m_directory; }
++
++    // What to do with a request, and the entry when it is not Network.
++    AmigaCacheUse lookup(const ResourceRequest&, AmigaCacheEntry&);
++
++    // Whether a response to this request may be kept.
++    bool canStore(const ResourceRequest&, const CurlResponse&) const;
++    void store(const URL&, const CurlResponse&, const Vector<uint8_t>& body);
++
++    // A 304: the stored entry is good again, with the new headers' times.
++    void didRevalidate(const URL&, AmigaCacheEntry&, const CurlResponse& notModified);
++
++    static constexpr size_t maximumEntrySize = 4 * 1024 * 1024;
++
++private:
++    String pathForURL(const URL&) const;
++    bool read(const String& path, AmigaCacheEntry&) const;
++    void write(const String& path, const URL&, const CurlResponse&, std::span<const uint8_t> body, WallTime);
++    void trim();
++
++    String m_directory;
++    uint64_t m_capacity { 0 };
++    uint64_t m_size { 0 };
++};
++
++// For the program: where the cache lives and how big it may grow.
++WEBCORE_EXPORT void setAmigaDiskCacheDirectory(const String& directory, uint64_t capacity);
++// Prints what the cache does with each request ("OBCACHE ...").
++WEBCORE_EXPORT void setAmigaDiskCacheLogging(bool);
++void amigaDiskCacheLog(const char* what, const String& detail);
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+index 54b2ab4134..b0ae339f83 100644
+--- a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
++++ b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+@@ -30,6 +30,7 @@
+ #include "config.h"
+ #include "ResourceHandle.h"
+ 
++#include "AmigaDiskCache.h"
+ #include "AmigaNetwork.h"
+ #include "CurlContext.h"
+ #include "CurlRequest.h"
+@@ -111,13 +112,27 @@ public:
+ 
+     void curlDidReceiveData(CurlRequest&, Ref<SharedBuffer>&& buffer) final
+     {
+-        if (RefPtr handle = m_handle; handle && handle->client())
++        RefPtr handle = m_handle;
++        if (!handle)
++            return;
++        if (auto& store = handle->d->m_amigaCacheStore) {
++            if (store->body.size() + buffer->size() > AmigaDiskCache::maximumEntrySize)
++                store = nullptr;
++            else
++                store->body.append(buffer->span());
++        }
++        if (handle->client())
+             handle->client()->didReceiveBuffer(handle.get(), buffer.get(), buffer->size());
+     }
+ 
+-    void curlDidComplete(CurlRequest&, NetworkLoadMetrics&& metrics) final
++    void curlDidComplete(CurlRequest& request, NetworkLoadMetrics&& metrics) final
+     {
+-        if (RefPtr handle = m_handle; handle && handle->client())
++        RefPtr handle = m_handle;
++        if (!handle)
++            return;
++        if (auto store = std::exchange(handle->d->m_amigaCacheStore, nullptr))
++            AmigaDiskCache::singleton().store(request.resourceRequest().url(), store->response, store->body);
++        if (handle->client())
+             handle->client()->didFinishLoading(handle.get(), metrics);
+     }
+ 
+@@ -202,6 +217,31 @@ void ResourceHandle::amigaLoadFile()
+     });
+ }
+ 
++// A response from the disk cache, handed over from the run loop as a
++// network load would be.
++static void serveFromDiskCache(ResourceHandle& handle, AmigaCacheEntry&& entry)
++{
++    RunLoop::mainSingleton().dispatch([protectedThis = Ref { handle }, entry = WTF::move(entry)]() mutable {
++        auto& handle = protectedThis.get();
++        auto* client = handle.client();
++        if (!client)
++            return;
++        ResourceResponse response(entry.response);
++        response.setSource(ResourceResponse::Source::DiskCache);
++        client->didReceiveResponseAsync(&handle, WTF::move(response), [protectedThis = Ref { handle }, body = WTF::move(entry.body)]() mutable {
++            auto& handle = protectedThis.get();
++            if (!handle.client())
++                return;
++            if (!body.isEmpty()) {
++                auto size = body.size();
++                handle.client()->didReceiveBuffer(&handle, SharedBuffer::create(WTF::move(body)), size);
++            }
++            if (handle.client())
++                handle.client()->didFinishLoading(&handle, NetworkLoadMetrics { });
++        });
++    });
++}
++
+ bool ResourceHandle::start()
+ {
+     if (d->m_context && !d->m_context->isValid())
+@@ -212,6 +252,24 @@ bool ResourceHandle::start()
+         amigaLoadFile();
+         return true;
+     }
++
++    AmigaCacheEntry entry;
++    switch (AmigaDiskCache::singleton().lookup(request, entry)) {
++    case AmigaCacheUse::Serve:
++        serveFromDiskCache(*this, WTF::move(entry));
++        return true;
++    case AmigaCacheUse::Revalidate: {
++        ResourceResponse stored(entry.response);
++        if (auto etag = stored.httpHeaderField(HTTPHeaderName::ETag); !etag.isEmpty())
++            request.setHTTPHeaderField(HTTPHeaderName::IfNoneMatch, etag);
++        if (auto lastModified = stored.httpHeaderField(HTTPHeaderName::LastModified); !lastModified.isEmpty())
++            request.setHTTPHeaderField(HTTPHeaderName::IfModifiedSince, lastModified);
++        d->m_amigaCacheEntry = makeUnique<AmigaCacheEntry>(WTF::move(entry));
++        break;
++    }
++    case AmigaCacheUse::Network:
++        break;
++    }
+     amigaStartCurlRequest(WTF::move(request));
+     return true;
+ }
+@@ -265,6 +323,16 @@ void ResourceHandle::amigaDidReceiveResponse(CurlRequest& curlRequest, CurlRespo
+         }
+     }
+ 
++    // The disk cache's entry is still good: serve it.
++    if (d->m_amigaCacheEntry && curlResponse.statusCode == 304) {
++        auto entry = std::exchange(d->m_amigaCacheEntry, nullptr);
++        AmigaDiskCache::singleton().didRevalidate(curlRequest.resourceRequest().url(), *entry, curlResponse);
++        d->m_curlRequest->cancel();
++        serveFromDiskCache(*this, WTF::move(*entry));
++        return;
++    }
++    d->m_amigaCacheEntry = nullptr;
++
+     ResourceResponse response(curlResponse);
+ 
+     if (shouldStartHTTPRedirection(response)) {
+@@ -308,6 +376,18 @@ void ResourceHandle::amigaDidReceiveResponse(CurlRequest& curlRequest, CurlRespo
+         return;
+     }
+ 
++    // Keep the response on disk as it arrives, when HTTP allows. The
++    // request is judged without the conditions the cache itself added.
++    ResourceRequest cacheRequest = curlRequest.resourceRequest();
++    if (d->m_firstRequest.httpHeaderField(HTTPHeaderName::IfNoneMatch).isEmpty())
++        cacheRequest.removeHTTPHeaderField(HTTPHeaderName::IfNoneMatch);
++    if (d->m_firstRequest.httpHeaderField(HTTPHeaderName::IfModifiedSince).isEmpty())
++        cacheRequest.removeHTTPHeaderField(HTTPHeaderName::IfModifiedSince);
++    if (AmigaDiskCache::singleton().canStore(cacheRequest, curlResponse)) {
++        d->m_amigaCacheStore = makeUnique<AmigaCacheEntry>();
++        d->m_amigaCacheStore->response = curlResponse;
++    }
++
+     client()->didReceiveResponseAsync(this, WTF::move(response), [protectedThis = Ref { *this }] {
+         if (auto& curlRequest = protectedThis->d->m_curlRequest)
+             curlRequest->completeDidReceiveResponse();
+-- 
+2.53.0
+
