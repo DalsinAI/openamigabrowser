@@ -22,6 +22,14 @@ Team's port, and stays under that BSD licence. The M68K back end
 BytecodeList reader (`generator-py/RubyListReader.py`) and `Source/cmake/no-ruby.py`
 are ours (MIT, AmigaChrome Team).
 
+Patch 0021 (`webkit/patches/0021-webcore-generators-in-python.patch`) does the
+same for WebCore: `Source/WebCore/domjit/generate-abstract-heap.py`,
+`Source/WebCore/Scripts/GenerateSettings.py` and
+`Source/WebCore/Scripts/GenerateQuirkBehaviors.py`, ports of Apple Inc.'s
+BSD-licensed Ruby scripts (Copyright (C) 2016-2023 Apple Inc.), and the
+Python forms of their templates (`*.pyerb`, from Apple's `*.erb`). They keep
+Apple's notices and licence, with a line for the AmigaChrome Team's port.
+
 `third_party/openmail/` comes from OpenMail (AmigaChrome Team's mail client,
 MIT, same copyright); see its `FROM` and `LICENSE`.
 
