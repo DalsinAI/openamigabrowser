@@ -72,6 +72,11 @@ The patches, in order:
   not ported yet: until they are, the browser build stops at them with
   `no-ruby.py`'s message, which names the script. (0018 is the visit cache, still a draft.)
 
+- `0020-jsc-m68k-interpreter-data-registers.patch`: J1. The 68k
+  interpreter keeps t0-t3's low words in d4-d7 instead of its register file
+  in memory (58% fewer register-file accesses). jsbench on the AC090:
+  int-loop and properties 1.4 times faster, array sort 1.1 times.
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;
