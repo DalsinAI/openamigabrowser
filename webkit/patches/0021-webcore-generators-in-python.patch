@@ -1,0 +1,1890 @@
+From 47cb6d2f7e71012eefac228434900e069a34655e Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 00:26:50 +0100
+Subject: [PATCH] WebCore: its Ruby generators as Python, so the browser builds
+ without Ruby
+
+generate-abstract-heap.rb, GenerateSettings.rb (five templates) and
+GenerateQuirkBehaviors.rb (four templates) have Python 3 ports beside them,
+standard library only. The templates have Python forms (.pyerb), rendered by
+GeneratePreferences.py's ERB-subset renderer; its YAML reader now also reads
+block scalars (| and >) and block sequences of scalars, which Settings.yaml
+and DOMJITAbstractHeapRepository.yaml use. On AmigaOS, WebCore's CMake runs
+the Python scripts; with this, no build step of the Amiga port runs Ruby.
+
+The ten outputs (DOMJITAbstractHeapRepository.h, Settings.h, Settings.cpp,
+InternalSettingsGenerated.h/.cpp/.idl, QuirkBehaviorDefinitions.h,
+QuirkBehaviorID.h, QuirksAccessors.h/.cpp) match the Ruby scripts' byte for
+byte on the 5 October build's inputs.
+---
+ Source/WTF/Scripts/GeneratePreferences.py     |  70 ++++-
+ Source/WebCore/CMakeLists.txt                 |  42 ++-
+ .../WebCore/Scripts/GenerateQuirkBehaviors.py | 261 ++++++++++++++++
+ Source/WebCore/Scripts/GenerateSettings.py    | 278 +++++++++++++++++
+ .../QuirkBehaviorDefinitions.h.pyerb          |  40 +++
+ .../QuirkBehaviorID.h.pyerb                   |  45 +++
+ .../QuirksAccessors.cpp.pyerb                 | 140 +++++++++
+ .../QuirksAccessors.h.pyerb                   |  67 +++++
+ .../InternalSettingsGenerated.cpp.pyerb       |  89 ++++++
+ .../InternalSettingsGenerated.h.pyerb         |  69 +++++
+ .../InternalSettingsGenerated.idl.pyerb       |  38 +++
+ .../SettingsTemplates/Settings.cpp.pyerb      | 281 ++++++++++++++++++
+ .../SettingsTemplates/Settings.h.pyerb        | 123 ++++++++
+ .../WebCore/domjit/generate-abstract-heap.py  | 158 ++++++++++
+ 14 files changed, 1679 insertions(+), 22 deletions(-)
+ create mode 100644 Source/WebCore/Scripts/GenerateQuirkBehaviors.py
+ create mode 100644 Source/WebCore/Scripts/GenerateSettings.py
+ create mode 100644 Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorDefinitions.h.pyerb
+ create mode 100644 Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorID.h.pyerb
+ create mode 100644 Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.cpp.pyerb
+ create mode 100644 Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.h.pyerb
+ create mode 100644 Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.cpp.pyerb
+ create mode 100644 Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.h.pyerb
+ create mode 100644 Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.idl.pyerb
+ create mode 100644 Source/WebCore/Scripts/SettingsTemplates/Settings.cpp.pyerb
+ create mode 100644 Source/WebCore/Scripts/SettingsTemplates/Settings.h.pyerb
+ create mode 100644 Source/WebCore/domjit/generate-abstract-heap.py
+
+diff --git a/Source/WTF/Scripts/GeneratePreferences.py b/Source/WTF/Scripts/GeneratePreferences.py
+index 4b371378..a247ce3b 100644
+--- a/Source/WTF/Scripts/GeneratePreferences.py
++++ b/Source/WTF/Scripts/GeneratePreferences.py
+@@ -37,12 +37,13 @@ import re
+ import sys
+ 
+ #
+-# A YAML subset: what the preference files use. Block mappings nested by
+-# indentation, plain, single- and double-quoted scalars, flow sequences
+-# ([ a, b ]), comments and blank lines. Plain scalars resolve as Ruby's Psych
+-# (YAML 1.1) resolves them: true/yes/on, false/no/off, null/~, integers and
+-# floats; anything else is a string. Anything outside the subset (anchors,
+-# tags, block scalars, flow mappings, block sequences) stops with the file
++# A YAML subset: what the preference and settings files use. Block mappings
++# nested by indentation, plain, single- and double-quoted scalars (also over
++# several lines), literal and folded block scalars (| and >), flow sequences
++# ([ a, b ]), block sequences of scalars (- a), comments and blank lines. Plain scalars resolve as Ruby's Psych (YAML 1.1)
++# resolves them: true/yes/on, false/no/off, null/~, integers and floats;
++# anything else is a string. Anything outside the subset (anchors, tags,
++# flow mappings, sequences of mappings) stops with the file
+ # and line.
+ #
+ 
+@@ -163,7 +164,31 @@ def yamlLoadFile(path):
+         indent = len(raw) - len(raw.lstrip(" "))
+         text = _yamlStripComment(raw.strip())
+         if text.startswith("- ") or text == "-":
+-            raise YAMLSubsetError("%s: block sequences are outside the YAML subset this script reads" % where)
++            # A block sequence of scalars, as the value of the key before it.
++            if pendingKey is None or indent < pendingKey[2]:
++                raise YAMLSubsetError("%s: a block sequence outside a key's value is outside the YAML subset this script reads" % where)
++            parent, key, keyIndent = pendingKey
++            pendingKey = None
++            items = []
++            while True:
++                item = text[1:].strip()
++                if item.endswith(":") or re.search(r":\s", item):
++                    raise YAMLSubsetError("%s: mappings in a block sequence are outside the YAML subset this script reads" % where)
++                items.append(_yamlValue(item, where))
++                while number < len(lines) and (lines[number].strip() == "" or lines[number].lstrip().startswith("#")):
++                    number += 1
++                if number >= len(lines):
++                    break
++                nextRaw = lines[number]
++                nextIndent = len(nextRaw) - len(nextRaw.lstrip(" "))
++                nextText = _yamlStripComment(nextRaw.strip())
++                if nextIndent != indent or not (nextText.startswith("- ") or nextText == "-"):
++                    break
++                number += 1
++                where = "%s:%d" % (path, number)
++                text = nextText
++            parent[key] = items
++            continue
+ 
+         if pendingKey is not None:
+             parent, key, keyIndent = pendingKey
+@@ -206,6 +231,37 @@ def yamlLoadFile(path):
+                 value += continuation
+             else:
+                 value += " " + continuation
++        # A block scalar: literal (|) or folded (>), with chomping (- or +).
++        if value is not None and re.fullmatch(r"[|>][-+]?", value):
++            style, chomp = value[0], value[1:]
++            block = []
++            while number < len(lines):
++                nextLine = lines[number]
++                if nextLine.strip() != "" and len(nextLine) - len(nextLine.lstrip(" ")) <= indent:
++                    break
++                block.append(nextLine)
++                lines[number] = ""
++                number += 1
++            while block and block[-1].strip() == "":
++                block.pop()
++            contentIndent = min((len(l) - len(l.lstrip(" ")) for l in block if l.strip() != ""), default=0)
++            block = [l[contentIndent:] if l.strip() != "" else "" for l in block]
++            if style == "|":
++                text = "\n".join(block)
++            else:
++                # Folded: lines join with a space; an empty line is a line break.
++                text = ""
++                for line in block:
++                    if line == "":
++                        text += "\n"
++                    elif text == "" or text.endswith("\n"):
++                        text += line
++                    else:
++                        text += " " + line
++            if chomp != "-" and block:
++                text += "\n"
++            mapping[key] = text
++            continue
+         # A plain scalar may go on over more indented lines (folded).
+         if value and value[0] not in "\"'[":
+             while number < len(lines):
+diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
+index 81deb8e4..7437ec85 100644
+--- a/Source/WebCore/CMakeLists.txt
++++ b/Source/WebCore/CMakeLists.txt
+@@ -2896,12 +2896,24 @@ list(APPEND WebCoreTestSupport_DEPENDENCIES WebCore)
+ MAKE_HASH_TOOLS(${WEBCORE_DIR}/platform/ColorData)
+ list(APPEND WebCore_SOURCES ${WebCore_DERIVED_SOURCES_DIR}/ColorData.cpp)
+ 
++# The Amiga build runs no Ruby: these generators have Python ports beside
++# them (.py scripts, .pyerb templates), see Source/cmake/WebKitCommon.cmake.
++if (WTF_OS_AMIGA)
++    set(WEBCORE_GENERATOR_INTERPRETER ${PYTHON_EXECUTABLE})
++    set(WEBCORE_GENERATOR_SUFFIX .py)
++    set(WEBCORE_TEMPLATE_SUFFIX .pyerb)
++else ()
++    set(WEBCORE_GENERATOR_INTERPRETER ${Ruby_EXECUTABLE})
++    set(WEBCORE_GENERATOR_SUFFIX .rb)
++    set(WEBCORE_TEMPLATE_SUFFIX .erb)
++endif ()
++
+ # Generate DOMJITAbstractHeapRepository.h
+ add_custom_command(
+     OUTPUT ${WebCore_DERIVED_SOURCES_DIR}/DOMJITAbstractHeapRepository.h
+     MAIN_DEPENDENCY ${WEBCORE_DIR}/domjit/DOMJITAbstractHeapRepository.yaml
+-    DEPENDS ${WEBCORE_DIR}/domjit/generate-abstract-heap.rb
+-    COMMAND ${Ruby_EXECUTABLE} ${WEBCORE_DIR}/domjit/generate-abstract-heap.rb ${WEBCORE_DIR}/domjit/DOMJITAbstractHeapRepository.yaml ${WebCore_DERIVED_SOURCES_DIR}/DOMJITAbstractHeapRepository.h
++    DEPENDS ${WEBCORE_DIR}/domjit/generate-abstract-heap${WEBCORE_GENERATOR_SUFFIX}
++    COMMAND ${WEBCORE_GENERATOR_INTERPRETER} ${WEBCORE_DIR}/domjit/generate-abstract-heap${WEBCORE_GENERATOR_SUFFIX} ${WEBCORE_DIR}/domjit/DOMJITAbstractHeapRepository.yaml ${WebCore_DERIVED_SOURCES_DIR}/DOMJITAbstractHeapRepository.h
+     VERBATIM)
+ list(APPEND WebCore_SOURCES ${WebCore_DERIVED_SOURCES_DIR}/DOMJITAbstractHeapRepository.h)
+ 
+@@ -3036,11 +3048,11 @@ endif ()
+ set(FEATURE_DEFINES_JAVASCRIPT "LANGUAGE_JAVASCRIPT ${FEATURE_DEFINES_WITH_SPACE_SEPARATOR}")
+ 
+ set(SETTINGS_TEMPLATES
+-    ${WEBCORE_DIR}/Scripts/SettingsTemplates/InternalSettingsGenerated.cpp.erb
+-    ${WEBCORE_DIR}/Scripts/SettingsTemplates/InternalSettingsGenerated.idl.erb
+-    ${WEBCORE_DIR}/Scripts/SettingsTemplates/InternalSettingsGenerated.h.erb
+-    ${WEBCORE_DIR}/Scripts/SettingsTemplates/Settings.cpp.erb
+-    ${WEBCORE_DIR}/Scripts/SettingsTemplates/Settings.h.erb)
++    ${WEBCORE_DIR}/Scripts/SettingsTemplates/InternalSettingsGenerated.cpp${WEBCORE_TEMPLATE_SUFFIX}
++    ${WEBCORE_DIR}/Scripts/SettingsTemplates/InternalSettingsGenerated.idl${WEBCORE_TEMPLATE_SUFFIX}
++    ${WEBCORE_DIR}/Scripts/SettingsTemplates/InternalSettingsGenerated.h${WEBCORE_TEMPLATE_SUFFIX}
++    ${WEBCORE_DIR}/Scripts/SettingsTemplates/Settings.cpp${WEBCORE_TEMPLATE_SUFFIX}
++    ${WEBCORE_DIR}/Scripts/SettingsTemplates/Settings.h${WEBCORE_TEMPLATE_SUFFIX})
+ set(WTF_WEB_PREFERENCES ${WTF_SCRIPTS_DIR}/Preferences/UnifiedWebPreferences.yaml ${WEB_PREFERENCES_ADDITIONS})
+ set_source_files_properties(${WTF_WEB_PREFERENCES} PROPERTIES GENERATED TRUE)
+ add_custom_command(
+@@ -3050,8 +3062,8 @@ add_custom_command(
+        ${WebCore_DERIVED_SOURCES_DIR}/InternalSettingsGenerated.cpp
+        ${WebCore_DERIVED_SOURCES_DIR}/InternalSettingsGenerated.idl
+     MAIN_DEPENDENCY ${WEBCORE_DIR}/page/Settings.yaml
+-    DEPENDS ${WEBCORE_DIR}/Scripts/GenerateSettings.rb ${SETTINGS_TEMPLATES} WTF_CopyPreferences ${WTF_WEB_PREFERENCES} ${WEBKITADDITIONS_HEADERS_DEPENDENCIES}
+-    COMMAND ${Ruby_EXECUTABLE} ${WEBCORE_DIR}/Scripts/GenerateSettings.rb --outputDir ${WebCore_DERIVED_SOURCES_DIR} --template "$<JOIN:${SETTINGS_TEMPLATES},;--template;>" ${WTF_WEB_PREFERENCES} ${WEBCORE_DIR}/page/Settings.yaml
++    DEPENDS ${WEBCORE_DIR}/Scripts/GenerateSettings${WEBCORE_GENERATOR_SUFFIX} ${SETTINGS_TEMPLATES} WTF_CopyPreferences ${WTF_WEB_PREFERENCES} ${WEBKITADDITIONS_HEADERS_DEPENDENCIES}
++    COMMAND ${WEBCORE_GENERATOR_INTERPRETER} ${WEBCORE_DIR}/Scripts/GenerateSettings${WEBCORE_GENERATOR_SUFFIX} --outputDir ${WebCore_DERIVED_SOURCES_DIR} --template "$<JOIN:${SETTINGS_TEMPLATES},;--template;>" ${WTF_WEB_PREFERENCES} ${WEBCORE_DIR}/page/Settings.yaml
+     COMMAND_EXPAND_LISTS
+     VERBATIM)
+ list(APPEND WebCore_SOURCES ${WebCore_DERIVED_SOURCES_DIR}/Settings.h)
+@@ -3060,18 +3072,18 @@ list(APPEND WebCoreTestSupport_SOURCES ${WebCore_DERIVED_SOURCES_DIR}/InternalSe
+ list(APPEND WebCoreTestSupport_IDL_FILES ${WebCore_DERIVED_SOURCES_DIR}/InternalSettingsGenerated.idl)
+ 
+ set(QUIRK_BEHAVIORS_TEMPLATES
+-    ${WEBCORE_DIR}/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorDefinitions.h.erb
+-    ${WEBCORE_DIR}/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorID.h.erb
+-    ${WEBCORE_DIR}/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.cpp.erb
+-    ${WEBCORE_DIR}/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.h.erb)
++    ${WEBCORE_DIR}/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorDefinitions.h${WEBCORE_TEMPLATE_SUFFIX}
++    ${WEBCORE_DIR}/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorID.h${WEBCORE_TEMPLATE_SUFFIX}
++    ${WEBCORE_DIR}/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.cpp${WEBCORE_TEMPLATE_SUFFIX}
++    ${WEBCORE_DIR}/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.h${WEBCORE_TEMPLATE_SUFFIX})
+ add_custom_command(
+     OUTPUT ${WebCore_DERIVED_SOURCES_DIR}/QuirkBehaviorDefinitions.h
+        ${WebCore_DERIVED_SOURCES_DIR}/QuirkBehaviorID.h
+        ${WebCore_DERIVED_SOURCES_DIR}/QuirksAccessors.cpp
+        ${WebCore_DERIVED_SOURCES_DIR}/QuirksAccessors.h
+     MAIN_DEPENDENCY ${WEBCORE_DIR}/page/QuirkBehaviors.yaml
+-    DEPENDS ${WEBCORE_DIR}/Scripts/GenerateQuirkBehaviors.rb ${QUIRK_BEHAVIORS_TEMPLATES}
+-    COMMAND ${Ruby_EXECUTABLE} ${WEBCORE_DIR}/Scripts/GenerateQuirkBehaviors.rb --outputDir ${WebCore_DERIVED_SOURCES_DIR} --template "$<JOIN:${QUIRK_BEHAVIORS_TEMPLATES},;--template;>" ${WEBCORE_DIR}/page/QuirkBehaviors.yaml
++    DEPENDS ${WEBCORE_DIR}/Scripts/GenerateQuirkBehaviors${WEBCORE_GENERATOR_SUFFIX} ${QUIRK_BEHAVIORS_TEMPLATES}
++    COMMAND ${WEBCORE_GENERATOR_INTERPRETER} ${WEBCORE_DIR}/Scripts/GenerateQuirkBehaviors${WEBCORE_GENERATOR_SUFFIX} --outputDir ${WebCore_DERIVED_SOURCES_DIR} --template "$<JOIN:${QUIRK_BEHAVIORS_TEMPLATES},;--template;>" ${WEBCORE_DIR}/page/QuirkBehaviors.yaml
+     COMMAND_EXPAND_LISTS
+     VERBATIM)
+ list(APPEND WebCore_SOURCES ${WebCore_DERIVED_SOURCES_DIR}/QuirkBehaviorDefinitions.h)
+diff --git a/Source/WebCore/Scripts/GenerateQuirkBehaviors.py b/Source/WebCore/Scripts/GenerateQuirkBehaviors.py
+new file mode 100644
+index 00000000..12c4b396
+--- /dev/null
++++ b/Source/WebCore/Scripts/GenerateQuirkBehaviors.py
+@@ -0,0 +1,261 @@
++#!/usr/bin/env python3
++#
++# Copyright (C) 2026 Apple Inc. All rights reserved.
++# Copyright (C) 2026 AmigaChrome Team (Python port of WebCore/Scripts/GenerateQuirkBehaviors.rb).
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++# 1. Redistributions of source code must retain the above copyright
++#    notice, this list of conditions and the following disclaimer.
++# 2. Redistributions in binary form must reproduce the above copyright
++#    notice, this list of conditions and the following disclaimer in the
++#    documentation and/or other materials provided with the distribution.
++#
++# THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++# BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++# THE POSSIBILITY OF SUCH DAMAGE.
++
++# Generates QuirkBehaviorID, the QuirkBehaviors:: constants, and the QuirksAccessors base class of Quirks
++# from QuirkBehaviors.yaml.
++#
++# usage: GenerateQuirkBehaviors.py [--outputDir <output>] --template <file> [--template <file>...]
++#            <QuirkBehaviors.yaml>
++#
++# Templates are ERB templates whose code is Python (".pyerb"); a template
++# named X.pyerb writes X. The YAML reader and the template renderer are
++# GeneratePreferences.py's.
++
++import argparse
++import os
++import re
++import sys
++
++sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "WTF", "Scripts"))
++
++from GeneratePreferences import YAMLSubsetError, renderTemplateText, rubyInspect, yamlLoadFile  # noqa: E402
++
++
++def loadBehaviors(path):
++    try:
++        root = yamlLoadFile(path)
++    except YAMLSubsetError as e:
++        sys.stderr.write("error: Could not parse input file %s: %s\n" % (path, e))
++        sys.exit(1)
++    if not isinstance(root, dict) or not root:
++        sys.stderr.write("error: Input file %s is not a mapping of QuirkBehaviorID names to their fields.\n" % path)
++        sys.exit(1)
++    return list(root.items())
++
++
++class QuirkBehavior:
++    def __init__(self, id, opts):
++        self.id = id
++        self.available = opts.get("available") or "always"
++        self.parameters = opts.get("parameters") or []
++        self.isStatic = opts.get("static") or False
++        self.conditions = opts.get("conditions") or []
++        self.requiredConditions = self.conditions if opts.get("conditionsRequired") else []
++        self.accessor = None if opts.get("implementation") == "custom" else (opts.get("accessor") or self.constantName)
++        self.isExported = opts.get("export") or False
++
++    # Ruby's accessor and predicate methods are properties here, so that the
++    # templates read as the Ruby ones do.
++
++    @property
++    def constantName(self):
++        return self.id[0].lower() + self.id[1:]
++
++    @property
++    def availableExpression(self):
++        return re.sub(r"\b([A-Za-z_]\w*)\b", r"BuildCondition::\1", self.available, flags=re.A)
++
++    @property
++    def initializer(self):
++        fields = [".id = QuirkBehaviorID::%s" % self.id, ".isAvailable = %s" % self.availableExpression]
++        if self.parameters:
++            fields.append(".quirkParametersNeeded = %s" % self.optionSet("QuirkParametersNeeded", ["Needs%s" % parameter for parameter in self.parameters]))
++        if self.conditions:
++            fields.append(".quirkConditionsSupported = %s" % self.optionSet("QuirkConditionsSupported", self.conditions))
++        if self.requiredConditions:
++            fields.append(".quirkConditionsNeeded = %s" % self.optionSet("QuirkConditionsSupported", self.requiredConditions))
++        return "{ %s }" % ", ".join(fields)
++
++    @property
++    def hasGeneratedAccessor(self):
++        return self.accessor is not None
++
++    @property
++    def shape(self):
++        if self.isStatic:
++            return "staticURL"
++        if self.conditions == ["SecondaryURL"]:
++            return "secondaryURL"
++        if self.conditions == ["ElementSelector"]:
++            return "node"
++        return None
++
++    @property
++    def argument(self):
++        return {"staticURL": "const URL&", "secondaryURL": "const URL&", "node": "const Node&"}.get(self.shape)
++
++    # Only the argument-less body is free of refcounting; the others copy a URL or hold a RefPtr.
++    @property
++    def isNoDelete(self):
++        return self.shape is None
++
++    @property
++    def parameterList(self):
++        if self.argument:
++            return "%s %s" % (self.argument, "node" if self.shape == "node" else "url")
++        return ""
++
++    @property
++    def declaration(self):
++        prefix = "WEBCORE_EXPORT " if self.isExported else ""
++        if self.isStatic:
++            prefix += "static "
++        nodelete = "NODELETE " if self.isNoDelete else ""
++        return "%sbool %s%s(%s)%s;" % (prefix, nodelete, self.accessor, self.argument or "", self.constSuffix)
++
++    @property
++    def definitionSignature(self):
++        return "bool QuirksAccessors::%s(%s)%s" % (self.accessor, self.parameterList, self.constSuffix)
++
++    @property
++    def body(self):
++        id = "QuirkBehaviorID::%s" % self.id
++        shape = self.shape
++        if shape == "staticURL":
++            return "return resolveTopURLQuirks(url).isBehaviorEnabled(%s);" % id
++        if shape == "secondaryURL":
++            return "return needsQuirks() && m_quirksData.behaviorAppliesToURL(%s, url);" % id
++        if shape == "node":
++            return "return needsQuirks() && behaviorAppliesToNode(%s, &node);" % id
++        return "return needsQuirks() && m_quirksData.isBehaviorEnabled(%s);" % id
++
++    @property
++    def constSuffix(self):
++        return "" if self.isStatic else " const"
++
++    def optionSet(self, type, values):
++        values = ["%s::%s" % (type, value) for value in values]
++        return values[0] if len(values) == 1 else "OptionSet<%s> { %s }" % (type, ", ".join(values))
++
++
++class QuirkBehaviors:
++    FIELDS = ["available", "parameters", "conditions", "conditionsRequired", "implementation", "accessor", "static", "export"]
++    GENERATED_ONLY_FIELDS = ["accessor", "static", "export"]
++    PARAMETERS = ["Script", "UserAgent", "ChromeCompatibilityVersion", "CookieNames"]
++    CONDITIONS = ["ElementSelector", "SecondaryURL", "DocumentSelector"]
++
++    def __init__(self, path):
++        self.behaviors = []
++        self.warning = "THIS FILE WAS AUTOMATICALLY GENERATED, DO NOT EDIT."
++
++        failed = [False]
++
++        def reject(msg):
++            sys.stderr.write("error: %s: %s\n" % (path, msg))
++            failed[0] = True
++
++        seen = {}
++        accessorNames = {}
++        for id, opts in loadBehaviors(path):
++            if id in seen:
++                reject("%s is defined more than once." % id)
++                continue
++            seen[id] = True
++            opts = opts or {}
++            if not re.fullmatch(r"[A-Z]\w*", id, flags=re.A):
++                reject("%s is not a valid QuirkBehaviorID name." % id)
++            for field in opts.keys():
++                if field not in self.FIELDS:
++                    reject("%s has unknown field \"%s\". Allowed fields: %s." % (id, field, ", ".join(self.FIELDS)))
++            for parameter in opts.get("parameters") or []:
++                if parameter not in self.PARAMETERS:
++                    reject("%s has unknown parameter \"%s\"." % (id, parameter))
++            for condition in opts.get("conditions") or []:
++                if condition not in self.CONDITIONS:
++                    reject("%s has unknown condition \"%s\"." % (id, condition))
++
++            behavior = QuirkBehavior(id, opts)
++            generated = behavior.hasGeneratedAccessor
++            if opts.get("implementation") and opts["implementation"] != "custom":
++                reject("%s has implementation \"%s\"; the only value is \"custom\"." % (id, opts["implementation"]))
++            if not generated:
++                for field in self.GENERATED_ONLY_FIELDS:
++                    if field in opts:
++                        reject("%s has a custom implementation, so \"%s\" would be ignored." % (id, field))
++            if generated and behavior.parameters:
++                reject("%s has parameters, which a generated accessor cannot read. Use \"implementation: custom\"." % id)
++            if generated and behavior.shape == "staticURL" and behavior.conditions:
++                reject("%s is static, so it only sees top-URL quirks and cannot evaluate conditions." % id)
++            if generated and behavior.conditions and not behavior.shape:
++                reject("%s has conditions %s; a generated accessor supports only [ElementSelector] or [SecondaryURL]. Use \"implementation: custom\"." % (id, rubyInspect(behavior.conditions)))
++            if generated and accessorNames.get(behavior.accessor):
++                reject("%s's accessor %s is also generated for %s." % (id, behavior.accessor, accessorNames[behavior.accessor]))
++            if generated:
++                accessorNames[behavior.accessor] = id
++            if opts.get("conditionsRequired") and not behavior.conditions:
++                reject("%s has conditionsRequired but no conditions." % id)
++            if opts.get("accessor") and opts["accessor"] == behavior.constantName:
++                reject("%s has accessor %s, which is already the default; remove it." % (id, behavior.accessor))
++
++            self.behaviors.append(behavior)
++        if failed[0]:
++            sys.exit(1)
++
++    def renderTemplate(self, templateFile, outputDirectory):
++        name = os.path.basename(templateFile)
++        if name.endswith(".pyerb"):
++            name = name[:-len(".pyerb")]
++        resultFile = os.path.join(outputDirectory, name)
++        tempResultFile = resultFile + ".tmp"
++
++        with open(templateFile) as f:
++            output = renderTemplateText(f.read(), templateFile, self)
++        with open(tempResultFile, "w") as f:
++            f.write(output)
++        oldContents = None
++        if os.path.exists(resultFile):
++            with open(resultFile) as f:
++                oldContents = f.read()
++        if oldContents != output:
++            os.replace(tempResultFile, resultFile)
++        else:
++            os.remove(tempResultFile)
++            if os.path.getmtime(resultFile) < os.path.getmtime(templateFile):
++                os.utime(resultFile)
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        usage="%(prog)s [--outputDir <output>] --template <file> [--template <file>...] <QuirkBehaviors.yaml>")
++    parser.add_argument("--template", action="append", default=[], help="template to use for generation (may be specified multiple times)")
++    parser.add_argument("--outputDir", default=os.getcwd(), help="directory to generate file in (default: cwd)")
++    parser.add_argument("behaviorsFile", nargs="*")
++    options = parser.parse_args()
++
++    if len(options.behaviorsFile) != 1:
++        parser.print_usage()
++        sys.exit(1)
++
++    os.makedirs(options.outputDir, exist_ok=True)
++
++    quirkBehaviors = QuirkBehaviors(options.behaviorsFile[0])
++
++    for template in options.template:
++        quirkBehaviors.renderTemplate(template, options.outputDir)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/Source/WebCore/Scripts/GenerateSettings.py b/Source/WebCore/Scripts/GenerateSettings.py
+new file mode 100644
+index 00000000..0a16d833
+--- /dev/null
++++ b/Source/WebCore/Scripts/GenerateSettings.py
+@@ -0,0 +1,278 @@
++#!/usr/bin/env python3
++#
++# Copyright (c) 2017-2023 Apple Inc. All rights reserved.
++# Copyright (C) 2026 AmigaChrome Team (Python port of WebCore/Scripts/GenerateSettings.rb).
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++# 1. Redistributions of source code must retain the above copyright
++#    notice, this list of conditions and the following disclaimer.
++# 2. Redistributions in binary form must reproduce the above copyright
++#    notice, this list of conditions and the following disclaimer in the
++#    documentation and/or other materials provided with the distribution.
++#
++# THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++# BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++# THE POSSIBILITY OF SUCH DAMAGE.
++
++# usage: GenerateSettings.py [--outputDir <output>] --template <input> [--template <file>...]
++#            <settings> [<settings>...]
++#
++# Templates are ERB templates whose code is Python (".pyerb"); a template
++# named X.pyerb writes X. The YAML reader and the template renderer are
++# GeneratePreferences.py's.
++
++import argparse
++import os
++import sys
++
++sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "WTF", "Scripts"))
++
++from GeneratePreferences import YAMLSubsetError, renderTemplateText, yamlLoadFile  # noqa: E402
++
++# Keep in sync with GeneratePreferences.py, which validates this shape.
++FRONTENDS = ["WebKitLegacy", "WebKit", "WebCore"]
++
++
++# "defaultValue" is the value shared by every frontend the preference is in,
++# either directly or as a map of build conditions ending in "default". A frontend
++# is listed under it only where its value differs.
++def defaultValueFor(name, options, frontend):
++    specification = options.get("defaultValue")
++    if specification is None:
++        print("ERROR: %s: \"defaultValue\" is required and cannot be empty." % name)
++        sys.exit(255)
++    if not isinstance(specification, dict):
++        return {"default": specification}
++
++    if frontend in specification:
++        value = specification[frontend]
++    else:
++        value = {key: v for key, v in specification.items() if key not in FRONTENDS}
++    return value if isinstance(value, dict) else {"default": value}
++
++
++PREFERENCES_FILE_NAMES = ["UnifiedWebPreferences.yaml", "WebPreferencesAdditions.yaml"]
++
++SETTINGS_KEYS = """
++  comment condition defaultValue disableInLockdownMode inspectorOverride refinedType
++  status type webcoreExcludeFromInternalSettings webcoreGetter webcoreImplementation
++  webcoreName webcoreOnChange
++""".split()
++
++
++def validate(path, parsed):
++    failed = False
++    for name, options in parsed.items():
++        for key in options.keys():
++            if key not in SETTINGS_KEYS:
++                print("ERROR: %s: %s: \"%s\" is not a known key." % (path, name, key))
++                failed = True
++        if isinstance(options.get("defaultValue"), dict) and any(key in FRONTENDS for key in options["defaultValue"].keys()):
++            print("ERROR: %s: %s: \"defaultValue\" must not name frontends, these settings are WebCore only." % (path, name))
++            failed = True
++    if failed:
++        sys.exit(255)
++
++
++def load(path):
++    try:
++        parsed = yamlLoadFile(path)
++    except YAMLSubsetError as e:
++        print("ERROR: Could not parse input file: %s" % e)
++        sys.exit(255)
++
++    if not parsed:
++        return {}
++
++    previousName = None
++    for name in parsed.keys():
++        if previousName is not None and previousName > name:
++            print("ERROR: Input file %s is not sorted. First out of order name found is '%s'." % (path, name))
++            sys.exit(255)
++        previousName = name
++
++    if os.path.basename(path) not in PREFERENCES_FILE_NAMES:
++        validate(path, parsed)
++
++    return parsed
++
++
++class Setting:
++    def __init__(self, name, options):
++        self.name = self.normalizeNameForWebCore(name, options)
++        self.options = options
++        self.type = options.get("refinedType") or options.get("type")
++        self.status = options.get("status")
++        self.defaultValues = defaultValueFor(name, options, "WebCore")
++        self.excludeFromInternalSettings = options.get("webcoreExcludeFromInternalSettings") or False
++        self.disableInLockdownMode = options.get("disableInLockdownMode") or False
++        self.condition = options.get("condition")
++        self.onChange = options.get("webcoreOnChange")
++        self.getter = options.get("webcoreGetter")
++        self.inspectorOverride = options.get("inspectorOverride")
++        self.customImplementation = options.get("webcoreImplementation") == "custom"
++
++    def normalizeNameForWebCore(self, name, options):
++        if options.get("webcoreName"):
++            return options["webcoreName"]
++        elif name.startswith("VP"):
++            return name[0:2].lower() + name[2:]
++        elif name.startswith(("CSSOM", "HTTPS")):
++            return name
++        elif name.startswith(("URL", "CSS", "XSS", "FTP", "DOM", "DNS", "PDF", "ICE", "HDR", "RTC", "SVG")):
++            return name[0:3].lower() + name[3:]
++        elif name.startswith(("HTTP", "HTML")):
++            return name[0:4].lower() + name[4:]
++        return name[0].lower() + name[1:]
++
++    # Ruby's predicate and accessor methods are properties here, so that the
++    # templates read as the Ruby ones do.
++
++    @property
++    def valueType(self):
++        return self.type != "String" and self.type != "URL"
++
++    @property
++    def idlType(self):
++        # FIXME: Add support for more types including enum types.
++        return {"uint32_t": "unsigned long", "double": "double", "String": "DOMString", "bool": "boolean"}.get(self.type)
++
++    @property
++    def parameterType(self):
++        if self.valueType:
++            return self.type
++        return "const %s&" % self.type
++
++    @property
++    def hasComplexSetter(self):
++        return self.onChange is not None or self.hasInspectorOverride
++
++    @property
++    def setterFunctionName(self):
++        name = self.name
++        if name.startswith("html"):
++            return "set" + name[0:4].upper() + name[4:]
++        elif name.startswith(("url", "css", "xss", "ftp", "dom", "dns", "ice", "hdr", "pdf", "rtc", "svg")):
++            return "set" + name[0:3].upper() + name[3:]
++        elif name.startswith("vp"):
++            return "set" + name[0:2].upper() + name[2:]
++        return "set" + name[0].upper() + name[1:]
++
++    @property
++    def getterFunctionName(self):
++        return self.getter or self.name
++
++    @property
++    def hasInspectorOverride(self):
++        return self.inspectorOverride is True
++
++    @property
++    def stableFeature(self):
++        # FIXME: Not all "embedder" settings should be considered stable, only the
++        # settings that are on by default. Assuming embedder gets split into two
++        # categories (off-by-default and on-by-default), only the latter should be
++        # considered stable.
++        return not self.status or self.status in ("embedder", "internal", "stable", "mature")
++
++
++class Conditional:
++    def __init__(self, condition, settings):
++        self.condition = condition
++
++        self.settings = settings
++        self.settingsNeedingImplementation = [s for s in self.settings if not s.customImplementation]
++
++        self.boolSettings = [s for s in self.settings if s.type == "bool"]
++        self.boolSettingsNeedingImplementation = [s for s in self.boolSettings if not s.customImplementation]
++
++        self.nonBoolSettings = [s for s in self.settings if s.type != "bool"]
++        self.nonBoolSettingsNeedingImplementation = [s for s in self.nonBoolSettings if not s.customImplementation]
++
++        self.settingsWithComplexSetters = [s for s in self.settings if s.hasComplexSetter]
++        self.settingsWithComplexSettersNeedingImplementation = [s for s in self.settingsWithComplexSetters if not s.customImplementation]
++
++
++class SettingSet:
++    def __init__(self, settings):
++        self.settings = sorted(settings, key=lambda setting: setting.name)
++
++        self.inspectorOverrideSettings = [s for s in self.settings if s.hasInspectorOverride]
++
++        self.conditions = []
++        conditionsMap = {}
++        for setting in [s for s in self.settings if s.condition]:
++            conditionsMap.setdefault(setting.condition, []).append(setting)
++        for key, value in conditionsMap.items():
++            self.conditions.append(Conditional(key, value))
++        self.conditions.sort(key=lambda conditional: conditional.condition)
++
++        # We also add the unconditional settings as the first element in the conditions array.
++        self.conditions.insert(0, Conditional(None, [s for s in self.settings if not s.condition]))
++
++
++class Settings:
++    def __init__(self, settingsFiles):
++        settingsByName = {}
++        globalSettingsByName = {}
++        for file in settingsFiles:
++            for name, options in load(file).items():
++                # Preferences excluded from WebCore have no Settings member at all, and the
++                # deprecated globals are declared by hand in DeprecatedGlobalSettings.h.
++                if options.get("webcoreDeprecatedGlobalSettings"):
++                    target = globalSettingsByName
++                elif "WebCore" not in (options.get("excludeFrom") or []):
++                    target = settingsByName
++                else:
++                    continue
++                if name in target:
++                    print("ERROR: %s: %s is already defined, and the later definition would silently win." % (file, name))
++                    sys.exit(255)
++                target[name] = Setting(name, options)
++
++        self.allSettingsSet = SettingSet(list(settingsByName.values()))
++        self.unstableFeatures = [s for s in settingsByName.values() if not s.stableFeature]
++        self.unstableGlobalFeatures = [s for s in globalSettingsByName.values() if not s.stableFeature]
++
++    def renderTemplate(self, template, outputDirectory):
++        name = os.path.basename(template)
++        if name.endswith(".pyerb"):
++            name = name[:-len(".pyerb")]
++        with open(template) as f:
++            output = renderTemplateText(f.read(), template, self)
++        with open(os.path.join(outputDirectory, name), "w") as f:
++            f.write(output)
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        usage="%(prog)s [--outputDir <output>] --template <input> [--template <file>...] <settings> [<settings>...]")
++    parser.add_argument("--outputDir", help="directory to generate file in")
++    parser.add_argument("--template", action="append", default=[], help="template to use for generation (may be specified multiple times)")
++    parser.add_argument("settingsFiles", nargs="*")
++    options = parser.parse_args()
++
++    if not options.settingsFiles:
++        parser.print_usage()
++        sys.exit(1)
++
++    outputDirectory = options.outputDir or os.getcwd()
++    os.makedirs(outputDirectory, exist_ok=True)
++
++    settings = Settings(options.settingsFiles)
++
++    for template in options.template:
++        settings.renderTemplate(template, outputDirectory)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorDefinitions.h.pyerb b/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorDefinitions.h.pyerb
+new file mode 100644
+index 00000000..bca39a64
+--- /dev/null
++++ b/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorDefinitions.h.pyerb
+@@ -0,0 +1,40 @@
++<%# The Python form of QuirkBehaviorDefinitions.h.erb, for GenerateQuirkBehaviors.py. -%>
++/*
++ * <%= self.warning %>
++ *
++ * Copyright (C) 2026 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <WebCore/QuirkBehaviors.h>
++
++// One QuirkBehavior per QuirkBehaviorID, for use in the quirk table.
++namespace WebCore::QuirkBehaviors {
++
++<%- for behavior in self.behaviors: -%>
++inline constexpr QuirkBehavior <%= behavior.constantName %> <%= behavior.initializer %>;
++<%- end -%>
++
++} // namespace WebCore::QuirkBehaviors
+diff --git a/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorID.h.pyerb b/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorID.h.pyerb
+new file mode 100644
+index 00000000..0c995cc7
+--- /dev/null
++++ b/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirkBehaviorID.h.pyerb
+@@ -0,0 +1,45 @@
++<%# The Python form of QuirkBehaviorID.h.erb, for GenerateQuirkBehaviors.py. -%>
++/*
++ * <%= self.warning %>
++ *
++ * Copyright (C) 2026 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <wtf/BitSet.h>
++
++namespace WebCore {
++
++enum class QuirkBehaviorID {
++<%- for behavior in self.behaviors: -%>
++    <%= behavior.id %>,
++<%- end -%>
++
++    NumberOfIDs
++};
++
++using QuirkBitSet = WTF::BitSet<static_cast<size_t>(QuirkBehaviorID::NumberOfIDs)>;
++
++} // namespace WebCore
+diff --git a/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.cpp.pyerb b/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.cpp.pyerb
+new file mode 100644
+index 00000000..787ebef5
+--- /dev/null
++++ b/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.cpp.pyerb
+@@ -0,0 +1,140 @@
++<%# The Python form of QuirksAccessors.cpp.erb, for GenerateQuirkBehaviors.py. -%>
++/*
++ * <%= self.warning %>
++ *
++ * Copyright (C) 2026 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "QuirksAccessors.h"
++
++#include "Document.h"
++#include "ElementAncestorIteratorInlines.h"
++#include "ElementInlines.h"
++#include "QuirkTable.h"
++#include "SelectorQuery.h"
++#include "Settings.h"
++
++namespace WebCore {
++
++QuirksAccessors::QuirksAccessors(Document& document)
++    : m_document(document)
++{
++}
++
++QuirksAccessors::~QuirksAccessors() = default;
++
++bool QuirksAccessors::needsQuirks() const
++{
++    return m_document && m_document->settings().needsSiteSpecificQuirks();
++}
++
++bool QuirksAccessors::elementMatchesSelectorCondition(ASCIILiteral selector, const Node* node)
++{
++    if (!node)
++        return false;
++
++    RefPtr element = lineageOfType<Element>(*node).first();
++    if (!element)
++        return false;
++
++    auto* query = SelectorQueryCache::singleton().add(selector, protect(element->document()));
++    if (!query) {
++        ASSERT_NOT_REACHED();
++        return false;
++    }
++
++    return query->matches(const_cast<Element&>(*element));
++}
++
++bool QuirksAccessors::behaviorAppliesToNode(QuirkBehaviorID id, const Node* node) const
++{
++    if (!m_quirksData.isBehaviorEnabled(id))
++        return false;
++
++    for (const auto& behavior : m_quirksData.behaviors()) {
++        if (behavior.id != id)
++            continue;
++
++        if (!behavior.conditions.elementSelector)
++            return true;
++
++        if (elementMatchesSelectorCondition(*behavior.conditions.elementSelector, node))
++            return true;
++    }
++
++    return false;
++}
++
++RefPtr<Element> QuirksAccessors::firstElementMatchingSelectorCondition(ASCIILiteral selector, Document& document)
++{
++    auto* query = SelectorQueryCache::singleton().add(selector, document);
++    if (!query) {
++        ASSERT_NOT_REACHED();
++        return nullptr;
++    }
++
++    return query->queryFirst(document);
++}
++
++RefPtr<Element> QuirksAccessors::elementMatchingDocumentSelectorCondition(QuirkBehaviorID id) const
++{
++    if (!m_quirksData.isBehaviorEnabled(id))
++        return nullptr;
++
++    RefPtr document = m_document.get();
++    if (!document)
++        return nullptr;
++
++    for (const auto& behavior : m_quirksData.behaviors()) {
++        if (behavior.id != id || !behavior.conditions.documentSelector)
++            continue;
++
++        if (RefPtr element = firstElementMatchingSelectorCondition(*behavior.conditions.documentSelector, *document))
++            return element;
++    }
++
++    return nullptr;
++}
++
++bool QuirksAccessors::behaviorAppliesToDocument(QuirkBehaviorID id) const
++{
++    if (!m_quirksData.isBehaviorEnabled(id))
++        return false;
++
++    bool appliesUnconditionally = std::ranges::any_of(m_quirksData.behaviors(), [&](const auto& behavior) {
++        return behavior.id == id && !behavior.conditions.documentSelector;
++    });
++
++    return appliesUnconditionally || elementMatchingDocumentSelectorCondition(id);
++}
++<%- for behavior in [x for x in self.behaviors if x.hasGeneratedAccessor]: -%>
++
++<%= behavior.definitionSignature %>
++{
++    <%= behavior.body %>
++}
++<%- end -%>
++
++} // namespace WebCore
+diff --git a/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.h.pyerb b/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.h.pyerb
+new file mode 100644
+index 00000000..1258ca96
+--- /dev/null
++++ b/Source/WebCore/Scripts/QuirkBehaviorsTemplates/QuirksAccessors.h.pyerb
+@@ -0,0 +1,67 @@
++<%# The Python form of QuirksAccessors.h.erb, for GenerateQuirkBehaviors.py. -%>
++/*
++ * <%= self.warning %>
++ *
++ * Copyright (C) 2026 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <WebCore/QuirksData.h>
++#include <wtf/Forward.h>
++#include <wtf/Noncopyable.h>
++#include <wtf/WeakPtr.h>
++
++namespace WebCore {
++
++class Document;
++class Element;
++class Node;
++class WeakPtrImplWithEventTargetData;
++
++// The accessors QuirkBehaviors.yaml describes fully. Quirks derives from this and adds the custom ones.
++class QuirksAccessors {
++    WTF_MAKE_NONCOPYABLE(QuirksAccessors);
++public:
++<%- for behavior in [x for x in self.behaviors if x.hasGeneratedAccessor]: -%>
++    <%= behavior.declaration %>
++<%- end -%>
++
++    WEBCORE_EXPORT static bool elementMatchesSelectorCondition(ASCIILiteral selector, const Node*);
++    WEBCORE_EXPORT static RefPtr<Element> firstElementMatchingSelectorCondition(ASCIILiteral selector, Document&);
++
++protected:
++    explicit QuirksAccessors(Document&);
++    ~QuirksAccessors();
++
++    bool needsQuirks() const;
++    bool behaviorAppliesToNode(QuirkBehaviorID, const Node*) const;
++    bool behaviorAppliesToDocument(QuirkBehaviorID) const;
++    RefPtr<Element> elementMatchingDocumentSelectorCondition(QuirkBehaviorID) const;
++
++    WeakPtr<Document, WeakPtrImplWithEventTargetData> m_document;
++    mutable QuirksData m_quirksData;
++};
++
++} // namespace WebCore
+diff --git a/Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.cpp.pyerb b/Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.cpp.pyerb
+new file mode 100644
+index 00000000..b67c2552
+--- /dev/null
++++ b/Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.cpp.pyerb
+@@ -0,0 +1,89 @@
++<%# The Python form of InternalSettingsGenerated.cpp.erb, for GenerateSettings.py. -%>
++/*
++ * THIS FILE WAS AUTOMATICALLY GENERATED, DO NOT EDIT.
++ *
++ * Copyright (C) 2017-2020 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "InternalSettingsGenerated.h"
++
++#include "Page.h"
++#include "Settings.h"
++
++namespace WebCore {
++
++InternalSettingsGenerated::InternalSettingsGenerated(Page* page)
++    : m_page(page)
++<%- for setting in self.allSettingsSet.settings: -%>
++<%- if setting.excludeFromInternalSettings == False and setting.idlType: -%>
++<%- if setting.condition: -%>
++#if <%= setting.condition %>
++<%- end -%>
++    , m_<%= setting.name %>(page->settings().<%= setting.getterFunctionName %>())
++<%- if setting.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++{
++}
++
++InternalSettingsGenerated::~InternalSettingsGenerated()
++{
++}
++
++void InternalSettingsGenerated::resetToConsistentState()
++{
++<%- for setting in self.allSettingsSet.settings: -%>
++<%- if setting.excludeFromInternalSettings == False and setting.idlType: -%>
++<%- if setting.condition: -%>
++#if <%= setting.condition %>
++<%- end -%>
++    m_page->settings().<%= setting.setterFunctionName %>(m_<%= setting.name %>);
++<%- if setting.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++}
++
++<%- for setting in self.allSettingsSet.settings: -%>
++<%- if setting.excludeFromInternalSettings == False and setting.idlType: -%>
++void InternalSettingsGenerated::<%= setting.setterFunctionName %>(<%= setting.parameterType %> <%= setting.name %>)
++{
++<%- if setting.condition: -%>
++#if <%= setting.condition %>
++    m_page->settings().<%= setting.setterFunctionName %>(<%= setting.name %>);
++#else
++    UNUSED_PARAM(<%= setting.name %>);
++#endif
++<%- else: -%>
++    m_page->settings().<%= setting.setterFunctionName %>(<%= setting.name %>);
++<%- end -%>
++}
++
++<%- end -%>
++<%- end -%>
++} // namespace WebCore
+diff --git a/Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.h.pyerb b/Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.h.pyerb
+new file mode 100644
+index 00000000..00da5a1e
+--- /dev/null
++++ b/Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.h.pyerb
+@@ -0,0 +1,69 @@
++<%# The Python form of InternalSettingsGenerated.h.erb, for GenerateSettings.py. -%>
++/*
++ * THIS FILE WAS AUTOMATICALLY GENERATED, DO NOT EDIT.
++ *
++ * Copyright (C) 2017-2020 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <wtf/RefCounted.h>
++#include <wtf/WeakPtr.h>
++#include <wtf/text/WTFString.h>
++
++namespace WebCore {
++
++class Page;
++
++class InternalSettingsGenerated : public RefCounted<InternalSettingsGenerated> {
++public:
++    explicit InternalSettingsGenerated(Page*);
++    virtual ~InternalSettingsGenerated();
++
++    void resetToConsistentState();
++    virtual bool isInternalSettings() const { return false; }
++
++<%- for setting in self.allSettingsSet.settings: -%>
++<%- if setting.excludeFromInternalSettings == False and setting.idlType: -%>
++    void <%= setting.setterFunctionName %>(<%= setting.parameterType %> <%= setting.name %>);
++<%- end -%>
++<%- end -%>
++
++private:
++    WeakPtr<Page> m_page;
++
++<%- for setting in self.allSettingsSet.settings: -%>
++<%- if setting.excludeFromInternalSettings == False and setting.idlType: -%>
++<%- if setting.condition: -%>
++#if <%= setting.condition %>
++<%- end -%>
++    <%= setting.type %> m_<%= setting.name %>;
++<%- if setting.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++};
++
++} // namespace WebCore
+diff --git a/Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.idl.pyerb b/Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.idl.pyerb
+new file mode 100644
+index 00000000..d0a8901a
+--- /dev/null
++++ b/Source/WebCore/Scripts/SettingsTemplates/InternalSettingsGenerated.idl.pyerb
+@@ -0,0 +1,38 @@
++<%# The Python form of InternalSettingsGenerated.idl.erb, for GenerateSettings.py. -%>
++/*
++ * THIS FILE WAS AUTOMATICALLY GENERATED, DO NOT EDIT.
++ *
++ * Copyright (C) 2017-2020 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++[
++    LegacyNoInterfaceObject,
++    ExportMacro=WEBCORE_TESTSUPPORT_EXPORT,
++] interface InternalSettingsGenerated {
++<%- for setting in self.allSettingsSet.settings: -%>
++<%- if setting.excludeFromInternalSettings == False and setting.idlType: -%>
++    undefined <%= setting.setterFunctionName %>(<%= setting.idlType %> <%= setting.name %>);
++<%- end -%>
++<%- end -%>
++};
+diff --git a/Source/WebCore/Scripts/SettingsTemplates/Settings.cpp.pyerb b/Source/WebCore/Scripts/SettingsTemplates/Settings.cpp.pyerb
+new file mode 100644
+index 00000000..8fb2f888
+--- /dev/null
++++ b/Source/WebCore/Scripts/SettingsTemplates/Settings.cpp.pyerb
+@@ -0,0 +1,281 @@
++<%# The Python form of Settings.cpp.erb, for GenerateSettings.py. -%>
++/*
++ * THIS FILE WAS AUTOMATICALLY GENERATED, DO NOT EDIT.
++ *
++ * Copyright (C) 2017-2020 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "Settings.h"
++
++#include "DeprecatedGlobalSettings.h"
++#include "InspectorInstrumentation.h"
++#include "Page.h"
++
++// Default values.
++
++<%- for setting in self.allSettingsSet.settings: -%>
++<%- if setting.condition: -%>
++#if <%= setting.condition %>
++<%- end -%>
++<%- if len(setting.defaultValues) == 1: -%>
++<%- if setting.type == "String" and setting.defaultValues['default'][-1] == "\"": -%>
++#define SETTING_DEFAULT_VALUE_FOR_<%= setting.name %> <%= setting.defaultValues['default'] %>_s
++<%- else: -%>
++#define SETTING_DEFAULT_VALUE_FOR_<%= setting.name %> <%= setting.defaultValues['default'] %>
++<%- end -%>
++<%- else: -%>
++<%- for index, (key, value) in enumerate(setting.defaultValues.items()): -%>
++<%- if index == 0: -%>
++#if <%= key %>
++<%- elif index != len(setting.defaultValues) - 1: -%>
++#elif <%= key %>
++<%- else: -%>
++#else
++<%- end -%>
++#define SETTING_DEFAULT_VALUE_FOR_<%= setting.name %> <%= value %>
++<%- end -%>
++#endif
++<%- end -%>
++<%- if setting.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++
++namespace WebCore {
++
++WTF_MAKE_TZONE_ALLOCATED_IMPL(Settings);
++
++Ref<Settings> Settings::create(Page* page)
++{
++    return adoptRef(*new Settings(page));
++}
++
++Settings::Settings(Page* page)
++    : SettingsBase(page)
++{
++    m_values.initialize();
++
++    m_page = nullptr; // Page is not yet fully initialized when constructing Settings, so keeping m_page null over initializeDefaultFontFamilies() call.
++    initializeDefaultFontFamilies();
++    m_page = page;
++}
++
++void SettingsValues::initialize()
++{
++<%- for condition in self.allSettingsSet.conditions: -%>
++<%- if len(condition.nonBoolSettingsNeedingImplementation) != 0: -%>
++<%- if condition.condition: -%>
++#if <%= condition.condition %>
++<%- end -%>
++<%- for setting in condition.nonBoolSettingsNeedingImplementation: -%>
++    <%= setting.name %> = SETTING_DEFAULT_VALUE_FOR_<%= setting.name %>;
++<%- end -%>
++<%- if condition.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++<%- for condition in self.allSettingsSet.conditions: -%>
++<%- if len(condition.boolSettingsNeedingImplementation) != 0: -%>
++<%- if condition.condition: -%>
++#if <%= condition.condition %>
++<%- end -%>
++<%- for setting in condition.boolSettingsNeedingImplementation: -%>
++    <%= setting.name %> = SETTING_DEFAULT_VALUE_FOR_<%= setting.name %>;
++<%- end -%>
++<%- if condition.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++}
++
++SettingsValues SettingsValues::isolatedCopy() const
++{
++    return {
++<%- for setting in self.allSettingsSet.inspectorOverrideSettings: -%>
++        crossThreadCopy(<%= setting.name %>BeforeInspectorOverride),
++<%- end -%>
++        crossThreadCopy(fontGenericFamilies),
++<%- for condition in self.allSettingsSet.conditions: -%>
++<%- if len(condition.nonBoolSettingsNeedingImplementation) != 0: -%>
++<%- if condition.condition: -%>
++#if <%= condition.condition %>
++<%- end -%>
++<%- for setting in condition.nonBoolSettingsNeedingImplementation: -%>
++        crossThreadCopy(<%= setting.name %>),
++<%- end -%>
++<%- if condition.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++<%- for condition in self.allSettingsSet.conditions: -%>
++<%- if len(condition.boolSettingsNeedingImplementation) != 0: -%>
++<%- if condition.condition: -%>
++#if <%= condition.condition %>
++<%- end -%>
++<%- for setting in condition.boolSettingsNeedingImplementation: -%>
++        crossThreadCopy(<%= setting.name %>),
++<%- end -%>
++<%- if condition.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++    };
++}
++
++Settings::~Settings() = default;
++
++void Settings::disableUnstableFeaturesForModernWebKit()
++{
++<%- for setting in self.unstableFeatures: -%>
++<%- if setting.condition: -%>
++#if <%= setting.condition %>
++<%- end -%>
++    <%= setting.setterFunctionName %>(false);
++<%- if setting.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++}
++
++void Settings::disableGlobalUnstableFeaturesForModernWebKit()
++{
++<%- for setting in self.unstableGlobalFeatures: -%>
++<%- if setting.condition: -%>
++#if <%= setting.condition %>
++<%- end -%>
++    DeprecatedGlobalSettings::<%= setting.setterFunctionName %>(false);
++<%- if setting.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++}
++
++void Settings::disableFeaturesForLockdownMode()
++{
++<%- for setting in self.allSettingsSet.settings: -%>
++<%- if setting.disableInLockdownMode: -%>
++<%- if setting.condition: -%>
++#if <%= setting.condition %>
++<%- end -%>
++    <%= setting.setterFunctionName %>(false);
++<%- if setting.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++}
++
++void Settings::applyMainFrameWebsitePolicies(const WebsitePolicySettings& policies)
++{
++#if ENABLE(MEDIA_SOURCE)
++    setMediaSourceEnabled(policies.mediaSourcePolicy == MediaSourcePolicy::Default ? platformDefaultMediaSourceEnabled() : policies.mediaSourcePolicy == MediaSourcePolicy::Enable);
++#endif
++#if ENABLE(WEBKIT_OVERFLOW_SCROLLING_CSS_PROPERTY)
++    if (policies.legacyOverflowScrollingTouchPolicy == LegacyOverflowScrollingTouchPolicy::Disable)
++        setLegacyOverflowScrollingTouchEnabled(false);
++#endif
++    setIdempotentModeAutosizingOnlyHonorsPercentages(policies.idempotentModeAutosizingOnlyHonorsPercentages);
++
++    if (policies.pushAndNotificationsEnabledPolicy != PushAndNotificationsEnabledPolicy::UseGlobalPolicy) {
++        bool enabled = policies.pushAndNotificationsEnabledPolicy == PushAndNotificationsEnabledPolicy::Yes;
++        setPushAPIEnabled(enabled);
++#if ENABLE(NOTIFICATIONS)
++        setNotificationsEnabled(enabled);
++#endif
++#if ENABLE(NOTIFICATION_EVENT)
++        setNotificationEventEnabled(enabled);
++#endif
++#if PLATFORM(IOS)
++        setAppBadgeEnabled(enabled);
++#endif
++    }
++
++    if (policies.inlineMediaPlaybackPolicy != InlineMediaPlaybackPolicy::Default)
++        setInlineMediaPlaybackRequiresPlaysInlineAttribute(policies.inlineMediaPlaybackPolicy == InlineMediaPlaybackPolicy::RequiresPlaysInlineAttribute);
++
++    setGlobalPrivacyControlEnabled(policies.globalPrivacyControlEnabled);
++}
++
++<%- for condition in self.allSettingsSet.conditions: -%>
++<%- if len(condition.settingsWithComplexSettersNeedingImplementation) != 0: -%>
++<%- if condition.condition: -%>
++#if <%= condition.condition %>
++<%- end -%>
++<%- for setting in condition.settingsWithComplexSettersNeedingImplementation: -%>
++void Settings::<%= setting.setterFunctionName %>(<%= setting.parameterType %> <%= setting.name %>)
++{
++<%- if setting.hasInspectorOverride: -%>
++    if (m_values.<%= setting.name %>BeforeInspectorOverride) [[unlikely]] {
++        m_values.<%= setting.name %>BeforeInspectorOverride = <%= setting.name %>;
++        return;
++    }
++<%- end -%>
++    if (m_values.<%= setting.name %> == <%= setting.name %>)
++        return;
++    m_values.<%= setting.name %> = <%= setting.name %>;
++<%- if setting.onChange: -%>
++    <%= setting.onChange %>();
++<%- end -%>
++}
++<%- end -%>
++<%- if condition.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++
++<%- for setting in self.allSettingsSet.inspectorOverrideSettings: -%>
++void Settings::<%= setting.setterFunctionName %>InspectorOverride(std::optional<<%= setting.parameterType %>> <%= setting.name %>InspectorOverride)
++{
++<%- if setting.condition: -%>
++#if <%= setting.condition %>
++<%- end -%>
++    auto previousValue = m_values.<%= setting.name %>;
++    if (<%= setting.name %>InspectorOverride) {
++        ASSERT(InspectorInstrumentation::hasFrontends());
++        if (!m_values.<%= setting.name %>BeforeInspectorOverride)
++            m_values.<%= setting.name %>BeforeInspectorOverride = previousValue;
++        m_values.<%= setting.name %> = <%= setting.name %>InspectorOverride.value();
++    } else if (m_values.<%= setting.name %>BeforeInspectorOverride) {
++        m_values.<%= setting.name %> = m_values.<%= setting.name %>BeforeInspectorOverride.value();
++        m_values.<%= setting.name %>BeforeInspectorOverride = std::nullopt;
++    }
++<%- if setting.onChange: -%>
++    if (m_values.<%= setting.name %> != previousValue)
++        <%= setting.onChange %>();
++<%- end -%>
++<%- if setting.condition: -%>
++#else
++    UNUSED_PARAM(<%= setting.name %>InspectorOverride);
++#endif
++<%- end -%>
++}
++
++<%- end -%>
++}
+diff --git a/Source/WebCore/Scripts/SettingsTemplates/Settings.h.pyerb b/Source/WebCore/Scripts/SettingsTemplates/Settings.h.pyerb
+new file mode 100644
+index 00000000..7ac10c5b
+--- /dev/null
++++ b/Source/WebCore/Scripts/SettingsTemplates/Settings.h.pyerb
+@@ -0,0 +1,123 @@
++<%# The Python form of Settings.h.erb, for GenerateSettings.py. -%>
++/*
++ * THIS FILE WAS AUTOMATICALLY GENERATED, DO NOT EDIT.
++ *
++ * Copyright (C) 2017-2020 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <WebCore/SettingsBase.h>
++#include <WebCore/WebsitePolicies.h>
++#include <wtf/RefCounted.h>
++
++namespace WebCore {
++
++class Page;
++
++struct SettingsValues {
++    void initialize();
++    SettingsValues isolatedCopy() const;
++
++<%- for setting in self.allSettingsSet.inspectorOverrideSettings: -%>
++    std::optional<<%= setting.type %>> <%= setting.name %>BeforeInspectorOverride;
++<%- end -%>
++
++    FontGenericFamilies fontGenericFamilies;
++<%- for condition in self.allSettingsSet.conditions: -%>
++<%- if len(condition.nonBoolSettingsNeedingImplementation) != 0: -%>
++<%- if condition.condition: -%>
++#if <%= condition.condition %>
++<%- end -%>
++<%- for setting in condition.nonBoolSettingsNeedingImplementation: -%>
++    <%= setting.type %> <%= setting.name %>;
++<%- end -%>
++<%- if condition.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++<%- end -%>
++<%- for condition in self.allSettingsSet.conditions: -%>
++<%- if len(condition.settingsNeedingImplementation) != 0: -%>
++    <%- if condition.condition: -%>
++#if <%= condition.condition %>
++    <%- end -%>
++    <%- for setting in condition.boolSettingsNeedingImplementation: -%>
++    <%= setting.type %> <%= setting.name %> : 1;
++    <%- end -%>
++    <%- if condition.condition: -%>
++#endif
++    <%- end -%>
++<%- end -%>
++<%- end -%>
++};
++
++class Settings : public SettingsBase, public RefCounted<Settings> {
++    WTF_MAKE_NONCOPYABLE(Settings);
++    WTF_MAKE_TZONE_ALLOCATED(Settings);
++public:
++    WEBCORE_EXPORT static Ref<Settings> create(Page*);
++    WEBCORE_EXPORT virtual ~Settings();
++
++    void ref() const final { RefCounted::ref(); }
++    void deref() const final { RefCounted::deref(); }
++
++    WEBCORE_EXPORT void disableUnstableFeaturesForModernWebKit();
++    WEBCORE_EXPORT static void disableGlobalUnstableFeaturesForModernWebKit();
++    WEBCORE_EXPORT void disableFeaturesForLockdownMode();
++    WEBCORE_EXPORT void applyMainFrameWebsitePolicies(const WebsitePolicySettings&);
++
++<%- for condition in self.allSettingsSet.conditions: -%>
++<%- if condition.condition: -%>
++#if <%= condition.condition %>
++<%- end -%>
++<%- for setting in condition.settingsNeedingImplementation: -%>
++    <%= setting.parameterType %> <%= setting.getterFunctionName %>() const { return m_values.<%= setting.name %>; }
++    <%- if setting.hasComplexSetter: -%>
++    WEBCORE_EXPORT void <%= setting.setterFunctionName %>(<%= setting.parameterType %>);
++    <%- else: -%>
++    void <%= setting.setterFunctionName %>(<%= setting.parameterType %> <%= setting.name %>) { m_values.<%= setting.name %> = <%= setting.name %>; }
++    <%- end -%>
++<%- end -%>
++<%- if condition.condition: -%>
++#endif
++<%- end -%>
++<%- end -%>
++
++<%- for setting in self.allSettingsSet.inspectorOverrideSettings: -%>
++    WEBCORE_EXPORT void <%= setting.setterFunctionName %>InspectorOverride(std::optional<<%= setting.parameterType %>>);
++<%- end -%>
++    FontGenericFamilies& fontGenericFamilies() final { return m_values.fontGenericFamilies; }
++    const FontGenericFamilies& fontGenericFamilies() const final { return m_values.fontGenericFamilies; }
++
++    const SettingsValues& values() const { return m_values; }
++
++private:
++    WEBCORE_EXPORT explicit Settings(Page*);
++
++    SettingsValues m_values;
++};
++
++}
++
+diff --git a/Source/WebCore/domjit/generate-abstract-heap.py b/Source/WebCore/domjit/generate-abstract-heap.py
+new file mode 100644
+index 00000000..420f444e
+--- /dev/null
++++ b/Source/WebCore/domjit/generate-abstract-heap.py
+@@ -0,0 +1,158 @@
++#!/usr/bin/env python3
++# -*- coding: utf-8 -*-
++# Copyright (C) 2016 Apple Inc. All rights reserved.
++# Copyright (C) 2026 AmigaChrome Team (Python port of WebCore/domjit/generate-abstract-heap.rb).
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++# 1. Redistributions of source code must retain the above copyright
++#    notice, this list of conditions and the following disclaimer.
++# 2. Redistributions in binary form must reproduce the above copyright
++#    notice, this list of conditions and the following disclaimer in the
++#    documentation and/or other materials provided with the distribution.
++#
++# THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++# BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++# THE POSSIBILITY OF SUCH DAMAGE.
++
++# usage: generate-abstract-heap.py DOMJITAbstractHeapRepository.yaml DOMJITAbstractHeapRepository.h
++
++import os
++import sys
++
++sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "WTF", "Scripts"))
++
++from GeneratePreferences import yamlLoadFile  # noqa: E402
++
++
++class HeapRange:
++    def __init__(self, first, last):
++        self.first = first
++        self.last = last
++
++
++def rubyEach(tree):
++    """Ruby's tree.map { |key, value| }: a mapping's pairs, or a list's items with no value."""
++    if isinstance(tree, dict):
++        return list(tree.items())
++    return [(item, None) for item in tree]
++
++
++class AbstractHeap:
++    def __init__(self, name, tree):
++        self.name = name
++        self.parent = None
++        if tree is None:
++            self.children = []
++        else:
++            self.children = [AbstractHeap(key, value) for key, value in rubyEach(tree)]
++        self.range = None
++
++    def setParent(self, parent):
++        parent.children.append(self)
++        self.parent = parent
++
++    def compute(self, start):
++        current = start
++        if not self.children:
++            self.range = HeapRange(start, current + 1)
++            return
++
++        for child in self.children:
++            child.compute(current)
++            current = child.range.last
++
++        self.range = HeapRange(start, current)
++
++    def dump(self, output):
++        self.shallowDump(output)
++        if self.parent:
++            output.write("-> ")
++            self.parent.dump(output)
++
++    def shallowDump(self, output):
++        output.write("%s<%d,%d>" % (self.name, self.range.first, self.range.last))
++
++    def deepDump(self, output, indent):
++        self.printIndent(output, indent)
++        self.shallowDump(output)
++        if not self.children:
++            output.write("\n")
++            return
++
++        output.write(":\n")
++        for child in self.children:
++            child.deepDump(output, indent + 1)
++
++    def generate(self, output):
++        output.write("constexpr JSC::DOMJIT::HeapRange %s(JSC::DOMJIT::HeapRange::ConstExpr, %d, %d);\n" % (self.name, self.range.first, self.range.last))
++        for child in self.children:
++            child.generate(output)
++
++    def printIndent(self, output, indent):
++        output.write("    " * indent)
++
++
++header = """/*
++ * Copyright (C) 2016 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. ``AS IS'' AND ANY
++ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL APPLE INC. OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
++ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
++ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++// Auto-generated file. Do not modify.
++
++#pragma once
++
++#include <JavaScriptCore/DOMJITHeapRange.h>
++
++namespace WebCore { namespace DOMJIT { namespace AbstractHeapRepository {
++"""
++
++footer = """} } }
++"""
++
++
++def main():
++    inputFileName = sys.argv[1]
++    outputFileName = sys.argv[2]
++    tree = yamlLoadFile(inputFileName)
++    heap = [AbstractHeap(key, value) for key, value in rubyEach(tree)][0]
++    heap.compute(0)
++    with open(outputFileName, "w") as output:
++        output.write(header)
++        output.write("/* DOMJIT Abstract Heap Tree.\n")
++        heap.deepDump(output, 0)
++        output.write("*/\n")
++        heap.generate(output)
++        output.write(footer)
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.53.0
+
