@@ -68,14 +68,20 @@ The patches, in order:
   `Source/JavaScriptCore/offlineasm-py`, `Source/JavaScriptCore/generator-py`
   and `Source/WTF/Scripts/GeneratePreferences.py`. Their output matches the
   Ruby scripts' byte for byte. The 68k build always uses the M68K back end
-  (the `JSC_M68K_LLINT` option is gone). WebCore's three Ruby generators are
-  not ported yet: until they are, the browser build stops at them with
-  `no-ruby.py`'s message, which names the script. (0018 is the visit cache, still a draft.)
+  (the `JSC_M68K_LLINT` option is gone). A step that still asks for Ruby
+  runs `no-ruby.py`, which names the script and fails. (0018 is the visit
+  cache, still a draft.)
 
 - `0020-jsc-m68k-interpreter-data-registers.patch`: J1. The 68k
   interpreter keeps t0-t3's low words in d4-d7 instead of its register file
   in memory (58% fewer register-file accesses). jsbench on the AC090:
   int-loop and properties 1.4 times faster, array sort 1.1 times.
+
+- `0021-webcore-generators-in-python.patch`: WebCore builds without Ruby.
+  `generate-abstract-heap.rb`, `GenerateSettings.rb` and
+  `GenerateQuirkBehaviors.rb` run as Python ports beside them, their nine
+  templates as Python forms (`.pyerb`); the outputs match the Ruby scripts'
+  byte for byte. No build step of the Amiga port runs Ruby now.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

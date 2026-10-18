@@ -31,9 +31,8 @@
 #                   libxml2, SQLite, curl, libpsl, zlib, libpng) in one prefix
 #   AMISSL_SDK      the AmiSSL 5 SDK's Developer folder           (required)
 #
-# No Ruby: JavaScriptCore's generators run in Python (patch 0019). WebCore's
-# three Ruby generators have no port yet, so the build stops at them with
-# no-ruby.py's message until they do.
+# No Ruby: WebKit's Ruby generators run as Python ports (patches 0019 and
+# 0021), with the python3 CMake finds.
 #   JOBS            parallel compile jobs (default: one per CPU thread, but
 #                   no more than one per 2 GB of free memory, since WebCore's
 #                   largest files take up to 2 GB each to compile)
