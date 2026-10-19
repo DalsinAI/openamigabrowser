@@ -34,7 +34,8 @@ Apple's notices and licence, with a line for the AmigaChrome Team's port.
 MIT, same copyright); see its `FROM` and `LICENSE`.
 
 OpenBrowser Lite links, at build time, libnix and libamiga from bebbo's
-amiga-gcc and uses AmiSSL 5 (OpenSSL 3, Apache-2.0) when it runs.
+amiga-gcc and uses OpenTLS (opentls.library) when it runs; until 19 October
+2026 it used AmiSSL 5 (OpenSSL 3, Apache-2.0).
 
 Built programs also link, at build time on your machine (none of it is in this
 repository):

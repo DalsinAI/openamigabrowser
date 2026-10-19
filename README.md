@@ -6,7 +6,8 @@ A WebKit-based web browser for AmigaOS 3.2. Needs a 68040 with FPU.
 AmigaOS 3.2.3. It lays out HTML and CSS, runs the page's JavaScript
 (JavaScriptCore) and paints with cairo, FreeType and HarfBuzz into a 32-bit
 bitmap; pictures are decoded by the system's datatypes. The browser window,
-**OpenBrowser** (GadTools), and its network layer (libcurl with AmiSSL 5) are
+**OpenBrowser** (GadTools), and its network layer (libcurl on OpenTLS; AmiSSL 5
+until 19 October 2026) are
 built and being brought up on the test instance. See
 [docs/WEBCORE_PORT.md](docs/WEBCORE_PORT.md).
 
@@ -77,9 +78,13 @@ The JavaScript engine:
 OpenBrowser on WebCore needs, besides the compiler and ICU above, the
 libraries from the OpenAmiga ports (cairo and pixman, FreeType, HarfBuzz,
 fontconfig, Expat, libxml2, SQLite, curl, libpsl, zlib and libpng; see
-https://github.com/DalsinAI/openamiga) built into one prefix, and the AmiSSL 5
-SDK. Then apply the patches in `webkit/` and run
-`WEBKIT_SOURCE=... OAB_DEPS=... AMISSL_SDK=... scripts/build-webcore.sh`.
+https://github.com/DalsinAI/openamiga) built into one prefix, with curl from
+openamigacurl's main branch, which does TLS through OpenTLS. No AmiSSL SDK is
+needed (until 19 October 2026 the engine used AmiSSL 5). Then apply the
+patches in `webkit/` and run
+`WEBKIT_SOURCE=... OAB_DEPS=... scripts/build-webcore.sh`.
+For https:// the Amiga needs opentls.library 1.2 or newer and its CA bundle
+in `S:OpenTLS/ca-bundle.pem`.
 The programs are large (about 100 MB each, stripped) and need a 68040 with
 FPU (hard float, `-m68881`) and plenty of Fast RAM.
 

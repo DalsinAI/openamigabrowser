@@ -1,12 +1,15 @@
 /*
- * OpenBrowser: bsdsocket.library and AmiSSL for WebCore's network thread.
+ * OpenBrowser: bsdsocket.library for WebCore's network thread.
  *
- * On AmigaOS a task uses its own bsdsocket.library base, and each task that
- * calls AmiSSL joins it first. The main task opens both (WebCore sets up
- * curl and OpenSSL there); curl's thread, which makes every connection,
- * opens its own socket base and joins AmiSSL when it starts. Only that
- * thread touches sockets, so the program's one SocketBase is its base while
- * it runs.
+ * On AmigaOS a task uses its own bsdsocket.library base. The main task opens
+ * one (WebCore sets up curl there); curl's thread, which makes every
+ * connection, opens its own socket base when it starts. Only that thread
+ * touches sockets, so the program's one SocketBase is its base while it
+ * runs. Each base points bsdsocket's errno at the C library's.
+ *
+ * TLS is curl's: openamigacurl's OpenTLS backend opens opentls.library (1.2
+ * or newer) itself, and checks certificates against S:OpenTLS/ca-bundle.pem.
+ * Until 19 October 2026 this file also opened AmiSSL in each task.
  *
  * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
@@ -15,19 +18,13 @@
 #include <utility/tagitem.h>
 #include <proto/exec.h>
 #include <proto/bsdsocket.h>
-#include <proto/amisslmaster.h>
-#include <proto/amissl.h>
-#include <libraries/amisslmaster.h>
-#include <libraries/amissl.h>
-#include <amissl/amissl.h>
-#ifdef OB_OPENTLS
-#include "opentls_amiga.h"
+#ifdef OB_OPENSERVICE
 #include "ob_media.h"
 #endif
 
 #include "ob_network.h"
 
-extern struct Library *SocketBase, *AmiSSLMasterBase, *AmiSSLBase, *AmiSSLExtBase;
+extern struct Library *SocketBase;
 
 static struct Library *mainSocketBase, *threadSocketBase;
 static BYTE mainPriority;
@@ -46,24 +43,10 @@ int ob_network_open(void)
         return 0;
     SocketBase = mainSocketBase;
     SocketBaseTags(SBTM_SETVAL(SBTC_ERRNOPTR(sizeof(errno))), (ULONG)&errno, TAG_DONE);
-    AmiSSLMasterBase = OpenLibrary((CONST_STRPTR)"amisslmaster.library", AMISSLMASTER_MIN_VERSION);
-    if (!AmiSSLMasterBase) {
-        ob_network_close();
-        return 0;
-    }
-    if (OpenAmiSSLTags(AMISSL_CURRENT_VERSION, AmiSSL_UsesOpenSSLStructs, TRUE, AmiSSL_GetAmiSSLBase, (ULONG)&AmiSSLBase,
-            AmiSSL_GetAmiSSLExtBase, (ULONG)&AmiSSLExtBase, AmiSSL_SocketBase, (ULONG)SocketBase,
-            AmiSSL_ErrNoPtr, (ULONG)&errno, TAG_DONE)) {
-        AmiSSLBase = NULL;
-        ob_network_close();
-        return 0;
-    }
     resetFPCR();
-#ifdef OB_OPENTLS
-    /* TLS key maths to a board in this machine or a paired Cradle, when one
-     * offers it; AmiSSL does it all itself otherwise. */
-    opentls_amiga_open();
-    /* Page pictures, SVG included, decoded there too. */
+#ifdef OB_OPENSERVICE
+    /* Page pictures, SVG included, decoded by a board in this machine or a
+     * paired Cradle, when one offers it. */
     ob_media_open();
 #endif
     return 1;
@@ -71,17 +54,11 @@ int ob_network_open(void)
 
 void ob_network_close(void)
 {
-#ifdef OB_OPENTLS
+#ifdef OB_OPENSERVICE
     ob_media_close();
-    opentls_amiga_close();
 #endif
-    if (AmiSSLBase)
-        CloseAmiSSL();
-    if (AmiSSLMasterBase)
-        CloseLibrary(AmiSSLMasterBase);
     if (mainSocketBase)
         CloseLibrary(mainSocketBase);
-    AmiSSLBase = AmiSSLExtBase = AmiSSLMasterBase = NULL;
     SocketBase = mainSocketBase = NULL;
 }
 
@@ -97,15 +74,11 @@ void ob_network_thread_started(void)
         SocketBase = threadSocketBase;
         SocketBaseTags(SBTM_SETVAL(SBTC_ERRNOPTR(sizeof(errno))), (ULONG)&errno, TAG_DONE);
     }
-    if (AmiSSLBase)
-        InitAmiSSL(AmiSSL_ErrNoPtr, (ULONG)&errno, AmiSSL_SocketBase, (ULONG)SocketBase, TAG_DONE);
     resetFPCR();
 }
 
 void ob_network_thread_finished(void)
 {
-    if (AmiSSLBase)
-        CleanupAmiSSL(TAG_DONE);
     if (threadSocketBase)
         CloseLibrary(threadSocketBase);
     threadSocketBase = NULL;

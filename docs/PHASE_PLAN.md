@@ -27,7 +27,7 @@ Written 4 Oct 2026 after our direction, relayed word for word by the main sessio
 | --- | --- |
 | GadTools layout, font-sensitive groups, listviews | OpenAmigaPrint `include/oap_gt.h`, `src/ui/oap_gt.c` |
 | Datatypes in a GadTools window, scrollers, AppWindow drops | OpenAmigaView `src/viewer/oav_main.c` (in openamigaprint) |
-| bsdsocket + AmiSSL 5, signal waits, Ctrl-C | OpenAmigaMail `platform/` and engine net/TLS |
+| bsdsocket + TLS (OpenTLS; AmiSSL 5 until 19 October 2026), signal waits, Ctrl-C | OpenAmigaMail `platform/` and engine net/TLS |
 | HTML as text with numbered links (fallback) | OpenAmigaMail `oam_html` |
 | Opening links from mail | browser hook, shape agreed with the OpenAmigaMail session |
 
@@ -44,7 +44,7 @@ Written 4 Oct 2026 after our direction, relayed word for word by the main sessio
 ### Phase 1: first page on screen, without WebCore ("OAB Lite")
 A small native browser that is useful early while WebCore is brought up.
 1. GadTools shell: URL string gadget, Back/Forward/Reload/Stop, status line, a page area with scrollers. Built on `oap_gt`.
-2. Networking: HTTP/1.1 and HTTPS through OpenAmigaMail's net/TLS layer (AmiSSL 5), redirects, gzip later.
+2. Networking: HTTP/1.1 and HTTPS through OpenAmigaMail's net/TLS layer (OpenTLS; AmiSSL 5 until 19 October 2026), redirects, gzip later.
 3. Page view: HTML to styled text with numbered links (`oam_html` grown into a simple flow renderer: headings, paragraphs, lists, links, bold/italic), drawn with graphics.library text.
 4. Images inline through datatypes (PNG/JPEG/GIF/IFF), scaled to the page width.
 5. Browser hook for OpenAmigaMail and an ARexx port later.
@@ -80,8 +80,9 @@ Status, 4 October 2026: 2a and 2b are done on AmigaOS 3.2.3 (Instance-24):
 without a window. Choices made on the way, with the reasons in
 `WEBCORE_PORT.md`: cairo with pixman (Skia refuses big-endian CPUs), the
 Liberation and DejaVu fonts through fontconfig, pictures through the
-system's datatypes, and libcurl with AmiSSL for the loader, since WebCore
-already has a curl backend with cookies, redirects and TLS.
+system's datatypes, and libcurl for the loader (on OpenTLS since 19 October
+2026, AmiSSL before), since WebCore already has a curl backend with cookies,
+redirects and TLS.
 
 ### Phase 3: WebCore in the GadTools shell
 1. Swap the Phase 1 text view for the WebCore view inside the same shell: scrolling, link clicks, keyboard focus, text selection, forms (text fields, buttons, checkboxes, selects drawn natively).
