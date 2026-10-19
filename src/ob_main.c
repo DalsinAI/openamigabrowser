@@ -5,7 +5,7 @@
  *   the page, as wrapped text, links shown as "text [n]"
  *   [Links...]  the status line
  *
- * Pages come over HTTP/HTTPS (ob_http, on OpenMail's bsdsocket/AmiSSL
+ * Pages come over HTTP/HTTPS (ob_http, on OpenMail's bsdsocket/OpenTLS
  * layer) and are shown as text by OpenMail's HTML-to-text converter. Click
  * a line to follow its first link, or pick one from Links....
  * Other programs open addresses on the ARexx port AMIGACHROME.BROWSER
@@ -42,7 +42,7 @@
 
 struct Library *GadToolsBase = NULL;
 
-#define VERSION_TEXT "OpenBrowser 0.1 (4.10.2026)"
+#define VERSION_TEXT "OpenBrowser 0.1.1 (19.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT;
 #define PORT_NAME "AMIGACHROME.BROWSER"
 #define HOME_PAGE "http://example.com/"
@@ -632,7 +632,7 @@ static int browser_main(int argc, char **argv)
         set_status("No network: %s", err);
         show_text("OpenBrowser could not reach the network.\n\n"
                   "Check that a TCP/IP stack is running (bsdsocket.library) and that\n"
-                  "AmiSSL 5 is installed for https:// pages.");
+                  "OpenTLS (opentls.library, OpenUp's OpenTLS part) is installed.");
     } else {
         open_url(argc > 1 ? argv[1] : HOME_PAGE, TRUE);
     }
