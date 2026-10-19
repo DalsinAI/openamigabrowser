@@ -164,7 +164,8 @@ private:
     }
 
     void dispatchDidReceiveResponse(DocumentLoader*, ResourceLoaderIdentifier, const ResourceResponse&) final { }
-    void dispatchDidReceiveContentLength(DocumentLoader*, ResourceLoaderIdentifier, int) final { }
+    // Bytes as they arrive, counted for obcore-view's benchmark line.
+    void dispatchDidReceiveContentLength(DocumentLoader*, ResourceLoaderIdentifier, int length) final { m_view.addBytesReceived(length); }
     void dispatchDidFinishLoading(DocumentLoader*, ResourceLoaderIdentifier identifier) final
     {
         m_view.resourceEnded(m_requestURLs.take(identifier), { });

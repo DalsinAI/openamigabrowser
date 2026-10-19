@@ -85,6 +85,9 @@ void ob_webview_resize(OBWebView *view, int width, int height);
 /* The page's text (innerText of the document), UTF-8, cut to fit size;
  * returns its full length in bytes. */
 int ob_webview_text(OBWebView *view, char *buffer, int size);
+/* Bytes the view's requests have received since it was created, as WebCore
+ * reports them arriving (for tools/bench; 0 if the loader reports none). */
+unsigned long ob_webview_bytes_received(OBWebView *view);
 
 void ob_webview_paint(OBWebView *view, unsigned char *argb, int stride, int x, int y, int width, int height);
 /* The display-list experiment: paints the area directly into `direct` and,
