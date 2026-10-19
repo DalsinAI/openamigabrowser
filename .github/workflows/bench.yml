@@ -1,0 +1,107 @@
+name: Benchmark tools
+
+# tools/bench (the benchmark's staging, report and render comparison) on the
+# host, and its Amiga parts with the OpenAmigaGCC release and OpenNDK, pinned
+# as openamigacurl's CI pins them: obstamp is built, and obcore-view's source
+# is compiled for syntax (WebKit's own build links it on the lab machine).
+on:
+  push:
+    paths:
+      - 'tools/bench/**'
+      - 'tests/bench/**'
+      - 'tests/jsbench.html'
+      - 'tests/jsops.html'
+      - 'tests/pages/test1.html'
+      - 'src/webcore/obcore_view.c'
+      - 'src/webcore/ob_webview.h'
+      - '.github/workflows/bench.yml'
+  pull_request:
+    paths:
+      - 'tools/bench/**'
+      - 'tests/bench/**'
+      - 'tests/jsbench.html'
+      - 'tests/jsops.html'
+      - 'tests/pages/test1.html'
+      - 'src/webcore/obcore_view.c'
+      - 'src/webcore/ob_webview.h'
+      - '.github/workflows/bench.yml'
+  workflow_dispatch:
+
+env:
+  OPENSDK_REF: 5bfeaea0d004e86afb990fddb591bf0039f09233      # openamigasdk main, as openamigacurl
+  TC_URL: https://github.com/DalsinAI/openamigagcc/releases/download/v16.2.0-open3/openamigagcc-16.2.0-open3-x86_64-linux.tar.xz
+  TC_SHA256: 9fcc136ab59e3bb5b91d2764d0bf290b709d72d7380be4ce0cdf005edf8eff21
+
+jobs:
+  host:
+    # the Python tools' self-tests, and the pinned test262 slice fetched and checked
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python libraries for compare.py
+        run: python -m pip install pillow numpy
+      - name: Self-tests
+        run: python -m unittest discover -s tools/bench/tests -v
+      - name: Shell scripts parse
+        run: sh -n tools/bench/run-bench.sh
+      - name: test262 slice (every file against its pinned SHA-256)
+        run: |
+          python tools/bench/test262_slice.py fetch --out build/t262
+          test -s build/t262/t262_all.js
+          if command -v node >/dev/null; then
+            # the driver runs to its summary line in Node (jsc's print and load as shims)
+            cd build/t262 && node -e '
+              const fs = require("fs");
+              globalThis.print = (...a) => console.log(...a);
+              globalThis.load = (f) => (0, eval)(fs.readFileSync(f, "utf8"));
+              load("t262_all.js");' | tee node.txt | grep T262_SUMMARY
+          fi
+
+  amiga:
+    # obstamp, and obcore-view's source, for the 68040 with its FPU
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DalsinAI/openamigasdk
+          ref: ${{ env.OPENSDK_REF }}
+          path: openamigasdk
+      - name: Fetch the toolchain
+        run: |
+          mkdir -p tc
+          curl -fsSL -o tc/tc.tar.xz "$TC_URL"
+          echo "$TC_SHA256  tc/tc.tar.xz" | sha256sum -c -
+          tar xf tc/tc.tar.xz -C tc
+      - name: obstamp
+        run: |
+          D=tc/openamigagcc-16.2.0-open3-x86_64-linux/bin
+          mkdir -p build
+          $D/m68k-amigaos-gcc -m68040 -m68881 -mcrt=nix20 -std=gnu99 -O2 -Wall -Wextra -Werror \
+            -I openamigasdk/OpenNDK/Include_H tools/bench/obstamp.c -o build/obstamp
+          $D/m68k-amigaos-objdump -f build/obstamp | grep -q 'file format amiga'
+          strings build/obstamp | grep '\$VER: obstamp '
+      - name: obcore-view source compiles (syntax; cairo declared by a stand-in header)
+        run: |
+          D=tc/openamigagcc-16.2.0-open3-x86_64-linux/bin
+          mkdir -p build/stub
+          cat > build/stub/cairo.h <<'H'
+          typedef struct _cairo_surface cairo_surface_t;
+          typedef enum { CAIRO_STATUS_SUCCESS } cairo_status_t;
+          typedef enum { CAIRO_FORMAT_ARGB32 } cairo_format_t;
+          cairo_surface_t *cairo_image_surface_create_for_data(unsigned char *, cairo_format_t, int, int, int);
+          cairo_status_t cairo_surface_write_to_png(cairo_surface_t *, const char *);
+          const char *cairo_status_to_string(cairo_status_t);
+          void cairo_surface_destroy(cairo_surface_t *);
+          H
+          $D/m68k-amigaos-gcc -m68040 -m68881 -mcrt=nix20 -std=gnu99 -fsyntax-only -Wall -Wextra -Werror \
+            -I build/stub -I src/webcore -I third_party/openmail -I openamigasdk/OpenNDK/Include_H \
+            src/webcore/obcore_view.c
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obstamp-68040
+          path: build/obstamp
+          retention-days: 14
