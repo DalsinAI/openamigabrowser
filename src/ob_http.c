@@ -257,12 +257,19 @@ int ob_http_get(const char *url, ob_response *resp, char *err, size_t errlen)
     for (hops = 0; hops <= MAX_REDIRECTS; hops++) {
         ob_url u;
         char *location = NULL;
+        int n;
         if (!ob_url_parse(current, &u, err, errlen)) return 0;
-        snprintf(resp->final_url, sizeof resp->final_url, "%s%s%s%s",
-                 u.tls ? "https://" : "http://", u.host, "", u.path);
         if ((u.tls && u.port != 443) || (!u.tls && u.port != 80))
-            snprintf(resp->final_url, sizeof resp->final_url, "%s%s:%d%s",
-                     u.tls ? "https://" : "http://", u.host, u.port, u.path);
+            n = snprintf(resp->final_url, sizeof resp->final_url, "%s%s:%d%s",
+                         u.tls ? "https://" : "http://", u.host, u.port, u.path);
+        else
+            n = snprintf(resp->final_url, sizeof resp->final_url, "%s%s%s",
+                         u.tls ? "https://" : "http://", u.host, u.path);
+        if (n < 0 || n >= (int)sizeof resp->final_url) {
+            /* refused, not cut: a cut address is another address */
+            set_err(err, errlen, "The address is too long.");
+            return 0;
+        }
         resp->status = 0;
         resp->content_type[0] = resp->charset[0] = 0;
         if (!fetch_once(&u, resp, &location, err, errlen)) return 0;
