@@ -19,7 +19,7 @@ JavaScriptCore on its own runs in a Shell:
 ```
 
 **OpenBrowser Lite**, the first browser, is a GadTools window that opens
-http:// and https:// pages (bsdsocket.library and AmiSSL 5) and shows them as
+http:// and https:// pages (bsdsocket.library and OpenTLS) and shows them as
 text, with numbered links, Back and Reload. Other programs open pages in it
 through its ARexx port, `AMIGACHROME.BROWSER`:
 
@@ -49,15 +49,19 @@ No binaries are kept here, and no WebKit, ICU or AmigaOS files.
 
 ## Building
 
-OpenBrowser Lite needs bebbo's amiga-gcc (GCC 6.5, NDK 3.2) and the AmiSSL 5
-SDK's headers. It is built for the 68040, soft float (`toolchain/m68k-soft-m68040.specs`),
-so one build runs on a full 68040 and on an LC or EC040:
+OpenBrowser Lite is built with OpenAmigaGCC 16.2.0-open2 (the os32-gcc16
+stove; the GCC 6.5 stove builds it too), for the 68040, soft float
+(`toolchain/m68k-soft-m68040.specs`), so one build runs on a full 68040 and
+on an LC or EC040. Its TLS is OpenTLS: opentls.library's API headers are in
+`third_party/opentls`, and no AmiSSL SDK is needed (until 19 October 2026
+it was AmiSSL 5):
 
 ```
-STOVE=/path/to/amiga-gcc scripts/build-openbrowser.sh /path/to/AmiSSL/Developer/include
+STOVE=/path/to/os32-gcc16 scripts/build-openbrowser.sh
 ```
 
-It needs a TCP/IP stack (bsdsocket.library) and, for https://, AmiSSL 5.
+It needs a TCP/IP stack (bsdsocket.library) and, for https://, OpenTLS
+(opentls.library with opencrypto.library: OpenUp's OpenTLS part).
 
 The JavaScript engine:
 

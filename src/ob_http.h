@@ -1,5 +1,5 @@
 /* ob_http: fetch a web address over HTTP/1.1, plain or TLS, on oam_net
- * (bsdsocket.library and AmiSSL 5 on the Amiga).
+ * (bsdsocket.library and OpenTLS, opentls.library, on the Amiga).
  *
  * OpenBrowser. MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef OB_HTTP_H
