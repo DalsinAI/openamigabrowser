@@ -55,6 +55,10 @@
 #                   JOBS then defaults to their sum. Needs ccache and distcc.
 #   OB_TEST_DIR     folder to stage the test programs and pages in
 #                   (test-browser)
+#   OB_FONTS        folder holding the TrueType fonts the engine draws with
+#                   (the Liberation and DejaVu .ttf files); test-browser copies
+#                   them to Fonts/, which fontconfig reads as PROGDIR:Fonts.
+#                   The engine stops at its first page without them.
 #
 # usage: build-webcore.sh [COMMAND]
 #   configure-engine     make the build folder; for an existing folder, only
@@ -373,8 +377,12 @@ build_tests() {
 
 test_browser() {
     : "${OB_TEST_DIR:?set OB_TEST_DIR to the folder to stage the tests in}"
+    : "${OB_FONTS:?set OB_FONTS to the folder of the Liberation and DejaVu .ttf files}"
+    set -- "$OB_FONTS"/*.ttf
+    [ -f "$1" ] || { echo "no .ttf files in $OB_FONTS" >&2; exit 1; }
     strip="$GCC16/prefix/bin/m68k-amigaos-strip"
-    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig"
+    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig" "$OB_TEST_DIR/Fonts"
+    cp "$@" "$OB_TEST_DIR/Fonts/"
     for program in OpenBrowser OpenBrowser.engine obcore-view obcore-dump; do
         "$strip" -o "$OB_TEST_DIR/$program" "$BUILD/bin/$program"
     done
@@ -383,8 +391,8 @@ test_browser() {
     cp "$ROOT/src/webcore/blocklist" "$OB_TEST_DIR/"
     {
         echo "; OpenBrowser's test pages through obcore-view, staged by"
-        echo "; scripts/build-webcore.sh test-browser. From this drawer, with the"
-        echo "; fonts in Fonts: \"Execute OBTests\"; the results go to OBTests.log"
+        echo "; scripts/build-webcore.sh test-browser. From this drawer:"
+        echo "; \"Execute OBTests\"; the results go to OBTests.log"
         echo "; (expected results: tests/pages/README.md)."
         echo "FailAt 1000"
         echo "Stack 400000"
