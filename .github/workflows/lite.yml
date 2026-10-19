@@ -88,17 +88,17 @@ jobs:
       - name: Check the programs
         run: |
           D=tc/openamigagcc-16.2.0-open3-x86_64-linux/bin
-          for f in build/os3/OpenBrowser build/os3/obfetch build/os3/tests/* build/os3-library/OpenBrowser; do
+          for f in build/os3/OpenBrowserLite build/os3/obfetch build/os3/tests/* build/os3-library/OpenBrowserLite; do
             $D/m68k-amigaos-objdump -f "$f" | grep -q 'file format amiga' || { echo "$f is not an Amiga executable"; exit 1; }
           done
-          strings build/os3/OpenBrowser | grep '^\$VER: OpenBrowser 0\.4\.' 
-          if strings build/os3/OpenBrowser | grep -i amissl; then echo "AmiSSL is still named in OpenBrowser"; exit 1; fi
-          sha256sum build/os3/OpenBrowser build/os3/obfetch
+          strings build/os3/OpenBrowserLite | grep '^\$VER: OpenBrowserLite 0\.4\.' 
+          if strings build/os3/OpenBrowserLite | grep -i amissl; then echo "AmiSSL is still named in OpenBrowser"; exit 1; fi
+          sha256sum build/os3/OpenBrowserLite build/os3/obfetch
       - uses: actions/upload-artifact@v4
         with:
           name: openbrowser-lite-68040
           path: |
-            build/os3/OpenBrowser
+            build/os3/OpenBrowserLite
             build/os3/obfetch
             build/os3/tests/
           retention-days: 14

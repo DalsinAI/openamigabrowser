@@ -48,12 +48,12 @@ case "${OPENLAYOUT:-static}" in
 esac
 mkdir -p "$OUT"
 
-# OpenBrowser: the window (src/ob_main.c), HTTP (src/ob_http.c), weblayout,
+# OpenBrowserLite: the window (src/ob_main.c), HTTP (src/ob_http.c), weblayout,
 # OpenLayout and OpenMail's network layer
 "$CC" $CFLAGS $LDEF $INC \
     "$HERE"/src/ob_main.c "$HERE"/src/ob_http.c "$WL"/*.c $LAYOUT "$OM"/*.c \
-    -lamiga -o "$OUT/OpenBrowser"
-echo "$OUT/OpenBrowser ($(wc -c < "$OUT/OpenBrowser") bytes)"
+    -lamiga -o "$OUT/OpenBrowserLite"
+echo "$OUT/OpenBrowserLite ($(wc -c < "$OUT/OpenBrowserLite") bytes)"
 
 # obfetch: the same HTTP/HTTPS engine from a Shell, without the window or
 # the layout, so network faults can be told from layout faults
