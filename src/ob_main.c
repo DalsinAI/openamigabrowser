@@ -1,13 +1,15 @@
 /*
- * OpenBrowser: the main window, GadTools (Phase 1, "OpenBrowser Lite").
+ * OpenBrowser Lite: the main window, GadTools.
  *
  *   [Back] [Reload] [ address ............................ ] [Go]
- *   the page, as wrapped text, links shown as "text [n]"
+ *   the page, laid out: headings, lists, links, pictures, CSS colours
  *   [Links...]  the status line
  *
  * Pages come over HTTP/HTTPS (ob_http, on OpenMail's bsdsocket/OpenTLS
- * layer) and are shown as text by OpenMail's HTML-to-text converter. Click
- * a line to follow its first link, or pick one from Links....
+ * layer). weblayout (weblayout/weblayout.h, the bones of weblayout.library)
+ * lays them out and draws them: this file fetches what a page asks for
+ * (its stylesheets and pictures) and hands it over. Click a link to follow
+ * it, or pick one from Links....
  * Other programs open addresses on the ARexx port AMIGACHROME.BROWSER
  * with OPENURL <address> (the hook OpenMail uses).
  *
@@ -40,13 +42,11 @@
 #include "oam_stack.h"
 #include "oam_text.h"
 #include "ob_http.h"
-#include "lite/ob_html_lite.h"
-#include "lite/ob_layout_view.h"
-#include "lite/ob_image_dt.h"
+#include "weblayout/weblayout.h"
 
 struct Library *GadToolsBase = NULL;
 
-#define VERSION_TEXT "OpenBrowser 0.4 (7.10.2026)"
+#define VERSION_TEXT "OpenBrowser 0.4.1 (19.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT;
 #define PORT_NAME "AMIGACHROME.BROWSER"
 #define HOME_PAGE "http://example.com/"
@@ -59,15 +59,15 @@ enum { M_ABOUT = 1, M_QUIT, M_OPEN, M_RELOAD, M_BACK, M_LINKS };
 #define MARGIN 6
 
 static struct NewMenu menus[] = {
-    { NM_TITLE, "Project", NULL, 0, 0, NULL },
-    { NM_ITEM, "Open address", "L", 0, 0, (APTR)M_OPEN },
-    { NM_ITEM, "About...", NULL, 0, 0, (APTR)M_ABOUT },
+    { NM_TITLE, (CONST_STRPTR)"Project", NULL, 0, 0, NULL },
+    { NM_ITEM, (CONST_STRPTR)"Open address", (CONST_STRPTR)"L", 0, 0, (APTR)M_OPEN },
+    { NM_ITEM, (CONST_STRPTR)"About...", NULL, 0, 0, (APTR)M_ABOUT },
     { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
-    { NM_ITEM, "Quit", "Q", 0, 0, (APTR)M_QUIT },
-    { NM_TITLE, "Page", NULL, 0, 0, NULL },
-    { NM_ITEM, "Back", "B", 0, 0, (APTR)M_BACK },
-    { NM_ITEM, "Reload", "R", 0, 0, (APTR)M_RELOAD },
-    { NM_ITEM, "Links...", "K", 0, 0, (APTR)M_LINKS },
+    { NM_ITEM, (CONST_STRPTR)"Quit", (CONST_STRPTR)"Q", 0, 0, (APTR)M_QUIT },
+    { NM_TITLE, (CONST_STRPTR)"Page", NULL, 0, 0, NULL },
+    { NM_ITEM, (CONST_STRPTR)"Back", (CONST_STRPTR)"B", 0, 0, (APTR)M_BACK },
+    { NM_ITEM, (CONST_STRPTR)"Reload", (CONST_STRPTR)"R", 0, 0, (APTR)M_RELOAD },
+    { NM_ITEM, (CONST_STRPTR)"Links...", (CONST_STRPTR)"K", 0, 0, (APTR)M_LINKS },
     { NM_END, NULL, NULL, 0, 0, NULL }
 };
 
@@ -91,9 +91,10 @@ static char url_text[1280] = HOME_PAGE;
 static char *history[HISTORY_MAX];
 static int nhistory;
 
-static ob_html_lite_result page_layout;
-static BOOL page_layout_valid;
-static ob_layout_view page_view;
+/* the page, laid out by weblayout (weblayout/weblayout.h): Lite calls
+ * nothing else of the engine */
+static WLDocument *page_doc;
+static struct WLView page_view;
 
 /* rows are retained for the separate Links... chooser. */
 struct rows {
@@ -106,49 +107,21 @@ static char **links;          /* absolute addresses, links[0] is [1] */
 static int nlinks;
 static char page_url[1280];
 
+/* the page's pictures, fetched to T: for picture.datatype; the files are
+ * kept until the page goes (WL_SetImageFile) */
 #define PAGE_IMAGE_MAX 32
-struct page_image {
-    LONG image_id;
-    ob_dt_image image;
-    char temp_path[160];
-};
-static struct page_image page_images[PAGE_IMAGE_MAX];
+static char page_image_path[PAGE_IMAGE_MAX][64];
 static int npage_images;
 static ULONG page_image_generation;
-
-static LONG layout_px(ol_unit u)
-{
-    return (LONG)((u + OL_UNITS_PER_CSSPX / 2) / OL_UNITS_PER_CSSPX);
-}
 
 static void clear_page_images(void)
 {
     int i;
-    for (i = 0; i < npage_images; ++i) {
-        ob_dt_image_free(&page_images[i].image);
-        if (page_images[i].temp_path[0]) remove(page_images[i].temp_path);
-    }
-    memset(page_images, 0, sizeof page_images);
+    for (i = 0; i < npage_images; ++i)
+        if (page_image_path[i][0]) remove(page_image_path[i]);
+    memset(page_image_path, 0, sizeof page_image_path);
     npage_images = 0;
     ++page_image_generation;
-}
-
-static struct page_image *find_page_image(LONG image_id)
-{
-    int i;
-    for (i = 0; i < npage_images; ++i)
-        if (page_images[i].image_id == image_id) return &page_images[i];
-    return NULL;
-}
-
-static int draw_page_image(void *userdata, LONG image_id,
-                           struct RastPort *rp, WORD x, WORD y,
-                           UWORD width, UWORD height)
-{
-    struct page_image *image;
-    (void)userdata;
-    image = find_page_image(image_id);
-    return image ? ob_dt_image_draw(&image->image, rp, x, y, width, height) : 0;
 }
 
 static const char *image_suffix(const char *content_type)
@@ -177,53 +150,38 @@ static int save_image_body(const char *path, const ob_response *resp)
     return 1;
 }
 
-static void load_page_images(ol_document *document)
+/* fetch each picture the laid-out page shows and hand it to weblayout */
+static void load_page_images(void)
 {
-    size_t i, count;
-    if (!document || !scr) return;
-    count = ol_display_count(document);
+    ULONG i, count;
+    if (!page_doc || !scr) return;
+    count = WL_CountResources(page_doc, WLRES_IMAGE);
     for (i = 0; i < count && npage_images < PAGE_IMAGE_MAX; ++i) {
-        const ol_display_op *op = ol_display_get(document, i);
-        const ol_node *node;
-        const char *src;
-        char absolute[1280], err[200];
+        struct WLResource res;
+        char url[1280], err[200];
+        char *path = page_image_path[npage_images];
         ob_response resp;
-        struct page_image *slot;
-        LONG w, h;
 
-        if (!op || op->type != OL_OP_IMAGE) continue;
-        if (find_page_image((LONG)op->u.image.image_id)) continue;
-        node = ol_node_by_id(document, op->u.image.node_id);
-        src = node ? ol_node_value(node) : NULL;
-        if (!src || !*src || !strncasecmp(src, "data:", 5)) continue;
-        ob_url_resolve(page_url, src, absolute, sizeof absolute);
-        if (!ob_http_get(absolute, &resp, err, sizeof err)) {
+        res.wr_Size = sizeof res;
+        if (!WL_GetResource(page_doc, WLRES_IMAGE, i, &res)) continue;
+        if (!res.wr_URL || !*res.wr_URL || !strncasecmp((const char *)res.wr_URL, "data:", 5)) continue;
+        snprintf(url, sizeof url, "%s", (const char *)res.wr_URL);
+        if (!ob_http_get(url, &resp, err, sizeof err)) {
             ob_response_free(&resp);
             continue;
         }
-        if (resp.status != 200 ||
-            (resp.content_type[0] && strncasecmp(resp.content_type, "image/", 6))) {
-            ob_response_free(&resp);
-            continue;
-        }
-
-        slot = &page_images[npage_images];
-        memset(slot, 0, sizeof(*slot));
-        slot->image_id = (LONG)op->u.image.image_id;
-        snprintf(slot->temp_path, sizeof slot->temp_path,
-                 "T:OpenBrowser-%08lx-%ld.%s",
-                 (unsigned long)page_image_generation,
-                 (long)slot->image_id, image_suffix(resp.content_type));
-        w = layout_px(op->u.image.bounds.width);
-        h = layout_px(op->u.image.bounds.height);
-        if (save_image_body(slot->temp_path, &resp) &&
-            ob_dt_image_load(&slot->image, slot->temp_path, scr,
-                             (UWORD)(w > 0 ? w : 1),
-                             (UWORD)(h > 0 ? h : 1))) {
-            ++npage_images;
-        } else {
-            if (slot->temp_path[0]) remove(slot->temp_path);
-            memset(slot, 0, sizeof(*slot));
+        if (resp.status == 200 &&
+            (!resp.content_type[0] || !strncasecmp(resp.content_type, "image/", 6))) {
+            snprintf(path, sizeof page_image_path[0], "T:OpenBrowser-%08lx-%ld.%s",
+                     (unsigned long)page_image_generation, (long)res.wr_ID,
+                     image_suffix(resp.content_type));
+            if (save_image_body(path, &resp) &&
+                WL_SetImageFile(page_doc, res.wr_ID, (CONST_STRPTR)path, scr)) {
+                ++npage_images;             /* the file stays until the page goes */
+            } else {
+                remove(path);
+                path[0] = 0;
+            }
         }
         ob_response_free(&resp);
     }
@@ -280,6 +238,13 @@ static void free_links(void)
     nlinks = 0;
 }
 
+static void clamp_scroll(void)
+{
+    LONG max = WL_ContentHeight(page_doc) - page_view.wv_Height;
+    if (page_view.wv_ScrollY > max) page_view.wv_ScrollY = max;
+    if (page_view.wv_ScrollY < 0) page_view.wv_ScrollY = 0;
+}
+
 /* ---- gadgets ------------------------------------------------------------------ */
 
 static struct Gadget *button(struct Gadget *g, struct NewGadget *ng, int id, const char *label, int x, int y, int w)
@@ -327,17 +292,21 @@ static void make_gadgets(void)
     page_height = h;
     if (page_width < 1) page_width = 1;
     if (page_height < 1) page_height = 1;
-    ob_layout_view_set_rect(&page_view, page_left, page_top, page_width, page_height);
-    if (page_layout_valid) ob_layout_view_set_document(&page_view, page_layout.document);
+    page_view.wv_Left = page_left;
+    page_view.wv_Top = page_top;
+    page_view.wv_Width = page_width;
+    page_view.wv_Height = page_height;
+    if (page_doc) WL_Layout(page_doc, &page_view);
+    clamp_scroll();
 
     ng.ng_LeftEdge = page_left + page_width + PAD; ng.ng_TopEdge = page_top;
     ng.ng_Width = 20; ng.ng_Height = page_height;
     ng.ng_GadgetText = NULL; ng.ng_GadgetID = GID_SCROLL; ng.ng_Flags = 0; ng.ng_TextAttr = &font_attr;
     {
-        LONG total = ob_layout_view_content_px(&page_view);
+        LONG total = WL_ContentHeight(page_doc);
         if (total < page_height) total = page_height;
         g = CreateGadget(SCROLLER_KIND, g, &ng,
-                         GTSC_Top, (ULONG)page_view.scroll_px,
+                         GTSC_Top, (ULONG)page_view.wv_ScrollY,
                          GTSC_Total, (ULONG)total,
                          GTSC_Visible, (ULONG)page_height,
                          GTSC_Arrows, 14, TAG_DONE);
@@ -367,7 +336,7 @@ static void redo(void)
     AddGList(win, glist, ~0, -1, NULL);
     RefreshGList(glist, win, NULL, -1);
     GT_RefreshWindow(win, NULL);
-    ob_layout_view_draw(&page_view);
+    WL_Draw(page_doc, &page_view);
 }
 
 /* ---- pages -------------------------------------------------------------------- */
@@ -376,109 +345,72 @@ static void update_scroller(void)
 {
     LONG total;
     if (!win || !gad[GID_SCROLL]) return;
-    total = ob_layout_view_content_px(&page_view);
+    total = WL_ContentHeight(page_doc);
     if (total < page_height) total = page_height;
     GT_SetGadgetAttrs(gad[GID_SCROLL], win, NULL,
-                      GTSC_Top, (ULONG)page_view.scroll_px,
+                      GTSC_Top, (ULONG)page_view.wv_ScrollY,
                       GTSC_Total, (ULONG)total,
                       GTSC_Visible, (ULONG)page_height, TAG_DONE);
 }
 
 static void clear_layout(void)
 {
+    WL_DisposeDocument(page_doc);   /* before its picture files go */
+    page_doc = NULL;
     clear_page_images();
-    if (page_layout_valid) ob_html_lite_result_free(&page_layout);
-    memset(&page_layout, 0, sizeof page_layout);
-    page_layout_valid = FALSE;
-    ob_layout_view_set_document(&page_view, NULL);
+    page_view.wv_ScrollY = 0;
 }
 
-static int fetch_page_stylesheets(const ob_html_lite_result *parsed, oam_buf *css)
+/* each stylesheet the page names, fetched and handed to weblayout */
+static void fetch_page_stylesheets(void)
 {
-    int i, loaded = 0;
-    const size_t max_css = 256UL * 1024UL;
-    if (!parsed || !css) return 0;
-    for (i = 0; i < parsed->nstylesheets && i < 8; ++i) {
-        char absolute[1280], err[200];
+    ULONG i, count = WL_CountResources(page_doc, WLRES_STYLESHEET);
+    for (i = 0; i < count && i < 8; ++i) {
+        struct WLResource res;
+        char url[1280], err[200];
         ob_response resp;
-        const char *href = parsed->stylesheet_href[i];
-        if (!href || !*href || !strncasecmp(href, "data:", 5)) continue;
-        ob_url_resolve(page_url, href, absolute, sizeof absolute);
-        if (!ob_http_get(absolute, &resp, err, sizeof err)) {
+        res.wr_Size = sizeof res;
+        if (!WL_GetResource(page_doc, WLRES_STYLESHEET, i, &res)) continue;
+        if (!res.wr_URL || !*res.wr_URL || !strncasecmp((const char *)res.wr_URL, "data:", 5)) continue;
+        snprintf(url, sizeof url, "%s", (const char *)res.wr_URL);
+        if (!ob_http_get(url, &resp, err, sizeof err)) {
             ob_response_free(&resp);
             continue;
         }
         if (resp.status == 200 && resp.body.len &&
             (!resp.content_type[0] || strstr(resp.content_type, "css") ||
-             !strncmp(resp.content_type, "text/", 5)) &&
-            css->len + resp.body.len + 1 <= max_css) {
-            oam_buf_add(css, oam_buf_str(&resp.body), resp.body.len);
-            oam_buf_addc(css, '\n');
-            if (!css->failed) ++loaded;
-        }
+             !strncmp(resp.content_type, "text/", 5)))
+            WL_AddStyleSheet(page_doc, (CONST_STRPTR)oam_buf_str(&resp.body), (ULONG)resp.body.len);
         ob_response_free(&resp);
-        if (css->failed) break;
     }
-    return loaded;
+}
+
+/* a page from UTF-8: laid out, its pictures fetched, drawn */
+static int show_page(const char *utf8, size_t len, ULONG kind)
+{
+    clear_layout();
+    page_doc = WL_NewDocument((CONST_STRPTR)utf8, (ULONG)len, kind, (CONST_STRPTR)page_url);
+    if (!page_doc) return 0;
+    if (kind == WLKIND_HTML) fetch_page_stylesheets();
+    if (!WL_Layout(page_doc, &page_view)) {
+        clear_layout();
+        return 0;
+    }
+    if (kind == WLKIND_HTML) load_page_images();
+    update_scroller();
+    WL_Draw(page_doc, &page_view);
+    return 1;
 }
 
 static int show_html(const char *utf8, size_t len)
 {
-    oam_buf css;
-    int external = 0;
-    clear_layout();
-    if (!ob_html_lite_parse(utf8, len, &page_layout)) return 0;
-
-    oam_buf_init(&css);
-    if (page_layout.nstylesheets)
-        external = fetch_page_stylesheets(&page_layout, &css);
-    if (external > 0 && !css.failed) {
-        ob_html_lite_result_free(&page_layout);
-        memset(&page_layout, 0, sizeof page_layout);
-        if (!ob_html_lite_parse_with_css(utf8, len, oam_buf_str(&css), css.len,
-                                         &page_layout)) {
-            oam_buf_free(&css);
-            return 0;
-        }
-    }
-    oam_buf_free(&css);
-
-    page_layout_valid = TRUE;
-    if (!ob_layout_view_set_document(&page_view, page_layout.document)) {
-        clear_layout();
-        return 0;
-    }
-    load_page_images(page_layout.document);
-    update_scroller();
-    ob_layout_view_draw(&page_view);
-    return 1;
+    return show_page(utf8, len, WLKIND_HTML);
 }
 
 static int show_text(const char *utf8)
 {
-    ol_node *root, *pre, *text;
-    ol_style style;
-    clear_layout();
-    page_layout.document = ol_document_new();
-    if (!page_layout.document) return 0;
-    page_layout.title = strdup("");
-    if (!page_layout.title) { clear_layout(); return 0; }
-    root = ol_document_root(page_layout.document);
-    pre = ol_node_append(page_layout.document, root, OL_ROLE_BLOCK, NULL);
-    text = pre ? ol_node_append(page_layout.document, pre, OL_ROLE_TEXT, utf8 ? utf8 : "") : NULL;
-    if (!pre || !text) { clear_layout(); return 0; }
-    ol_style_init(&style);
-    style.display = OL_DISPLAY_BLOCK;
-    style.padding_top = style.padding_right = style.padding_bottom = style.padding_left = OL_CSSPX(8);
-    ol_node_set_style(pre, &style);
-    style.display = OL_DISPLAY_INLINE;
-    style.text_flags = OL_TEXT_MONO;
-    ol_node_set_style(text, &style);
-    page_layout_valid = TRUE;
-    if (!ob_layout_view_set_document(&page_view, page_layout.document)) { clear_layout(); return 0; }
-    update_scroller();
-    ob_layout_view_draw(&page_view);
-    return 1;
+    if (!utf8) utf8 = "";
+    return show_page(utf8, strlen(utf8), WLKIND_TEXT);
 }
 
 /* links as OpenMail's converter gives them (one per line) made absolute */
@@ -660,7 +592,7 @@ static BOOL open_window(void)
     if (!drawinfo) return FALSE;
     font_attr = *scr->Font;
     if (!(font = OpenFont(&font_attr))) return FALSE;
-    fixed_attr.ta_Name = fixed->tf_Message.mn_Node.ln_Name;
+    fixed_attr.ta_Name = (STRPTR)fixed->tf_Message.mn_Node.ln_Name;
     fixed_attr.ta_YSize = fixed->tf_YSize;
     fixed_attr.ta_Style = fixed->tf_Style;
     fixed_attr.ta_Flags = fixed->tf_Flags;
@@ -681,13 +613,14 @@ static BOOL open_window(void)
                                    SCROLLERIDCMP | BUTTONIDCMP | STRINGIDCMP | TEXTIDCMP,
                          TAG_DONE);
     if (!win) return FALSE;
-    ob_layout_view_init(&page_view, win->RPort, font);
-    ob_layout_view_set_pens(&page_view,
-                            drawinfo->dri_Pens[TEXTPEN],
-                            drawinfo->dri_Pens[BACKGROUNDPEN],
-                            drawinfo->dri_Pens[FILLPEN],
-                            drawinfo->dri_Pens[SHINEPEN]);
-    ob_layout_view_set_image_drawer(&page_view, draw_page_image, NULL);
+    memset(&page_view, 0, sizeof page_view);
+    page_view.wv_Size = sizeof page_view;
+    page_view.wv_RPort = win->RPort;
+    page_view.wv_Font = font;
+    page_view.wv_TextPen = drawinfo->dri_Pens[TEXTPEN];
+    page_view.wv_BackPen = drawinfo->dri_Pens[BACKGROUNDPEN];
+    page_view.wv_LinkPen = drawinfo->dri_Pens[FILLPEN];
+    page_view.wv_FillPen = drawinfo->dri_Pens[SHINEPEN];
     if (menu) SetMenuStrip(win, menu);
     redo();
     return TRUE;
@@ -743,20 +676,18 @@ static void scroll_from_gadget(void)
 {
     ULONG top = 0;
     if (!win || !gad[GID_SCROLL]) return;
-    GT_GetGadgetAttrs(gad[GID_SCROLL], win, NULL, GTSC_Top, &top, TAG_DONE);
-    ob_layout_view_scroll_to(&page_view, (LONG)top);
-    ob_layout_view_draw(&page_view);
+    GT_GetGadgetAttrs(gad[GID_SCROLL], win, NULL, GTSC_Top, (ULONG)&top, TAG_DONE);
+    page_view.wv_ScrollY = (LONG)top;
+    clamp_scroll();
+    WL_Draw(page_doc, &page_view);
 }
 
 static void open_page_link_at(WORD x, WORD y)
 {
-    const ol_node *node = ob_layout_view_hit_action(&page_view, x, y, OL_ACTION_ACTIVATE);
-    const char *href;
+    CONST_STRPTR href = WL_HitLink(page_doc, &page_view, x, y);
     char target[1280];
-    if (!node) return;
-    href = ol_node_href(node);
     if (!href || !*href) return;
-    ob_url_resolve(page_url, href, target, sizeof target);
+    snprintf(target, sizeof target, "%s", (const char *)href);
     open_url(target, TRUE);
 }
 
@@ -774,7 +705,7 @@ static void window_events(void)
         case IDCMP_MENUPICK: menu_pick(code); break;
         case IDCMP_NEWSIZE: redo(); break;
         case IDCMP_REFRESHWINDOW:
-            GT_BeginRefresh(win); GT_EndRefresh(win, TRUE); ob_layout_view_draw(&page_view); break;
+            GT_BeginRefresh(win); GT_EndRefresh(win, TRUE); WL_Draw(page_doc, &page_view); break;
         case IDCMP_MOUSEBUTTONS:
             if (code == SELECTDOWN) open_page_link_at(mx, my);
             break;
@@ -824,13 +755,13 @@ static void rexx_events(void)
 static int browser_main(int argc, char **argv)
 {
     char err[200];
-    if (!ob_openlayout_open()) {
+    if (!WL_Open()) {
         PutStr((STRPTR)"OpenBrowser needs openlayout.library 2 or later\n");
         return 20;
     }
     if (!(GadToolsBase = OpenLibrary((STRPTR)"gadtools.library", 39))) {
         PutStr((STRPTR)"OpenBrowser needs AmigaOS 3.0 or later (gadtools.library 39)\n");
-        ob_openlayout_close();
+        WL_Close();
         return 20;
     }
     Forbid();
@@ -845,7 +776,7 @@ static int browser_main(int argc, char **argv)
         close_window();
         if (rexx_port) { RemPort(rexx_port); DeleteMsgPort(rexx_port); }
         CloseLibrary(GadToolsBase);
-        ob_openlayout_close();
+        WL_Close();
         return 20;
     }
     ob_http_progress = progress;
@@ -879,9 +810,8 @@ static int browser_main(int argc, char **argv)
     free_links();
     while (nhistory) free(history[--nhistory]);
     oam_net_cleanup();
-    ob_dt_close();
     CloseLibrary(GadToolsBase);
-    ob_openlayout_close();
+    WL_Close();
     return 0;
 }
 

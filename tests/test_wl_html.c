@@ -1,4 +1,4 @@
-#include "ob_html_lite.h"
+#include "wl_html.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -8,14 +8,14 @@
 
 static int probe_case(const char *name, const char *html)
 {
-    ob_html_lite_result r;
+    wl_html_result r;
     printf("HTMLLITE probe=%s begin\n", name); fflush(stdout);
-    if (!ob_html_lite_parse(html, strlen(html), &r)) {
+    if (!wl_html_parse(html, strlen(html), &r)) {
         printf("HTMLLITE probe=%s parse-fail\n", name); fflush(stdout);
         return 0;
     }
     printf("HTMLLITE probe=%s parsed\n", name); fflush(stdout);
-    ob_html_lite_result_free(&r);
+    wl_html_result_free(&r);
     printf("HTMLLITE probe=%s freed\n", name); fflush(stdout);
     return 1;
 }
@@ -62,14 +62,14 @@ int main(void)
         "<p><img src=\"logo.png\" alt=\"Logo\" width=\"80\" height=\"40\"> image.</p>"
         "<script>document.body.textContent='not executed';</script>"
         "</body></html>";
-    ob_html_lite_result r;
+    wl_html_result r;
     const ol_node *link;
     const ol_style *style;
     ol_rect box;
     ol_unit h1, h2;
 
     MARK("open-begin");
-    CHECK(ob_openlayout_open());
+    CHECK(wl_openlayout_open());
     MARK("opened");
     CHECK(probe_case("p", "<p>x</p>"));
     CHECK(probe_case("link", "<p><a href=\"https://example.com/\">x</a></p>"));
@@ -78,17 +78,17 @@ int main(void)
     {
         static const char ext_html[] = "<p class=\"ext\">external css</p>";
         static const char ext_css[] = ".ext{color:#abcdef;font-weight:bold}";
-        ob_html_lite_result ext;
-        CHECK(ob_html_lite_parse_with_css(ext_html, sizeof(ext_html) - 1,
+        wl_html_result ext;
+        CHECK(wl_html_parse_with_css(ext_html, sizeof(ext_html) - 1,
                                           ext_css, sizeof(ext_css) - 1, &ext));
         CHECK(ol_layout(ext.document, OL_CSSPX(320), NULL, NULL));
         style = find_text_style(ext.document, "external css");
         CHECK(style != NULL);
         CHECK(style->foreground == 0xffabcdefu);
         CHECK(style->text_flags & OL_TEXT_BOLD);
-        ob_html_lite_result_free(&ext);
+        wl_html_result_free(&ext);
     }
-    CHECK(ob_html_lite_parse(html, sizeof(html) - 1, &r));
+    CHECK(wl_html_parse(html, sizeof(html) - 1, &r));
     MARK("parsed");
     CHECK(r.document != NULL);
     CHECK(r.title != NULL);
@@ -144,7 +144,7 @@ int main(void)
            (unsigned long)ol_display_count(r.document),
            r.saw_script);
 
-    ob_html_lite_result_free(&r);
-    ob_openlayout_close();
+    wl_html_result_free(&r);
+    wl_openlayout_close();
     return 0;
 }

@@ -2,7 +2,7 @@
 #include "oam_buf.h"
 #include "oam_net.h"
 #include "oam_stack.h"
-#include "ob_image_dt.h"
+#include "wl_image_dt.h"
 
 #include <intuition/screens.h>
 #include <proto/intuition.h>
@@ -16,7 +16,7 @@ static int image_fetch_main(int argc, char **argv)
     char err[200];
     ob_response resp;
     struct Screen *screen = NULL;
-    ob_dt_image image = {0};
+    wl_dt_image image = {0};
     FILE *f = NULL;
     int rc = 20;
 
@@ -52,7 +52,7 @@ static int image_fetch_main(int argc, char **argv)
         puts("IMGNET FAIL screen");
         goto done;
     }
-    if (!ob_dt_image_load(&image, path, screen, 0, 0)) {
+    if (!wl_dt_image_load(&image, path, screen, 0, 0)) {
         puts("IMGNET FAIL datatype");
         goto done;
     }
@@ -63,12 +63,12 @@ static int image_fetch_main(int argc, char **argv)
 
 done:
     if (f) fclose(f);
-    ob_dt_image_free(&image);
+    wl_dt_image_free(&image);
     if (screen) UnlockPubScreen(NULL, screen);
     remove(path);
     ob_response_free(&resp);
     oam_net_cleanup();
-    ob_dt_close();
+    wl_dt_close();
     return rc;
 }
 

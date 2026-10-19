@@ -1,8 +1,8 @@
 /*
- * OpenBrowser picture.datatype image service.
- * Copyright (c) 2026 Dalsin Limited. MIT.
+ * weblayout: page pictures through picture.datatype.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
-#include "ob_image_dt.h"
+#include "wl_image_dt.h"
 
 #include <exec/libraries.h>
 #include <intuition/screens.h>
@@ -16,14 +16,14 @@
 
 struct Library *DataTypesBase = NULL;
 
-int ob_dt_open(void)
+int wl_dt_open(void)
 {
     if (DataTypesBase) return 1;
     DataTypesBase = OpenLibrary((CONST_STRPTR)"datatypes.library", 44);
     return DataTypesBase != NULL;
 }
 
-void ob_dt_close(void)
+void wl_dt_close(void)
 {
     if (DataTypesBase) {
         CloseLibrary(DataTypesBase);
@@ -31,7 +31,7 @@ void ob_dt_close(void)
     }
 }
 
-void ob_dt_image_free(ob_dt_image *image)
+void wl_dt_image_free(wl_dt_image *image)
 {
     if (!image) return;
     WaitBlit();
@@ -39,7 +39,7 @@ void ob_dt_image_free(ob_dt_image *image)
     memset(image, 0, sizeof(*image));
 }
 
-int ob_dt_image_load(ob_dt_image *image, const char *path,
+int wl_dt_image_load(wl_dt_image *image, const char *path,
                      struct Screen *screen, UWORD width, UWORD height)
 {
     Object *object;
@@ -47,8 +47,8 @@ int ob_dt_image_load(ob_dt_image *image, const char *path,
     struct BitMap *bitmap = NULL;
     PLANEPTR mask = NULL;
 
-    if (!image || !path || !*path || !screen || !ob_dt_open()) return 0;
-    ob_dt_image_free(image);
+    if (!image || !path || !*path || !screen || !wl_dt_open()) return 0;
+    wl_dt_image_free(image);
 
     object = NewDTObject((CONST_STRPTR)path,
                          DTA_SourceType, DTST_FILE,
@@ -101,7 +101,7 @@ int ob_dt_image_load(ob_dt_image *image, const char *path,
     return 1;
 }
 
-int ob_dt_image_draw(const ob_dt_image *image, struct RastPort *rp,
+int wl_dt_image_draw(const wl_dt_image *image, struct RastPort *rp,
                      WORD x, WORD y, UWORD width, UWORD height)
 {
     UWORD w, h;

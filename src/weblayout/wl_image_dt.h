@@ -1,5 +1,5 @@
-#ifndef OB_IMAGE_DT_H
-#define OB_IMAGE_DT_H
+#ifndef WL_IMAGE_DT_H
+#define WL_IMAGE_DT_H
 
 #include <exec/types.h>
 #include <graphics/gfx.h>
@@ -15,14 +15,14 @@ typedef struct {
     UWORD source_height;
     UWORD width;
     UWORD height;
-} ob_dt_image;
+} wl_dt_image;
 
-int ob_dt_open(void);
-void ob_dt_close(void);
-int ob_dt_image_load(ob_dt_image *image, const char *path,
+int wl_dt_open(void);
+void wl_dt_close(void);
+int wl_dt_image_load(wl_dt_image *image, const char *path,
                      struct Screen *screen, UWORD width, UWORD height);
-void ob_dt_image_free(ob_dt_image *image);
-int ob_dt_image_draw(const ob_dt_image *image, struct RastPort *rp,
+void wl_dt_image_free(wl_dt_image *image);
+int wl_dt_image_draw(const wl_dt_image *image, struct RastPort *rp,
                      WORD x, WORD y, UWORD width, UWORD height);
 
 #endif
