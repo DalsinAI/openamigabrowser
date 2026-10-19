@@ -2,6 +2,10 @@
 
 Status: design, 5 October 2026. Nothing here is built yet beyond the probe.
 
+Note, 19 October 2026: the engine no longer uses AmiSSL (curl does TLS through
+OpenTLS, WebKit patch 0022), so the AmiSSL provider path below is out of the
+browser's build. The measurements still stand.
+
 ## What we want
 
 Each new HTTPS connection makes the Amiga do several seconds of public-key

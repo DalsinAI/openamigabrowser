@@ -219,7 +219,7 @@ void ob_webcore_stop_threads(void)
 void ob_webcore_shutdown(void)
 {
     // The network thread ends first: the program cannot exit while it runs,
-    // and it uses the sockets and AmiSSL that are closed below.
+    // and it uses the sockets that are closed below.
     stopAmigaNetwork();
     ob_webcore_stop_threads();
     cookieJar() = nullptr;

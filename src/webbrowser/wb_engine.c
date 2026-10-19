@@ -46,7 +46,7 @@ static struct MsgPort *timerPort;
 static struct timerequest *timerRequest;
 static int timerPending;
 static struct MsgPort *enginePort;
-static int networkUp;                   /* bsdsocket.library and AmiSSL opened */
+static int networkUp;                   /* bsdsocket.library opened */
 static struct WBMessage *current;       /* the message being handled */
 
 /* abort(), replaced: the programs waiting on the engine get WBERR_NOENGINE
