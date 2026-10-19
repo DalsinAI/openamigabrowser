@@ -10,6 +10,9 @@ standard", and "lite should almost create the bones of a weblayout.library".
 
 ## What changed since 0.4
 
+- The program is OpenBrowserLite (`$VER: OpenBrowserLite 0.4.1`), its window
+  "OpenBrowser Lite", so that `Version` and OpenUp tell it from OpenBrowser
+  on WebKit. The ARexx port is still AMIGACHROME.BROWSER.
 - TLS is OpenTLS only, main's way (third_party/opentls, OpenMail 0.3.3's
   network layer). The branch's own AmiSSL-to-OpenTLS swap is not taken. The
   CA list is OpenTLS's, `S:OpenTLS/ca-bundle.pem`.
@@ -36,7 +39,7 @@ standard", and "lite should almost create the bones of a weblayout.library".
 
 - The host tests (HTML Lite, CSS Lite, addresses) pass, also with
   AddressSanitizer and UBSan.
-- OpenBrowser, obfetch and the four Amiga test programs build with no
+- OpenBrowserLite, obfetch and the four Amiga test programs build with no
   warnings, with OpenLayout built in and with the resident
   openlayout.library.
 

@@ -46,7 +46,7 @@
 
 struct Library *GadToolsBase = NULL;
 
-#define VERSION_TEXT "OpenBrowser 0.4.1 (19.10.2026)"
+#define VERSION_TEXT "OpenBrowserLite 0.4.1 (19.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT;
 #define PORT_NAME "AMIGACHROME.BROWSER"
 #define HOME_PAGE "http://example.com/"
@@ -602,7 +602,7 @@ static BOOL open_window(void)
     if ((menu = CreateMenus(menus, TAG_DONE))) LayoutMenus(menu, vi, GTMN_NewLookMenus, TRUE, TAG_DONE);
     w = scr->Width * 9 / 10;
     h = scr->Height * 8 / 10;
-    win = OpenWindowTags(NULL, WA_Title, (ULONG)"OpenBrowser", WA_ScreenTitle, (ULONG)VERSION_TEXT,
+    win = OpenWindowTags(NULL, WA_Title, (ULONG)"OpenBrowser Lite", WA_ScreenTitle, (ULONG)VERSION_TEXT,
                          WA_PubScreen, (ULONG)scr, WA_Width, w, WA_Height, h,
                          WA_Left, (scr->Width - w) / 2, WA_Top, (scr->Height - h) / 2,
                          WA_MinWidth, cw * 40, WA_MinHeight, (fh + 6) * 8, WA_MaxWidth, ~0, WA_MaxHeight, ~0,
@@ -639,7 +639,7 @@ static void close_window(void)
 
 static void about(void)
 {
-    struct EasyStruct es = { sizeof(struct EasyStruct), 0, (UBYTE *)"OpenBrowser",
+    struct EasyStruct es = { sizeof(struct EasyStruct), 0, (UBYTE *)"OpenBrowser Lite",
         (UBYTE *)VERSION_TEXT "\n\nA web browser for AmigaOS 3.2.\nMIT licence, Copyright (c) 2026 AmigaChrome Team.", (UBYTE *)"OK" };
     EasyRequestArgs(win, &es, NULL, NULL);
 }
