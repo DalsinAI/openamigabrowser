@@ -1,6 +1,10 @@
 # OpenLayout Lite browser path
 
-Status: first semantic adapter built, 7 October 2026.
+Status: first semantic adapter built, 7 October 2026. Since 0.4.1 (19
+October 2026) the engine lives in `src/weblayout/` behind one header,
+`weblayout.h`, the bones of weblayout.library (`docs/WEBLAYOUT_LIBRARY.md`);
+`ob_html_lite` is `wl_html` there, `ob_css_lite` `wl_css`, `ob_layout_view`
+`wl_paint` and `ob_image_dt` `wl_image_dt`. TLS is OpenTLS, not AmiSSL.
 
 This branch adds the first engine slice for the super-lightweight OpenBrowser path without changing the working GadTools browser window yet.
 
@@ -41,14 +45,18 @@ Tables are preserved semantically but counted as unsupported until OpenLayout ha
 Host:
 
 ```sh
-OPENLAYOUT_ROOT=/home/da1ek/openamigalayout ./scripts/build-html-lite-host.sh
+OPENLAYOUT_SRC=../openamigalayout tests/run-host-tests.sh
 ```
 
 AmigaOS 3.x / 68040 + FPU:
 
 ```sh
-OPENLAYOUT_ROOT=/home/da1ek/openamigalayout ./scripts/build-html-lite-amiga.sh
+TOOLCHAIN_DIR=... NDK_INCLUDE=.../OpenNDK/Include_H OPENLAYOUT_SRC=../openamigalayout \
+    TESTS=1 scripts/build-openbrowser.sh
 ```
+
+(`build/os3/tests/HTMLLiteTest`; CI builds it on every change,
+`.github/workflows/lite.yml`.)
 
 The first m68k test binary is 37,216 bytes and verifies:
 
@@ -96,7 +104,7 @@ OpenBrowser 0.2 is the first resident-OpenLayout build. Its gate is:
 - the semantic HTML adapter passes through the resident ABI;
 - the GadTools browser renders through the OpenLayout display list;
 - scrolling and semantic link activation remain live;
-- the existing HTTP/HTTPS, AmiSSL, redirects, URL and charset plumbing remains linked;
+- the existing HTTP/HTTPS (AmiSSL then; OpenTLS since 0.4.1), redirects, URL and charset plumbing remains linked;
 - a guest launch against an HTTPS page completes without falling back to the full WebKit engine.
 
 The full engine remains a separate escalation path, not a dependency of the Lite renderer.

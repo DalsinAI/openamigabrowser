@@ -1,18 +1,18 @@
 /*
- * OpenBrowser Lite semantic HTML adapter.
+ * weblayout: HTML to an OpenLayout semantic tree (HTML Lite).
  * Derived in approach from OpenMail's small MIT HTML-to-text tokenizer,
  * but emits an OpenLayout tree rather than flattening the document.
- * Copyright (c) 2026 Dalsin Limited. MIT.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
-#include "ob_html_lite.h"
-#include "ob_css_lite.h"
+#include "wl_html.h"
+#include "wl_css.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define OBHL_MAX_DEPTH 64
+#define WL_HTML_MAX_DEPTH 64
 
 struct sb {
     char *p;
@@ -31,14 +31,14 @@ struct frame {
 };
 
 struct parser {
-    ob_html_lite_result *result;
-    struct frame stack[OBHL_MAX_DEPTH];
+    wl_html_result *result;
+    struct frame stack[WL_HTML_MAX_DEPTH];
     int depth;
     int in_head;
     int pending_space;
     int have_text;
     int next_image_id;
-    ob_css_sheet css;
+    wl_css_sheet css;
 };
 
 static int sb_reserve(struct sb *b, size_t extra)
@@ -233,7 +233,7 @@ static int token_ci(const char *list, const char *want)
     return 0;
 }
 
-static int add_stylesheet_ref(ob_html_lite_result *result, const char *href)
+static int add_stylesheet_ref(wl_html_result *result, const char *href)
 {
     char **refs;
     char *copy;
@@ -269,7 +269,7 @@ static void apply_element_css(struct parser *p, const char *tag,
     have_id = attribute(attrs, tag_end, "id", id, sizeof(id));
     have_classes = attribute(attrs, tag_end, "class", classes, sizeof(classes));
     have_inline = attribute(attrs, tag_end, "style", inline_style, sizeof(inline_style));
-    ob_css_apply(&p->css, tag,
+    wl_css_apply(&p->css, tag,
                  have_id ? id : NULL,
                  have_classes ? classes : NULL,
                  have_inline ? inline_style : NULL, style);
@@ -314,7 +314,7 @@ static int push_frame(struct parser *p, const char *tag, ol_node *node,
                       const ol_style *style, int pre, int ordered)
 {
     struct frame *f;
-    if (p->depth >= OBHL_MAX_DEPTH) return 0;
+    if (p->depth >= WL_HTML_MAX_DEPTH) return 0;
     f = &p->stack[p->depth++];
     memset(f, 0, sizeof(*f));
     {
@@ -717,9 +717,9 @@ static const char *find_close_tag(const char *s, const char *end, const char *ta
     return NULL;
 }
 
-int ob_html_lite_parse_with_css(const char *html, size_t length,
+int wl_html_parse_with_css(const char *html, size_t length,
                                 const char *extra_css, size_t extra_css_length,
-                                ob_html_lite_result *result)
+                                wl_html_result *result)
 {
     const char *s, *end;
     struct parser *p = NULL;
@@ -731,7 +731,7 @@ int ob_html_lite_parse_with_css(const char *html, size_t length,
     if (!result->document) return 0;
     result->title = dup0("");
     if (!result->title) {
-        ob_html_lite_result_free(result);
+        wl_html_result_free(result);
         return 0;
     }
 
@@ -741,25 +741,25 @@ int ob_html_lite_parse_with_css(const char *html, size_t length,
      * overflow small utilities before parsing even <p>x</p>. */
     p = (struct parser *)calloc(1, sizeof(*p));
     if (!p) {
-        ob_html_lite_result_free(result);
+        wl_html_result_free(result);
         return 0;
     }
     p->result = result;
     p->next_image_id = 1;
-    ob_css_init(&p->css);
+    wl_css_init(&p->css);
     if (extra_css && extra_css_length &&
-        !ob_css_add(&p->css, extra_css, extra_css_length)) {
-        ob_css_free(&p->css);
+        !wl_css_add(&p->css, extra_css, extra_css_length)) {
+        wl_css_free(&p->css);
         free(p);
-        ob_html_lite_result_free(result);
+        wl_html_result_free(result);
         return 0;
     }
     ol_style_init(&base);
     base.display = OL_DISPLAY_BLOCK;
     if (!push_frame(p, "#document", ol_document_root(result->document), &base, 0, 0)) {
-        ob_css_free(&p->css);
+        wl_css_free(&p->css);
         free(p);
-        ob_html_lite_result_free(result);
+        wl_html_result_free(result);
         return 0;
     }
 
@@ -830,7 +830,7 @@ int ob_html_lite_parse_with_css(const char *html, size_t length,
                 result->saw_script = 1;
             } else {
                 result->saw_style = 1;
-                if (close && !ob_css_add(&p->css, gt + 1,
+                if (close && !wl_css_add(&p->css, gt + 1,
                                          (size_t)(close - (gt + 1))))
                     goto fail;
             }
@@ -849,24 +849,24 @@ int ob_html_lite_parse_with_css(const char *html, size_t length,
         s = gt + 1;
     }
 
-    ob_css_free(&p->css);
+    wl_css_free(&p->css);
     free(p);
     return 1;
 
 fail:
-    ob_css_free(&p->css);
+    wl_css_free(&p->css);
     free(p);
-    ob_html_lite_result_free(result);
+    wl_html_result_free(result);
     return 0;
 }
 
-int ob_html_lite_parse(const char *html, size_t length,
-                       ob_html_lite_result *result)
+int wl_html_parse(const char *html, size_t length,
+                       wl_html_result *result)
 {
-    return ob_html_lite_parse_with_css(html, length, NULL, 0, result);
+    return wl_html_parse_with_css(html, length, NULL, 0, result);
 }
 
-void ob_html_lite_result_free(ob_html_lite_result *result)
+void wl_html_result_free(wl_html_result *result)
 {
     int i;
     if (!result) return;

@@ -1,4 +1,4 @@
-#include "ob_css_lite.h"
+#include "wl_css.h"
 
 #include <stdio.h>
 
@@ -13,16 +13,16 @@ int main(void)
         "#hero { color:blue; text-align:center; }"
         ".hidden { display:none; }"
         "p span { color:orange; }";
-    ob_css_sheet sheet;
+    wl_css_sheet sheet;
     ol_style style;
 
-    ob_css_init(&sheet);
-    CHECK(ob_css_add(&sheet, css, sizeof(css) - 1));
-    CHECK(ob_css_rule_count(&sheet) == 5);
+    wl_css_init(&sheet);
+    CHECK(wl_css_add(&sheet, css, sizeof(css) - 1));
+    CHECK(wl_css_rule_count(&sheet) == 5);
 
     ol_style_init(&style);
     style.display = OL_DISPLAY_BLOCK;
-    ob_css_apply(&sheet, "p", "hero", "lead extra",
+    wl_css_apply(&sheet, "p", "hero", "lead extra",
                  "color:#00ff00; font-style:italic; line-height:1.5;",
                  &style);
 
@@ -41,10 +41,10 @@ int main(void)
 
     ol_style_init(&style);
     style.display = OL_DISPLAY_BLOCK;
-    ob_css_apply(&sheet, "div", NULL, "hidden", NULL, &style);
+    wl_css_apply(&sheet, "div", NULL, "hidden", NULL, &style);
     CHECK(style.display == OL_DISPLAY_NONE);
 
-    printf("CSSLITE PASS rules=%lu\n", (unsigned long)ob_css_rule_count(&sheet));
-    ob_css_free(&sheet);
+    printf("CSSLITE PASS rules=%lu\n", (unsigned long)wl_css_rule_count(&sheet));
+    wl_css_free(&sheet);
     return 0;
 }

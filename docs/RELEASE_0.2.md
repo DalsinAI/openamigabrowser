@@ -1,5 +1,7 @@
 # OpenBrowser Lite 0.2 qualification
 
+> History. Since OpenBrowser Lite 0.4.1 (19 October 2026) TLS is OpenTLS (AmiSSL is gone), the engine is `src/weblayout/` and the build is `scripts/build-openbrowser.sh`; see `docs/RELEASE_0.4.1.md`.
+
 Date: 7 October 2026
 
 OpenBrowser Lite 0.2 is the first build whose page renderer uses the resident `openlayout.library` rather than linking OpenLayout into the browser.

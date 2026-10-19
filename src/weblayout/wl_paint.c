@@ -1,11 +1,13 @@
 /*
- * OpenBrowser lightweight OpenLayout viewport.
- * Copyright (c) 2026 Dalsin Limited. MIT.
+ * weblayout: an OpenLayout display list painted into a RastPort.
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
-#include "ob_layout_view.h"
+#include "wl_paint.h"
 
 #include <graphics/gfxmacros.h>
+#include <graphics/regions.h>
 #include <proto/graphics.h>
+#include <proto/layers.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -33,9 +35,9 @@ static char *slice_latin1(const char *text, size_t offset, size_t length)
 static int measure_text(void *userdata, const char *utf8, size_t length,
                         const ol_style *style, ol_text_metrics *metrics)
 {
-    ob_layout_view *view = (ob_layout_view *)userdata;
+    wl_view *view = (wl_view *)userdata;
     char *copy, *latin1;
-    ULONG width;
+    ULONG width, n;
     (void)style;
     if (!view || !view->rp || !view->font || !metrics) return 0;
     copy = (char *)malloc(length + 1);
@@ -45,7 +47,8 @@ static int measure_text(void *userdata, const char *utf8, size_t length,
     latin1 = oam_utf8_to_latin1(copy);
     free(copy);
     if (!latin1) return 0;
-    width = TextLength(view->rp, (STRPTR)latin1, (ULONG)strlen(latin1));
+    n = (ULONG)strlen(latin1);              /* no call inside a library call's arguments */
+    width = TextLength(view->rp, (STRPTR)latin1, n);
     free(latin1);
     metrics->width = OL_CSSPX((ol_unit)width);
     metrics->ascent = OL_CSSPX((ol_unit)view->font->tf_Baseline);
@@ -53,7 +56,7 @@ static int measure_text(void *userdata, const char *utf8, size_t length,
     return 1;
 }
 
-void ob_layout_view_init(ob_layout_view *view, struct RastPort *rp,
+void wl_view_init(wl_view *view, struct RastPort *rp,
                          struct TextFont *font)
 {
     memset(view, 0, sizeof(*view));
@@ -62,7 +65,7 @@ void ob_layout_view_init(ob_layout_view *view, struct RastPort *rp,
     view->width = view->height = 1;
 }
 
-void ob_layout_view_set_rect(ob_layout_view *view, WORD left, WORD top,
+void wl_view_set_rect(wl_view *view, WORD left, WORD top,
                              WORD width, WORD height)
 {
     if (!view) return;
@@ -72,7 +75,7 @@ void ob_layout_view_set_rect(ob_layout_view *view, WORD left, WORD top,
     view->height = height > 0 ? height : 1;
 }
 
-void ob_layout_view_set_pens(ob_layout_view *view, UWORD text_pen,
+void wl_view_set_pens(wl_view *view, UWORD text_pen,
                              UWORD back_pen, UWORD link_pen, UWORD fill_pen)
 {
     if (!view) return;
@@ -82,8 +85,8 @@ void ob_layout_view_set_pens(ob_layout_view *view, UWORD text_pen,
     view->fill_pen = fill_pen;
 }
 
-void ob_layout_view_set_image_drawer(ob_layout_view *view,
-                                     ob_layout_image_draw_fn draw,
+void wl_view_set_image_drawer(wl_view *view,
+                                     wl_image_draw_fn draw,
                                      void *userdata)
 {
     if (!view) return;
@@ -91,7 +94,7 @@ void ob_layout_view_set_image_drawer(ob_layout_view *view,
     view->image_userdata = userdata;
 }
 
-int ob_layout_view_set_document(ob_layout_view *view, ol_document *document)
+int wl_view_set_document(wl_view *view, ol_document *document)
 {
     if (!view) return 0;
     view->document = document;
@@ -101,43 +104,44 @@ int ob_layout_view_set_document(ob_layout_view *view, ol_document *document)
     return ol_layout(document, OL_CSSPX(view->width), measure_text, view);
 }
 
-LONG ob_layout_view_content_px(const ob_layout_view *view)
+LONG wl_view_content_px(const wl_view *view)
 {
     if (!view || !view->document) return 0;
     return (LONG)to_px(ol_document_content_height(view->document));
 }
 
-LONG ob_layout_view_max_scroll(const ob_layout_view *view)
+LONG wl_view_max_scroll(const wl_view *view)
 {
     LONG content, max;
     if (!view) return 0;
-    content = ob_layout_view_content_px(view);
+    content = wl_view_content_px(view);
     max = content - view->height;
     return max > 0 ? max : 0;
 }
 
-void ob_layout_view_scroll_to(ob_layout_view *view, LONG scroll_px)
+void wl_view_scroll_to(wl_view *view, LONG scroll_px)
 {
     LONG max;
     if (!view) return;
-    max = ob_layout_view_max_scroll(view);
+    max = wl_view_max_scroll(view);
     if (scroll_px < 0) scroll_px = 0;
     if (scroll_px > max) scroll_px = max;
     view->scroll_px = scroll_px;
 }
 
-static int visible_y(const ob_layout_view *view, int y, int h)
+static int visible_y(const wl_view *view, int y, int h)
 {
     int top = y - view->scroll_px;
     return top + h > 0 && top < view->height;
 }
 
-static void draw_text_op(ob_layout_view *view, const ol_display_op *op)
+static void draw_text_op(wl_view *view, const ol_display_op *op)
 {
     const ol_node *node;
     const char *text;
     char *latin1;
-    ULONG style = 0;
+    ULONG style = 0, n;
+    UWORD pen;
     int x, y, h;
 
     node = ol_node_by_id(view->document, op->u.text.node_id);
@@ -157,14 +161,15 @@ static void draw_text_op(ob_layout_view *view, const ol_display_op *op)
     if (op->u.text.style.text_flags & OL_TEXT_UNDERLINE) style |= FSF_UNDERLINED;
 
     SetSoftStyle(view->rp, style, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
-    SetAPen(view->rp,
-            node && ol_node_role(node) == OL_ROLE_LINK ? view->link_pen : view->text_pen);
+    pen = node && ol_node_role(node) == OL_ROLE_LINK ? view->link_pen : view->text_pen;
+    SetAPen(view->rp, pen);
     Move(view->rp, view->left + x, view->top + y - view->scroll_px);
-    Text(view->rp, (STRPTR)latin1, (ULONG)strlen(latin1));
+    n = (ULONG)strlen(latin1);
+    Text(view->rp, (STRPTR)latin1, n);
     free(latin1);
 }
 
-static void draw_fill_op(ob_layout_view *view, const ol_display_op *op)
+static void draw_fill_op(wl_view *view, const ol_display_op *op)
 {
     int x = to_px(op->u.fill_rect.bounds.x);
     int y = to_px(op->u.fill_rect.bounds.y);
@@ -176,7 +181,7 @@ static void draw_fill_op(ob_layout_view *view, const ol_display_op *op)
              view->left + x + w - 1, view->top + y - view->scroll_px + h - 1);
 }
 
-static void draw_image_op(ob_layout_view *view, const ol_display_op *op)
+static void draw_image_op(wl_view *view, const ol_display_op *op)
 {
     const ol_node *node = ol_node_by_id(view->document, op->u.image.node_id);
     const char *alt = node ? ol_node_name(node) : NULL;
@@ -203,28 +208,32 @@ static void draw_image_op(ob_layout_view *view, const ol_display_op *op)
     if (alt && *alt) {
         char *latin1 = oam_utf8_to_latin1(alt);
         if (latin1) {
+            ULONG n = (ULONG)strlen(latin1);
             Move(view->rp, view->left + x + 3,
                  view->top + y - view->scroll_px + view->font->tf_Baseline + 2);
-            Text(view->rp, (STRPTR)latin1, (ULONG)strlen(latin1));
+            Text(view->rp, (STRPTR)latin1, n);
             free(latin1);
         }
     }
 }
 
-static void draw_rule_op(ob_layout_view *view, const ol_display_op *op)
+static void draw_rule_op(wl_view *view, const ol_display_op *op)
 {
     int y1 = to_px(op->u.rule.y1);
     int y2 = to_px(op->u.rule.y2);
+    int x1, x2;
     if (!visible_y(view, y1, y2 - y1 + 1)) return;
     SetAPen(view->rp, view->text_pen);
-    Move(view->rp, view->left + to_px(op->u.rule.x1),
-         view->top + y1 - view->scroll_px);
-    Draw(view->rp, view->left + to_px(op->u.rule.x2),
-         view->top + y2 - view->scroll_px);
+    x1 = to_px(op->u.rule.x1);
+    x2 = to_px(op->u.rule.x2);
+    Move(view->rp, view->left + x1, view->top + y1 - view->scroll_px);
+    Draw(view->rp, view->left + x2, view->top + y2 - view->scroll_px);
 }
 
-void ob_layout_view_draw(ob_layout_view *view)
+void wl_view_draw(wl_view *view)
 {
+    struct Region *clip = NULL, *old = NULL;
+    BOOL clipped = FALSE;
     size_t i;
     if (!view || !view->rp) return;
 
@@ -234,6 +243,20 @@ void ob_layout_view_draw(ob_layout_view *view)
 
     if (!view->document) return;
     SetFont(view->rp, view->font);
+
+    /* Text, pictures and boxes cut across the area's edges: clip them to
+     * it, so nothing lands on the gadgets around the page. */
+    if (view->rp->Layer && (clip = NewRegion())) {
+        struct Rectangle r;
+        r.MinX = view->left;
+        r.MinY = view->top;
+        r.MaxX = view->left + view->width - 1;
+        r.MaxY = view->top + view->height - 1;
+        if (OrRectRegion(clip, &r)) {
+            old = InstallClipRegion(view->rp->Layer, clip);
+            clipped = TRUE;
+        }
+    }
 
     for (i = 0; i < ol_display_count(view->document); ++i) {
         const ol_display_op *op = ol_display_get(view->document, i);
@@ -247,9 +270,11 @@ void ob_layout_view_draw(ob_layout_view *view)
         }
     }
     SetSoftStyle(view->rp, 0, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
+    if (clipped) InstallClipRegion(view->rp->Layer, old);
+    if (clip) DisposeRegion(clip);
 }
 
-const ol_node *ob_layout_view_hit_action(const ob_layout_view *view,
+const ol_node *wl_view_hit_action(const wl_view *view,
                                          WORD mouse_x, WORD mouse_y,
                                          ULONG action)
 {

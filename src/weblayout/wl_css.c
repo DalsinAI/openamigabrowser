@@ -1,8 +1,8 @@
 /*
- * OpenBrowser Lite small CSS cascade.
- * Copyright (c) 2026 Dalsin Limited. MIT.
+ * weblayout: the small CSS cascade (CSS Lite).
+ * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
-#include "ob_css_lite.h"
+#include "wl_css.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -12,7 +12,7 @@
 
 #define OB_CSS_CLASS_MAX 4
 
-struct ob_css_rule {
+struct wl_css_rule {
     char tag[20];
     char id[64];
     char classes[OB_CSS_CLASS_MAX][40];
@@ -49,12 +49,12 @@ static void lower_ascii(char *s)
     }
 }
 
-void ob_css_init(ob_css_sheet *sheet)
+void wl_css_init(wl_css_sheet *sheet)
 {
     if (sheet) memset(sheet, 0, sizeof(*sheet));
 }
 
-void ob_css_free(ob_css_sheet *sheet)
+void wl_css_free(wl_css_sheet *sheet)
 {
     size_t i;
     if (!sheet) return;
@@ -63,20 +63,20 @@ void ob_css_free(ob_css_sheet *sheet)
     memset(sheet, 0, sizeof(*sheet));
 }
 
-size_t ob_css_rule_count(const ob_css_sheet *sheet)
+size_t wl_css_rule_count(const wl_css_sheet *sheet)
 {
     return sheet ? sheet->count : 0;
 }
 
-static int reserve_rules(ob_css_sheet *sheet, size_t extra)
+static int reserve_rules(wl_css_sheet *sheet, size_t extra)
 {
     size_t need, cap;
-    ob_css_rule *p;
+    wl_css_rule *p;
     need = sheet->count + extra;
     if (need <= sheet->capacity) return 1;
     cap = sheet->capacity ? sheet->capacity : 16;
     while (cap < need) cap *= 2;
-    p = (ob_css_rule *)realloc(sheet->rules, cap * sizeof(*p));
+    p = (wl_css_rule *)realloc(sheet->rules, cap * sizeof(*p));
     if (!p) return 0;
     sheet->rules = p;
     sheet->capacity = cap;
@@ -88,7 +88,7 @@ static int ident_char(int c)
     return isalnum((unsigned char)c) || c == '-' || c == '_';
 }
 
-static int parse_selector(const char *text, ob_css_rule *rule)
+static int parse_selector(const char *text, wl_css_rule *rule)
 {
     const char *p = text;
     char *dst;
@@ -148,10 +148,10 @@ static int parse_selector(const char *text, ob_css_rule *rule)
            rule->specificity == 0;
 }
 
-static int add_rule(ob_css_sheet *sheet, const char *selector,
+static int add_rule(wl_css_sheet *sheet, const char *selector,
                     const char *decl, size_t decl_len)
 {
-    ob_css_rule rule;
+    wl_css_rule rule;
     char *sel, *body;
     if (!sheet || !selector || !decl) return 0;
     sel = range_dup(selector, strlen(selector));
@@ -183,7 +183,7 @@ static const char *skip_comment(const char *p, const char *end)
     return p;
 }
 
-int ob_css_add(ob_css_sheet *sheet, const char *css, size_t length)
+int wl_css_add(wl_css_sheet *sheet, const char *css, size_t length)
 {
     const char *p, *end;
     if (!sheet || !css) return 0;
@@ -254,7 +254,7 @@ static int class_has(const char *classes, const char *want)
     return 0;
 }
 
-static int rule_matches(const ob_css_rule *r, const char *tag,
+static int rule_matches(const wl_css_rule *r, const char *tag,
                         const char *id, const char *classes)
 {
     unsigned i;
@@ -563,7 +563,7 @@ static void apply_declarations(ol_style *style, const char *decl)
     }
 }
 
-void ob_css_apply(const ob_css_sheet *sheet,
+void wl_css_apply(const wl_css_sheet *sheet,
                   const char *tag, const char *id, const char *classes,
                   const char *inline_style, ol_style *style)
 {
@@ -576,7 +576,7 @@ void ob_css_apply(const ob_css_sheet *sheet,
             size_t i, best = (size_t)-1;
             unsigned best_spec = 0, best_order = 0;
             for (i = 0; i < sheet->count; ++i) {
-                const ob_css_rule *r = &sheet->rules[i];
+                const wl_css_rule *r = &sheet->rules[i];
                 int after = !have_last ||
                     r->specificity > last_spec ||
                     (r->specificity == last_spec && r->order > last_order);
