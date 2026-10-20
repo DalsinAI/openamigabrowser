@@ -3,7 +3,9 @@
 # resolver, own C library calls, text converter and allocator, and its calls
 # (weblayout.h, drawn by tests/host's stand-in graphics.library), and
 # OpenMail's HTML-to-text converter, with the host's C compiler, on
-# OpenLayout's portable C.
+# OpenLayout's portable C. Also the engine's malloc (the stove's
+# os32compat_malloc.c) on threads, with tests/host's stand-in exec calls, and
+# MallocBench, its timings against libnix's malloc (here the host's).
 #
 #   OPENLAYOUT_SRC  an openamigalayout checkout (default ../openamigalayout)
 #   HOST_CC         the compiler (default cc)
@@ -33,6 +35,15 @@ OM="$HERE/third_party/openmail"     # strncasecmp: POSIX
     "$HERE/tests/test_wl_document.c" -o "$OUT/test_wl_document"
 "$CC" $FLAGS -D_DEFAULT_SOURCE -I"$OM" "$OM/oam_html.c" "$OM/oam_buf.c" \
     "$HERE/tests/test_oam_html.c" -o "$OUT/test_oam_html"
+# the stove's allocator: its aligned_alloc and the like renamed, so the host's stay
+OS32M="-D_DEFAULT_SOURCE -Daligned_alloc=os32_aligned_alloc -Dmemalign=os32_memalign \
+    -Dposix_memalign=os32_posix_memalign -I$HERE/tests/host"
+"$CC" $FLAGS $OS32M "$HERE/tests/test_os32_malloc.c" "$HERE/tests/host/exec_tasks.c" \
+    -pthread -o "$OUT/test_os32_malloc"
+"$CC" $FLAGS $OS32M -DOS32_MALLOC_DEBUG "$HERE/tests/test_os32_malloc.c" \
+    "$HERE/tests/host/exec_tasks.c" -pthread -o "$OUT/test_os32_malloc_debug"
+"$CC" $FLAGS $OS32M "$HERE/tools/mallocbench.c" "$HERE/stove/compat/os32compat_malloc.c" \
+    "$HERE/tests/host/exec_tasks.c" -pthread -o "$OUT/mallocbench"
 "$OUT/test_wl_html" > "$OUT/test_wl_html.log" || { cat "$OUT/test_wl_html.log"; exit 1; }
 tail -1 "$OUT/test_wl_html.log"
 "$OUT/test_wl_css"
@@ -40,3 +51,9 @@ tail -1 "$OUT/test_wl_html.log"
 "$OUT/test_wl_libc"
 "$OUT/test_wl_document"
 "$OUT/test_oam_html"
+# fewer operations under the sanitizers, which are slower
+R=200000
+[ "${SANITIZE:-0}" = 1 ] && R=50000
+"$OUT/test_os32_malloc" $R
+"$OUT/test_os32_malloc_debug" $R
+"$OUT/mallocbench" 1000000
