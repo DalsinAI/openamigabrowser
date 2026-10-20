@@ -111,6 +111,14 @@ static void testPolicy(void)
     CHECK(policy("GET", "max-age=0", NULL, 0, 0) == OB_HTTPCACHE_REVALIDATE);
     CHECK(policy("GET", "max-age=60", NULL, 0, 0) == OB_HTTPCACHE_USE);
     CHECK(policy("GET", NULL, "no-cache", 0, 0) == OB_HTTPCACHE_REVALIDATE);
+    {
+        struct ob_httpcache_request r = { "GET", "max-age=60", NULL, 0, 0 };
+        CHECK(ob_httpcache_request_max_age(&r) == 60);
+        r.cacheControl = "no-cache";
+        CHECK(ob_httpcache_request_max_age(&r) == -1);
+        r.cacheControl = NULL;
+        CHECK(ob_httpcache_request_max_age(&r) == -1);
+    }
 
     CHECK(lifetime(200, "max-age=3600", NULL, NULL, NULL, NULL, NULL, now) == 3600);
     CHECK(lifetime(200, "public, MAX-AGE=\"120\"", NULL, NULL, NULL, NULL, NULL, now) == 120);
@@ -225,6 +233,7 @@ static void testStore(void)
     }
     e = ob_httpcache_lookup(c, a, 2050);
     CHECK(e && ob_httpcache_entry_fresh(e, 2050) && !ob_httpcache_entry_fresh(e, 2100));
+    CHECK(e && ob_httpcache_entry_age(e, 2050) == 50);
     CHECK(e && bodyIs(e, 'a', 3000));
     ob_httpcache_entry_free(e);
     CHECK(ob_httpcache_lookup(c, "https://example.com/a.css?x", 2050) == NULL);
@@ -247,6 +256,15 @@ static void testStore(void)
     CHECK(!store(c, b, 60, 3000, 'x', 9000));
     CHECK(ob_httpcache_lookup(c, b, 3000) == NULL);
     CHECK(countFiles(".tmp") == 0);
+    /* headers alone over the entry limit: refused before any body */
+    {
+        static char big[7000];
+        const char *lines[2] = { big, big };
+        memset(big, 'h', sizeof big - 1);
+        memcpy(big, "X-Big: ", 7);
+        CHECK(ob_httpcache_store_begin(c, b, 60, 3000, NULL, NULL, lines, 2) == NULL);
+        CHECK(countFiles(".tmp") == 0);
+    }
     /* header lines cannot smuggle a line break */
     CHECK(ob_httpcache_store_begin(c, b, 60, 3000, NULL, NULL, bad, 1) == NULL);
     CHECK(ob_httpcache_store_begin(c, "https://x/\nOBHC1", 60, 3000, NULL, NULL, NULL, 0) == NULL);
@@ -324,9 +342,17 @@ static void testEviction(void)
             fputs("half", f);
             fclose(f);
         }
+        /* not the cache's: left alone */
+        sprintf(path, "%s/notes.tmp", dir);
+        f = fopen(path, "wb");
+        if (f) {
+            fputs("mine", f);
+            fclose(f);
+        }
         c = ob_httpcache_open(dir, 16UL * 1024);
         CHECK(c && ob_httpcache_count(c) == count && ob_httpcache_bytes(c) == bytes);
-        CHECK(countFiles(".tmp") == 0);
+        CHECK(countFiles(".tmp") == 1 && countFiles("notes.tmp") == 1);
+        remove(path);
         e = c ? ob_httpcache_lookup(c, "https://example.com/7.png", 600) : NULL;
         CHECK(e && bodyIs(e, '7', 1800));
         ob_httpcache_entry_free(e);

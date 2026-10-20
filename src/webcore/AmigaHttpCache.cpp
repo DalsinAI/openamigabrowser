@@ -52,7 +52,7 @@ public:
             ob_httpcache_entry_free(m_entry);
     }
 
-    // The stored body, read once; false if the entry is damaged.
+    // The stored body and headers, read once; false if the entry is damaged.
     bool loadBody()
     {
         if (m_body)
@@ -63,6 +63,8 @@ public:
         if (!bytes.isEmpty() && ob_httpcache_entry_read(m_entry, bytes.mutableSpan().data(), bytes.size()) != static_cast<long>(bytes.size()))
             return false;
         m_body = SharedBuffer::create(WTF::move(bytes));
+        for (unsigned i = 0, count = ob_httpcache_entry_header_count(m_entry); i < count; ++i)
+            m_headers.append(String::fromUTF8(ob_httpcache_entry_header(m_entry, i)));
         return true;
     }
 
@@ -77,8 +79,8 @@ public:
         stored.statusCode = 200;
         stored.expectedContentLength = m_body ? m_body->size() : 0;
         stored.headers.append("HTTP/1.1 200 OK"_s);
-        for (unsigned i = 0, count = ob_httpcache_entry_header_count(m_entry); i < count; ++i)
-            stored.headers.append(String::fromUTF8(ob_httpcache_entry_header(m_entry, i)));
+        for (auto& header : m_headers)
+            stored.headers.append(header);
         ResourceResponse response(stored);
         response.setSource(ResourceResponse::Source::DiskCache);
         return response;
@@ -90,22 +92,68 @@ public:
     {
         if (!m_entry || !loadBody())
             return false;
-        // The 304 carries the copy's new lifetime, as a 200 would.
-        long lifetime = lifetimeOf(response, 200);
-        ob_httpcache_entry_refresh(s_cache, m_entry, lifetime > 0 ? lifetime : 0, time(nullptr));
+        // The 304's headers replace the stored ones of the same name, and
+        // the merged set gives the copy's new lifetime, as a 200 would.
+        HTTPHeaderMap merged;
+        for (auto& line : m_headers) {
+            size_t colon = line.find(':');
+            if (colon != notFound)
+                merged.add(line.left(colon).trim(isASCIIWhitespace<char16_t>), line.substring(colon + 1).trim(isASCIIWhitespace<char16_t>));
+        }
+        for (auto& header : response.httpHeaderFields()) {
+            if (!isStoredHeader(header))
+                continue;
+            if (header.keyAsHTTPHeaderName)
+                merged.set(*header.keyAsHTTPHeaderName, header.value);
+            else
+                merged.set(header.key, header.value);
+        }
+        m_headers.clear();
+        for (auto& header : merged)
+            m_headers.append(makeString(header.key, ": "_s, header.value));
+
+        // The old file is closed first, so it can be replaced or removed.
+        ob_httpcache_entry_free(std::exchange(m_entry, nullptr));
+        auto now = time(nullptr);
+        long lifetime = lifetimeOf(merged, 200);
+        if (lifetime < 0) {
+            // now no-store: this answer still uses the copy, later ones do not
+            ob_httpcache_remove(s_cache, m_url.legacyCStringPointer());
+            return true;
+        }
+        auto* writer = beginStore(merged, lifetime, now);
+        if (writer && (!m_body->size() || ob_httpcache_store_write(writer, m_body->span().data(), m_body->size())))
+            ob_httpcache_store_commit(s_cache, writer, now);
+        else {
+            if (writer)
+                ob_httpcache_store_abort(s_cache, writer);
+            ob_httpcache_remove(s_cache, m_url.legacyCStringPointer());
+        }
         return true;
     }
 
     void willStore(const ResourceResponse& response) final
     {
-        if (!s_cache || response.httpStatusCode() != 200)
+        if (!s_cache)
             return;
+        int status = response.httpStatusCode();
+        if (status != 200) {
+            // A redirect, a 404 or the like replaces what the address
+            // shows, so a stored copy must not answer for it again; a
+            // server error leaves it be.
+            if (status < 500) {
+                if (m_entry)
+                    ob_httpcache_entry_free(std::exchange(m_entry, nullptr));
+                ob_httpcache_remove(s_cache, m_url.legacyCStringPointer());
+            }
+            return;
+        }
         // A new copy: the old one's file is closed, so it can be replaced
         // (AmigaDOS neither renames onto nor deletes an open file).
         if (m_entry)
             ob_httpcache_entry_free(std::exchange(m_entry, nullptr));
         auto now = time(nullptr);
-        long lifetime = lifetimeOf(response, response.httpStatusCode());
+        long lifetime = lifetimeOf(response.httpHeaderFields(), status);
         if (lifetime < 0) {
             // no-store and the like: an older copy must not answer either
             ob_httpcache_remove(s_cache, m_url.legacyCStringPointer());
@@ -113,30 +161,7 @@ public:
         }
         if (response.httpHeaderFields().contains(HTTPHeaderName::ContentRange))
             return;
-        Vector<UTF8CString> lines;
-        for (auto& header : response.httpHeaderFields()) {
-            if (auto name = header.keyAsHTTPHeaderName) {
-                switch (*name) {
-                case HTTPHeaderName::SetCookie:
-                case HTTPHeaderName::SetCookie2:
-                case HTTPHeaderName::ContentLength:
-                case HTTPHeaderName::ContentEncoding:
-                case HTTPHeaderName::TransferEncoding:
-                case HTTPHeaderName::Connection:
-                case HTTPHeaderName::KeepAlive:
-                    continue;
-                default:
-                    break;
-                }
-            }
-            lines.append(makeString(header.key, ": "_s, header.value).utf8());
-        }
-        Vector<const char*> pointers;
-        for (auto& line : lines)
-            pointers.append(line.legacyCStringPointer());
-        auto etag = response.httpHeaderField(HTTPHeaderName::ETag).utf8();
-        auto lastModified = response.httpHeaderField(HTTPHeaderName::LastModified).utf8();
-        m_writer = ob_httpcache_store_begin(s_cache, m_url.legacyCStringPointer(), lifetime, now, etag.legacyCStringPointer(), lastModified.legacyCStringPointer(), pointers.span().data(), pointers.size());
+        m_writer = beginStore(response.httpHeaderFields(), lifetime, now);
     }
 
     void storeData(const SharedBuffer& buffer) final
@@ -154,9 +179,44 @@ public:
     }
 
 private:
-    static long lifetimeOf(const ResourceResponse& response, int status)
+    // Headers that must not come back with a stored copy: cookies, and the
+    // length and encoding curl undid.
+    static bool isStoredHeader(const HTTPHeaderMap::HTTPHeaderMapConstIterator::KeyValue& header)
     {
-        auto& headers = response.httpHeaderFields();
+        if (auto name = header.keyAsHTTPHeaderName) {
+            switch (*name) {
+            case HTTPHeaderName::SetCookie:
+            case HTTPHeaderName::SetCookie2:
+            case HTTPHeaderName::ContentLength:
+            case HTTPHeaderName::ContentEncoding:
+            case HTTPHeaderName::TransferEncoding:
+            case HTTPHeaderName::Connection:
+            case HTTPHeaderName::KeepAlive:
+                return false;
+            default:
+                break;
+            }
+        }
+        return true;
+    }
+
+    ob_httpcache_writer* beginStore(const HTTPHeaderMap& headers, long lifetime, time_t now)
+    {
+        Vector<UTF8CString> lines;
+        for (auto& header : headers) {
+            if (isStoredHeader(header))
+                lines.append(makeString(header.key, ": "_s, header.value).utf8());
+        }
+        Vector<const char*> pointers;
+        for (auto& line : lines)
+            pointers.append(line.legacyCStringPointer());
+        auto etag = headers.get(HTTPHeaderName::ETag).utf8();
+        auto lastModified = headers.get(HTTPHeaderName::LastModified).utf8();
+        return ob_httpcache_store_begin(s_cache, m_url.legacyCStringPointer(), lifetime, now, etag.legacyCStringPointer(), lastModified.legacyCStringPointer(), pointers.span().data(), pointers.size());
+    }
+
+    static long lifetimeOf(const HTTPHeaderMap& headers, int status)
+    {
         auto field = [&](HTTPHeaderName name) { return headers.get(name).utf8(); };
         auto cacheControl = field(HTTPHeaderName::CacheControl);
         auto pragma = field(HTTPHeaderName::Pragma);
@@ -183,6 +243,7 @@ private:
     ob_httpcache_entry* m_entry { nullptr };
     ob_httpcache_writer* m_writer { nullptr };
     RefPtr<SharedBuffer> m_body;
+    Vector<String> m_headers;
     bool m_fresh { false };
 };
 
@@ -215,6 +276,7 @@ static std::unique_ptr<AmigaHttpCacheRequest> cacheRequestFor(ResourceRequest& r
     r.hasConditional = headers.contains(HTTPHeaderName::IfNoneMatch) || headers.contains(HTTPHeaderName::IfModifiedSince)
         || headers.contains(HTTPHeaderName::IfRange) || headers.contains(HTTPHeaderName::Range);
     int policy = ob_httpcache_request_policy(&r);
+    long maxAge = ob_httpcache_request_max_age(&r);
     if (policy == OB_HTTPCACHE_BYPASS)
         return nullptr;
 
@@ -242,7 +304,8 @@ static std::unique_ptr<AmigaHttpCacheRequest> cacheRequestFor(ResourceRequest& r
     auto cacheRequest = makeUnique<HttpCacheRequest>(WTF::move(url), entry);
     if (!entry)
         return cacheRequest;
-    bool usable = staleIsFine || (policy == OB_HTTPCACHE_USE && ob_httpcache_entry_fresh(entry, now));
+    bool usable = staleIsFine || (policy == OB_HTTPCACHE_USE && ob_httpcache_entry_fresh(entry, now)
+        && (maxAge < 0 || ob_httpcache_entry_age(entry, now) <= maxAge));
     if (usable && cacheRequest->loadBody()) {
         cacheRequest->setFresh();
         return cacheRequest;

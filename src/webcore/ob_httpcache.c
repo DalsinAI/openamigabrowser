@@ -334,6 +334,25 @@ static void writeIndex(ob_httpcache *cache)
     free(temp);
 }
 
+/* A temporary file the cache wrote: "index.tmp", or an entry's
+ * "<16 hex digits>.<serial>.tmp". Nothing else in the folder is touched. */
+static int isCacheTemp(const char *name, size_t length)
+{
+    char entry[17];
+    unsigned long hi, lo;
+    size_t i;
+    if (!strcmp(name, INDEX_NAME ".tmp"))
+        return 1;
+    if (length < 16 + 1 + 1 + 4 || length > 16 + 1 + 5 + 4 || name[16] != '.' || strcmp(name + length - 4, ".tmp"))
+        return 0;
+    for (i = 17; i < length - 4; i++)
+        if (!isDigit((unsigned char)name[i]))
+            return 0;
+    memcpy(entry, name, 16);
+    entry[16] = 0;
+    return parseEntryName(entry, &hi, &lo);
+}
+
 /* No index: every entry's size and date from the folder itself. */
 static void readFolder(ob_httpcache *cache)
 {
@@ -347,7 +366,7 @@ static void readFolder(ob_httpcache *cache)
         const char *name = e->d_name;
         size_t length = strlen(name);
         unsigned long hi, lo;
-        if (length > 4 && !strcmp(name + length - 4, ".tmp")) {
+        if (isCacheTemp(name, length)) {
             /* removed after the listing: AmigaDOS lists badly while a folder changes */
             char **grown = realloc(leftovers, (leftoverCount + 1) * sizeof *grown);
             if (grown) {
@@ -544,6 +563,14 @@ int ob_httpcache_request_policy(const struct ob_httpcache_request *request)
         || findDirective(request->pragma, "no-cache", NULL))
         return OB_HTTPCACHE_REVALIDATE;
     return OB_HTTPCACHE_USE;
+}
+
+long ob_httpcache_request_max_age(const struct ob_httpcache_request *request)
+{
+    long maxAge;
+    if (findDirective(request->cacheControl, "max-age", &maxAge) && maxAge >= 0)
+        return maxAge;
+    return -1;
 }
 
 long ob_httpcache_lifetime(const struct ob_httpcache_response *response, time_t now)
@@ -774,6 +801,11 @@ int ob_httpcache_entry_fresh(const ob_httpcache_entry *entry, time_t now)
     return (long)now < entry->freshUntil;
 }
 
+long ob_httpcache_entry_age(const ob_httpcache_entry *entry, time_t now)
+{
+    return (long)now > entry->stored ? (long)now - entry->stored : 0;
+}
+
 const char *ob_httpcache_entry_etag(const ob_httpcache_entry *entry)
 {
     return entry->etag;
@@ -879,6 +911,11 @@ ob_httpcache_writer *ob_httpcache_store_begin(ob_httpcache *cache, const char *u
         return NULL;
     }
     writer->size = (unsigned long)ftell(writer->file);
+    if (writer->size > writer->maxSize) {
+        /* the headers alone are over the entry limit */
+        ob_httpcache_store_abort(cache, writer);
+        return NULL;
+    }
     return writer;
 }
 
