@@ -64,9 +64,11 @@ int ob_webview_load_tls_sessions(const char *path);
 void ob_webview_save_tls_sessions(const char *path);
 
 /* The run loop: do what is due, then ask when the next timer is (seconds
- * from now; 0 means at once, a negative number means no timer). */
+ * from now; 0 means at once, a negative number means no timer). The _micros
+ * form gives whole microseconds (at most LONG_MAX) and no floating point. */
 void ob_webcore_cycle(void);
 double ob_webcore_next_timer(void);
+long ob_webcore_next_timer_micros(void);
 /* Called, from any thread, when work is queued for the main task. */
 void ob_webcore_set_wakeup(void (*wakeup)(void *context), void *context);
 

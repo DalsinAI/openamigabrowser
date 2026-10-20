@@ -1,7 +1,8 @@
 name: OpenBrowser Lite
 
 # OpenBrowser Lite and weblayout (src/ob_*.c, src/weblayout, OpenMail's
-# network layer), and the engine's malloc (stove/compat/os32compat_malloc.c):
+# network layer), the engine's malloc (stove/compat/os32compat_malloc.c) and
+# its HTTP disk cache (src/webcore/ob_httpcache.c):
 # the host tests, and the 68040 build with the OpenAmigaGCC
 # release and OpenNDK, pinned as openamigacurl's CI pins them; and
 # weblayout.library with its test program.
@@ -14,6 +15,7 @@ on:
       - 'third_party/openmail/**'
       - 'third_party/opentls/**'
       - 'tests/test_*.c'
+      - 'src/webcore/ob_httpcache.*'
       - 'tests/host/**'
       - 'tests/run-host-tests.sh'
       - 'tools/obfetch.c'
@@ -33,6 +35,7 @@ on:
       - 'third_party/openmail/**'
       - 'third_party/opentls/**'
       - 'tests/test_*.c'
+      - 'src/webcore/ob_httpcache.*'
       - 'tests/host/**'
       - 'tests/run-host-tests.sh'
       - 'tools/obfetch.c'
@@ -55,8 +58,8 @@ env:
 jobs:
   host:
     # HTML Lite, CSS Lite, the address resolver, weblayout's calls,
-    # OpenMail's HTML-to-text converter and the engine's malloc with the
-    # host's compiler
+    # OpenMail's HTML-to-text converter, the engine's malloc and its HTTP
+    # disk cache with the host's compiler
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

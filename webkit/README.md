@@ -108,6 +108,23 @@ The patches, in order:
   0029; `JSC_useM68KTemplateJIT=0` turns it off. Tools and the qemu test are in
   `../tools/jsjit/`.
 
+- `0025-amiga-eclock-monotonic-time.patch`: `MonotonicTime::now()` on
+  AmigaOS 3 reads timer.device's E-clock (`ReadEClock`) instead of libnix's
+  `clock_gettime()`, which is `DateStamp()` (the wall clock in 50ths of a
+  second) followed by a floating-point division and a comparison on every
+  call. `amigaMonotonicMicroseconds()` gives the same clock in whole
+  microseconds, and `RunLoop::cycle()` keeps the next timer on it as a
+  plain integer (`amigaRunLoopNextFireMicroseconds()`), so the programs
+  work out their waits without floating point or libatomic.
+
+- `0026-amiga-webcore-http-disk-cache.patch`: a hook for the browser's HTTP
+  disk cache (`setAmigaHttpCache()` in `AmigaNetwork.h`). Before a request
+  goes out the browser may answer it from a fresh stored copy, or add
+  `If-None-Match`/`If-Modified-Since`; a 304 is then answered with the
+  stored copy, and other responses are handed to the cache as they arrive.
+  The cache itself is `src/webcore/ob_httpcache.c` (see
+  `../docs/WEBCORE_PORT.md`).
+
 - `0027-jsc-m68k-jit-int32-fast-paths.patch`: J3, 32-bit integer fast
   paths in the template JIT. For mov, add, sub, mul, inc, dec, the bit ops,
   jmp, loop_hint and the compare-and-jump ops the JIT writes its own 68k

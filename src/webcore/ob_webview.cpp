@@ -7,6 +7,7 @@
 #include "ob_webview.h"
 
 #include "AmigaCookieJar.h"
+#include "AmigaHttpCache.h"
 #include "AmigaLoaderStrategy.h"
 #include "AmigaNetwork.h"
 #include "AmigaPlatformStrategies.h"
@@ -47,8 +48,11 @@
 #include <wtf/text/MakeString.h>
 
 namespace WTF {
-// RunLoopGeneric.cpp (OS(AMIGA)): MonotonicTime seconds of the next timer.
-double amigaRunLoopNextFireTime();
+// RunLoopGeneric.cpp (OS(AMIGA)): the next timer on the clock below, -1 for
+// none, 0 for at once.
+int64_t amigaRunLoopNextFireMicroseconds();
+// CurrentTime.cpp (OS(AMIGA)): MonotonicTime's clock in whole microseconds.
+uint64_t amigaMonotonicMicroseconds();
 }
 
 using namespace WebCore;
@@ -122,6 +126,10 @@ int ob_webcore_init_with_network(const char* cookieDatabase)
             jar->storeFromResponse(firstParty, url, setCookie);
     };
     setAmigaCookieHooks(WTF::move(cookieHooks));
+
+    // Pages seen before load their files from the disk (ob_httpcache.h:
+    // ENV:OB_HTTP_CACHE=0 turns this off).
+    OpenBrowser::initializeHttpCache("PROGDIR:Cache");
     return 1;
 }
 
@@ -222,6 +230,7 @@ void ob_webcore_shutdown(void)
     // and it uses the sockets that are closed below.
     stopAmigaNetwork();
     ob_webcore_stop_threads();
+    OpenBrowser::closeHttpCache();
     cookieJar() = nullptr;
     ob_network_close();
 }
@@ -232,13 +241,22 @@ void ob_webcore_cycle(void)
     RunLoop::cycle();
 }
 
+long ob_webcore_next_timer_micros(void)
+{
+    // Integers only: one clock reading, no floating point.
+    int64_t next = WTF::amigaRunLoopNextFireMicroseconds();
+    if (next <= 0)
+        return next < 0 ? -1 : 0;
+    int64_t wait = next - static_cast<int64_t>(WTF::amigaMonotonicMicroseconds());
+    if (wait <= 0)
+        return 0;
+    return wait < std::numeric_limits<long>::max() ? static_cast<long>(wait) : std::numeric_limits<long>::max();
+}
+
 double ob_webcore_next_timer(void)
 {
-    double next = WTF::amigaRunLoopNextFireTime();
-    if (next == std::numeric_limits<double>::infinity())
-        return -1;
-    double wait = next - MonotonicTime::now().secondsSinceEpoch().value();
-    return wait > 0 ? wait : 0;
+    long wait = ob_webcore_next_timer_micros();
+    return wait < 0 ? -1 : wait / 1000000.0;
 }
 
 void ob_webcore_set_wakeup(void (*wakeup)(void*), void* context)
