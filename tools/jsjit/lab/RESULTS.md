@@ -6,6 +6,51 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 20 Oct 2026, stage J4 (whole functions, calls, property access, doubles; patch 0031)
+
+Interpreter columns: as of patch 0029, and with 0031 (it no longer fills
+profiles, and its double arithmetic uses fdadd and friends). Speed-up is J4
+against the interpreter as of 0029. `lab/correct.js` and `lab/correct2.js`
+(doubles, NaN, -0, overflow, inline and out-of-line properties, polymorphic
+sites, prototypes, getters, setters, delete, frozen objects, objects stored,
+recursion) print the same with the JIT on and off; `check_templates.py`: 585
+templates, 0 problems.
+
+| jsbench test | interpreter 0029 (M) | interpreter 0031 (M) | J3 (M) | J4 (M) | speed-up | J4 vs J3 |
+|---|---:|---:|---:|---:|---:|---:|
+| int-loop    | 101.8 |  91.0 |   9.9 |   9.9 | 10.33x | 1.00x |
+| properties  | 105.1 |  94.0 |  39.6 |  13.1 |  8.01x | 3.02x |
+| double-loop |  51.7 |  46.3 |  24.7 |   6.5 |  7.90x | 3.77x |
+| calls       | 101.9 |  95.9 |  54.4 |  16.5 |  6.19x | 3.30x |
+| closures    |  19.0 |  18.1 |  13.8 |  10.8 |  1.75x | 1.28x |
+| strings     |   9.2 |   8.8 |   6.6 |   5.7 |  1.61x | 1.16x |
+| array (sort)| 146.6 | 143.4 | 135.7 | 107.9 |  1.36x | 1.26x |
+| regexp      |   8.9 |   8.7 |   8.0 |   7.8 |  1.14x | 1.03x |
+| json        |   3.6 |   3.6 |   3.7 |   3.7 |  0.98x | 1.00x |
+
+`lab/correct2.js` also covers exceptions thrown through compiled calls,
+stack overflow (RangeError), native callees, polymorphic call sites,
+constructors, missing and extra arguments, and getters that call.
+
+## 20 Oct 2026, stage J3 (32-bit integer fast paths, patch 0027)
+
+Interpreter column as below; JIT column with the template JIT on (`JSC_useM68KTemplateJIT=1`, the default since patch 0029).
+
+| jsbench test | interpreter (M) | J3 (M) | speed-up |
+|---|---:|---:|---:|
+| int-loop    | 101.8 |   9.9 | 10.30x |
+| properties  | 105.1 |  39.6 |  2.65x |
+| double-loop |  51.7 |  24.7 |  2.10x |
+| calls       |  99.4 |  54.4 |  1.83x |
+| strings     |   9.2 |   6.7 |  1.39x |
+| closures    |  18.8 |  13.9 |  1.35x |
+| regexp      |   8.9 |   8.0 |  1.10x |
+| array (sort)| 143.9 | 135.7 |  1.06x |
+| json        |   3.6 |   3.7 |  0.97x |
+
+int-loop's loop body is now about 49 instructions per iteration (was ~460).
+jsbench results and `lab/correct.js` are identical with the JIT on and off.
+
 ## 20 Oct 2026, stage T4 (peephole pass)
 
 | jsbench test | JIT off (M) | JIT on (M) | change | speed-up |

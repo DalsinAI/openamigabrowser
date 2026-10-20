@@ -1,0 +1,494 @@
+From 8b19448bf63160fa5db3158cf2a3127cf3b07c7f Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 16:50:20 +0000
+Subject: [PATCH] JavaScriptCore: 32-bit integer fast paths in the 68k template
+ JIT (J3)
+
+For the commonest integer operations the template JIT now writes its own
+68k code instead of copying the interpreter's handler: mov, add, sub,
+mul, inc, dec, bitand, bitor, bitxor, jmp, loop_hint and the eight
+compare-and-jump ops. The code checks that the operands are int32s (the
+JSValue's high word is 0xfffe0000), works on the low words in 32-bit
+registers, and stores the result. Int32 constants become immediates.
+
+A double, an overflow, a zero product (which may be -0) or any other type
+takes the slow path: the instruction's template, kept out of line after
+the hot code, which runs it in full and jumps back. JSValues stay 64-bit in
+memory, so the interpreter, the runtime and the garbage collector see no
+change. Branches between instructions are direct, so loop back edges no
+longer go through the redispatch glue.
+
+Fast code does not keep the interpreter's PC register up to date, so every
+template copy now starts by setting it.
+
+useM68KFastPaths (default true) turns the fast paths off for comparison.
+---
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 413 +++++++++++++++++-
+ Source/JavaScriptCore/runtime/OptionsList.h   |   1 +
+ 2 files changed, 394 insertions(+), 20 deletions(-)
+
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index a2a0d08cab6..bfda2d5b99b 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -25,7 +25,9 @@
+ 
+ #if CPU(M68K) && ENABLE(C_LOOP)
+ 
++#include "BytecodeStructs.h"
+ #include "CodeBlock.h"
++#include "JSCJSValueInlines.h"
+ #include "M68KTemplateStitch.h"
+ #include "Options.h"
+ #include <wtf/DataLog.h>
+@@ -119,44 +121,415 @@ void flushInstructionCache(void* code, size_t size)
+ #endif
+ }
+ 
++// The 32-bit fast paths (stage J3). For the commonest integer operations
++// the compiler writes its own 68k code instead of the interpreter's handler:
++// it checks that the operands are int32s (high word 0xfffe0000), does the
++// work in 32-bit registers, and writes the result back. Anything else (a
++// double, an overflow, a string) takes the slow path: a copy of the
++// instruction's template, kept out of line after the fast code, which runs
++// the instruction in full and jumps back. JSValues stay 64-bit in the frame.
++//
++// Fast code does not keep PC (a2) up to date, so every template copy starts
++// by setting it.
++
++constexpr uint32_t int32Tag = 0xfffe0000; // JSValue::NumberTag's high word.
++
++class Builder {
++public:
++    Vector<uint8_t> bytes;
++    struct Fixup {
++        size_t at; // position of the 32-bit field to patch
++        size_t from; // for a relative branch: the base its displacement counts from
++        bool relative;
++        size_t targetBuffer; // set when the target is a buffer position
++        unsigned targetBytecode; // else the hot code of this bytecode offset
++        bool toBytecode;
++    };
++    Vector<Fixup> fixups;
++
++    size_t size() const { return bytes.size(); }
++    void word(uint16_t w) { bytes.append(w >> 8); bytes.append(w & 0xff); }
++    void longWord(uint32_t l) { word(l >> 16); word(l & 0xffff); }
++    void patchLong(size_t at, uint32_t l)
++    {
++        bytes[at] = l >> 24;
++        bytes[at + 1] = (l >> 16) & 0xff;
++        bytes[at + 2] = (l >> 8) & 0xff;
++        bytes[at + 3] = l & 0xff;
++    }
++
++    // Data registers 0-3 are scratch here, as in the interpreter's handlers.
++    void loadFrame(int disp, unsigned dn) { word(0x202d | (dn << 9)); word(disp); } // move.l d16(a5),dn
++    void storeFrame(unsigned dn, int disp) { word(0x2b40 | dn); word(disp); } // move.l dn,d16(a5)
++    void storeFrameImm(uint32_t imm, int disp) { word(0x2b7c); longWord(imm); word(disp); } // move.l #imm,d16(a5)
++    void copyFrame(int from, int to) { word(0x2b6d); word(from); word(to); } // move.l d16(a5),d16(a5)
++    void moveImm(uint32_t imm, unsigned dn) { word(0x203c | (dn << 9)); longWord(imm); } // move.l #imm,dn
++    void cmpFrameImm(uint32_t imm, int disp) { word(0x0cad); longWord(imm); word(disp); } // cmpi.l #imm,d16(a5)
++    void setPC(uint32_t pc) { word(0x247c); longWord(pc); } // movea.l #pc,a2
++    // op.l d16(a5),dn or op.l #imm,dn for add, sub, and, or, cmp.
++    void addFrame(int disp, unsigned dn) { word(0xd0ad | (dn << 9)); word(disp); }
++    void addImm(uint32_t imm, unsigned dn) { word(0x0680 | dn); longWord(imm); }
++    void subFrame(int disp, unsigned dn) { word(0x90ad | (dn << 9)); word(disp); }
++    void subImm(uint32_t imm, unsigned dn) { word(0x0480 | dn); longWord(imm); }
++    void andFrame(int disp, unsigned dn) { word(0xc0ad | (dn << 9)); word(disp); }
++    void andImm(uint32_t imm, unsigned dn) { word(0x0280 | dn); longWord(imm); }
++    void orFrame(int disp, unsigned dn) { word(0x80ad | (dn << 9)); word(disp); }
++    void orImm(uint32_t imm, unsigned dn) { word(0x0080 | dn); longWord(imm); }
++    void eorImm(uint32_t imm, unsigned dn) { word(0x0a80 | dn); longWord(imm); }
++    void eorReg(unsigned src, unsigned dn) { word(0xb180 | (src << 9) | dn); } // eor.l src,dn
++    void cmpFrame(int disp, unsigned dn) { word(0xb0ad | (dn << 9)); word(disp); }
++    void cmpImm(uint32_t imm, unsigned dn) { word(0x0c80 | dn); longWord(imm); }
++    void mulsFrame(int disp, unsigned dn) { word(0x4c2d); word((dn << 12) | 0x0800); word(disp); } // muls.l d16(a5),dn
++    void mulsImm(uint32_t imm, unsigned dn) { word(0x4c3c); word((dn << 12) | 0x0800); longWord(imm); }
++    void addq1(unsigned dn) { word(0x5280 | dn); }
++    void subq1(unsigned dn) { word(0x5380 | dn); }
++
++    enum Condition { Always = 0, NotEqual = 6, Equal = 7, OverflowSet = 9, GreaterEqual = 12, Less = 13, Greater = 14, LessEqual = 15 };
++    // b<cc>.l (68020+): a 32-bit displacement from the opcode word + 2.
++    size_t branch(Condition cc)
++    {
++        size_t from = size() + 2;
++        word(0x60ff | (cc << 8));
++        size_t at = size();
++        longWord(0);
++        fixups.append({ at, from, true, 0, 0, false });
++        return fixups.size() - 1;
++    }
++    void branchToBytecode(Condition cc, unsigned offset)
++    {
++        size_t i = branch(cc);
++        fixups[i].toBytecode = true;
++        fixups[i].targetBytecode = offset;
++    }
++    // jmp (abs).l, for leaving a slow path for the next instruction's fast code.
++    void jumpToBytecode(unsigned offset)
++    {
++        word(0x4ef9);
++        size_t at = size();
++        longWord(0);
++        fixups.append({ at, 0, false, 0, offset, true });
++    }
++};
++
++// An operand the fast paths can use: a frame slot near enough for a 16-bit
++// displacement, or an int32 constant.
++struct Operand {
++    bool valid { false };
++    bool isConstant { false };
++    int32_t constant { 0 };
++    int hi { 0 }; // displacements from cfr (a5); the high word is first
++    int lo { 0 };
++};
++
++Operand operandFor(CodeBlock* codeBlock, VirtualRegister reg)
++{
++    Operand op;
++    if (reg.isConstant()) {
++        JSValue value = codeBlock->getConstant(reg);
++        if (!value.isInt32())
++            return op;
++        op.valid = true;
++        op.isConstant = true;
++        op.constant = value.asInt32();
++        return op;
++    }
++    int disp = reg.offset() * static_cast<int>(sizeof(Register));
++    if (disp < -32768 || disp + 4 > 32767)
++        return op;
++    op.valid = true;
++    op.hi = disp;
++    op.lo = disp + 4;
++    return op;
++}
++
++class FastPaths {
++public:
++    FastPaths(CodeBlock* codeBlock, Builder& hot)
++        : m_codeBlock(codeBlock)
++        , m_hot(hot)
++    {
++    }
++
++    // Writes fast code for the instruction, or returns false (nothing written)
++    // when there is none. slowBranches collects the branches to its slow path.
++    bool emit(const JSInstruction* instruction, unsigned offset, Vector<size_t>& slowBranches)
++    {
++        size_t start = m_hot.size();
++        size_t fixups = m_hot.fixups.size();
++        m_slow = &slowBranches;
++        bool ok = emitImpl(instruction, offset);
++        if (!ok) {
++            m_hot.bytes.shrink(start);
++            m_hot.fixups.shrink(fixups);
++            slowBranches.clear();
++        }
++        return ok;
++    }
++
++private:
++    void slowUnless(Builder::Condition cc) { m_slow->append(m_hot.branch(cc)); }
++    void checkInt32(const Operand& op)
++    {
++        if (op.isConstant)
++            return;
++        m_hot.cmpFrameImm(int32Tag, op.hi);
++        slowUnless(Builder::NotEqual);
++    }
++    void load(const Operand& op, unsigned dn)
++    {
++        if (op.isConstant)
++            m_hot.moveImm(op.constant, dn);
++        else
++            m_hot.loadFrame(op.lo, dn);
++    }
++    void storeInt32(unsigned dn, const Operand& dst, bool tagAlreadyInt32)
++    {
++        m_hot.storeFrame(dn, dst.lo);
++        if (!tagAlreadyInt32)
++            m_hot.storeFrameImm(int32Tag, dst.hi);
++    }
++    static bool same(const Operand& a, const Operand& b) { return !a.isConstant && !b.isConstant && a.hi == b.hi; }
++
++    template<typename Op>
++    bool binary(const JSInstruction* instruction, void (Builder::*withFrame)(int, unsigned), void (Builder::*withImm)(uint32_t, unsigned), bool checkOverflow)
++    {
++        auto bytecode = instruction->as<Op>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs);
++        Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs);
++        if (!dst.valid || dst.isConstant || !lhs.valid || !rhs.valid || (lhs.isConstant && rhs.isConstant))
++            return false;
++        checkInt32(lhs);
++        checkInt32(rhs);
++        load(lhs, 0);
++        if (rhs.isConstant)
++            (m_hot.*withImm)(rhs.constant, 0);
++        else
++            (m_hot.*withFrame)(rhs.lo, 0);
++        if (checkOverflow)
++            slowUnless(Builder::OverflowSet);
++        storeInt32(0, dst, same(dst, lhs) || same(dst, rhs));
++        return true;
++    }
++
++    template<typename Op>
++    bool compareAndJump(const JSInstruction* instruction, unsigned offset, Builder::Condition cc)
++    {
++        auto bytecode = instruction->as<Op>();
++        Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs);
++        Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs);
++        if (!lhs.valid || !rhs.valid || (lhs.isConstant && rhs.isConstant))
++            return false;
++        int target = bytecode.m_targetLabel;
++        if (!target)
++            target = m_codeBlock->outOfLineJumpOffset(instruction);
++        checkInt32(lhs);
++        checkInt32(rhs);
++        load(lhs, 0);
++        if (rhs.isConstant)
++            m_hot.cmpImm(rhs.constant, 0);
++        else
++            m_hot.cmpFrame(rhs.lo, 0);
++        m_hot.branchToBytecode(cc, offset + target);
++        return true;
++    }
++
++    bool emitImpl(const JSInstruction* instruction, unsigned offset)
++    {
++        switch (instruction->opcodeID()) {
++        case op_loop_hint:
++            // Its only work is counting towards this tier, which is here.
++            return true;
++        case op_jmp: {
++            auto bytecode = instruction->as<OpJmp>();
++            int target = bytecode.m_targetLabel;
++            if (!target)
++                target = m_codeBlock->outOfLineJumpOffset(instruction);
++            m_hot.branchToBytecode(Builder::Always, offset + target);
++            return true;
++        }
++        case op_mov: {
++            auto bytecode = instruction->as<OpMov>();
++            Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++            if (!dst.valid || dst.isConstant)
++                return false;
++            if (bytecode.m_src.isConstant()) {
++                JSValue value = m_codeBlock->getConstant(bytecode.m_src);
++                uint64_t bits = JSValue::encode(value);
++                m_hot.storeFrameImm(static_cast<uint32_t>(bits >> 32), dst.hi);
++                m_hot.storeFrameImm(static_cast<uint32_t>(bits), dst.lo);
++                return true;
++            }
++            Operand src = operandFor(m_codeBlock, bytecode.m_src);
++            if (!src.valid)
++                return false;
++            m_hot.copyFrame(src.hi, dst.hi);
++            m_hot.copyFrame(src.lo, dst.lo);
++            return true;
++        }
++        case op_inc:
++        case op_dec: {
++            VirtualRegister reg = instruction->opcodeID() == op_inc ? instruction->as<OpInc>().m_srcDst : instruction->as<OpDec>().m_srcDst;
++            Operand op = operandFor(m_codeBlock, reg);
++            if (!op.valid || op.isConstant)
++                return false;
++            checkInt32(op);
++            m_hot.loadFrame(op.lo, 0);
++            if (instruction->opcodeID() == op_inc)
++                m_hot.addq1(0);
++            else
++                m_hot.subq1(0);
++            slowUnless(Builder::OverflowSet);
++            m_hot.storeFrame(0, op.lo);
++            return true;
++        }
++        case op_add:
++            return binary<OpAdd>(instruction, &Builder::addFrame, &Builder::addImm, true);
++        case op_sub:
++            return binary<OpSub>(instruction, &Builder::subFrame, &Builder::subImm, true);
++        case op_bitand:
++            return binary<OpBitand>(instruction, &Builder::andFrame, &Builder::andImm, false);
++        case op_bitor:
++            return binary<OpBitor>(instruction, &Builder::orFrame, &Builder::orImm, false);
++        case op_bitxor: {
++            auto bytecode = instruction->as<OpBitxor>();
++            Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++            Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs);
++            Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs);
++            if (!dst.valid || dst.isConstant || !lhs.valid || !rhs.valid || (lhs.isConstant && rhs.isConstant))
++                return false;
++            checkInt32(lhs);
++            checkInt32(rhs);
++            load(lhs, 0);
++            if (rhs.isConstant)
++                m_hot.eorImm(rhs.constant, 0);
++            else {
++                m_hot.loadFrame(rhs.lo, 1);
++                m_hot.eorReg(1, 0);
++            }
++            storeInt32(0, dst, same(dst, lhs) || same(dst, rhs));
++            return true;
++        }
++        case op_mul: {
++            auto bytecode = instruction->as<OpMul>();
++            Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++            Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs);
++            Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs);
++            if (!dst.valid || dst.isConstant || !lhs.valid || !rhs.valid || (lhs.isConstant && rhs.isConstant))
++                return false;
++            checkInt32(lhs);
++            checkInt32(rhs);
++            load(lhs, 0);
++            if (rhs.isConstant)
++                m_hot.mulsImm(rhs.constant, 0);
++            else
++                m_hot.mulsFrame(rhs.lo, 0);
++            slowUnless(Builder::OverflowSet);
++            // A zero product may be -0, a double: the slow path decides.
++            slowUnless(Builder::Equal);
++            storeInt32(0, dst, same(dst, lhs) || same(dst, rhs));
++            return true;
++        }
++        case op_jless: return compareAndJump<OpJless>(instruction, offset, Builder::Less);
++        case op_jlesseq: return compareAndJump<OpJlesseq>(instruction, offset, Builder::LessEqual);
++        case op_jgreater: return compareAndJump<OpJgreater>(instruction, offset, Builder::Greater);
++        case op_jgreatereq: return compareAndJump<OpJgreatereq>(instruction, offset, Builder::GreaterEqual);
++        // For int32s "not less" is "greater or equal": no NaN to tell apart.
++        case op_jnless: return compareAndJump<OpJnless>(instruction, offset, Builder::GreaterEqual);
++        case op_jnlesseq: return compareAndJump<OpJnlesseq>(instruction, offset, Builder::Greater);
++        case op_jngreater: return compareAndJump<OpJngreater>(instruction, offset, Builder::LessEqual);
++        case op_jngreatereq: return compareAndJump<OpJngreatereq>(instruction, offset, Builder::Less);
++        default:
++            return false;
++        }
++    }
++
++    CodeBlock* m_codeBlock;
++    Builder& m_hot;
++    Vector<size_t>* m_slow { nullptr };
++};
++
+ bool compile(CodeBlock* codeBlock)
+ {
+     const auto& instructions = codeBlock->instructions();
+     unsigned bytecodeSize = instructions.size();
+     if (bytecodeSize > Options::m68kTemplateJITMaximumBytecodeSize())
+         return false;
+-
+-    size_t codeSize = 0;
+     for (const auto& instruction : instructions) {
+-        const m68k_tpl* tpl = templateFor(instruction.ptr());
+-        if (!tpl)
++        if (!templateFor(instruction.ptr()))
+             return false;
+-        codeSize += tpl->length;
+     }
+ 
+-    uint8_t* code = allocateCode(codeSize);
++    // Hot code in bytecode order: each instruction's fast code, or a copy of
++    // its template where it has none; then the slow paths, out of line.
++    Builder code;
++    FastPaths fastPaths(codeBlock, code);
++    Vector<unsigned> hotStart(bytecodeSize);
++    struct Slow {
++        const JSInstruction* instruction;
++        unsigned offset;
++        Vector<size_t> branches;
++    };
++    Vector<Slow> slows;
++    auto copyTemplate = [&](const JSInstruction* ptr, unsigned offset) {
++        code.setPC(offset);
++        const m68k_tpl* tpl = templateFor(ptr);
++        size_t at = code.size();
++        code.bytes.grow(at + tpl->length);
++        m68k_tpl_stitch(code.bytes.mutableSpan().data() + at, tpl, reinterpret_cast<const uint8_t*>(ptr), offset, ptr->size());
++    };
++    bool fast = Options::useM68KFastPaths();
++    for (const auto& instruction : instructions) {
++        const JSInstruction* ptr = instruction.ptr();
++        unsigned offset = instruction.offset();
++        hotStart[offset] = code.size();
++        Vector<size_t> branches;
++        if (fast && fastPaths.emit(ptr, offset, branches)) {
++            if (!branches.isEmpty())
++                slows.append({ ptr, offset, std::exchange(branches, { }) });
++            continue;
++        }
++        copyTemplate(ptr, offset);
++    }
++    size_t hotSize = code.size();
++    for (auto& slow : slows) {
++        size_t start = code.size();
++        for (size_t i : slow.branches)
++            code.fixups[i].targetBuffer = start;
++        copyTemplate(slow.instruction, slow.offset);
++        // Back to the fast code of the next instruction.
++        code.jumpToBytecode(slow.offset + slow.instruction->size());
++    }
++
++    size_t codeSize = code.size();
++    uint8_t* memory = allocateCode(codeSize);
+     void** map = nullptr;
+-    if (!code || !tryFastZeroedMalloc(bytecodeSize * sizeof(void*)).getValue(map)) {
+-        fastFree(code);
++    if (!memory || !tryFastZeroedMalloc(bytecodeSize * sizeof(void*)).getValue(map)) {
++        fastFree(memory);
+         fastFree(map);
+         return false;
+     }
+-
+-    // One copy per instruction, in bytecode order, so each falls through into
+-    // the next when PC moves on by one instruction.
+-    size_t offset = 0;
+-    for (const auto& instruction : instructions) {
+-        const JSInstruction* ptr = instruction.ptr();
+-        map[instruction.offset()] = code + offset;
+-        offset += m68k_tpl_stitch(code + offset, templateFor(ptr), reinterpret_cast<const uint8_t*>(ptr), instruction.offset(), ptr->size());
++    for (const auto& fixup : code.fixups) {
++        size_t target = fixup.toBytecode ? hotStart[fixup.targetBytecode] : fixup.targetBuffer;
++        if (fixup.toBytecode && fixup.targetBytecode >= bytecodeSize) {
++            fastFree(memory);
++            fastFree(map);
++            return false;
++        }
++        if (fixup.relative)
++            code.patchLong(fixup.at, static_cast<uint32_t>(static_cast<int32_t>(target) - static_cast<int32_t>(fixup.from)));
++        else
++            code.patchLong(fixup.at, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(memory + target)));
+     }
+-    RELEASE_ASSERT(offset == codeSize);
+-    flushInstructionCache(code, codeSize);
++    memcpy(memory, code.bytes.span().data(), codeSize);
++    flushInstructionCache(memory, codeSize);
++    for (const auto& instruction : instructions)
++        map[instruction.offset()] = memory + hotStart[instruction.offset()];
+ 
+-    codeBlock->m_m68kTemplateCode = code;
++    codeBlock->m_m68kTemplateCode = memory;
+     codeBlock->m_m68kTemplateMap = map;
+     codeBlock->m_m68kTemplateMapSize = bytecodeSize;
+-    dataLogLnIf(Options::verboseOSR(), *codeBlock, ": 68k template JIT, ", bytecodeSize, " bytecode bytes -> ", codeSize, " code bytes");
++    dataLogLnIf(Options::verboseOSR(), *codeBlock, ": 68k template JIT, ", bytecodeSize, " bytecode bytes -> ", codeSize, " code bytes (", hotSize, " hot)");
+     return true;
+ }
+ 
+diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
+index abe2a11feec..2be0092ef24 100644
+--- a/Source/JavaScriptCore/runtime/OptionsList.h
++++ b/Source/JavaScriptCore/runtime/OptionsList.h
+@@ -655,6 +655,7 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, useHandlerICInFTL, false, Normal, nullptr) \
+     v(Bool, useLLIntICs, true, Normal, "Use property and call ICs in LLInt code."_s) \
+     v(Bool, useM68KTemplateJIT, false, Normal, "68k only: compile hot loops' CodeBlocks by stitching the interpreter's handlers (J2)."_s) \
++    v(Bool, useM68KFastPaths, true, Normal, "68k only: the template JIT writes its own 32-bit code for common integer operations (J3)."_s) \
+     v(Unsigned, m68kTemplateJITMaximumBytecodeSize, 4096, Normal, "68k only: largest CodeBlock, in bytecode bytes, the template JIT compiles."_s) \
+     v(Bool, useBaselineJITCodeSharing, jitEnabledByDefault(), Normal, nullptr) \
+     v(Bool, libpasScavengeContinuously, false, Normal, nullptr) \
+-- 
+2.43.0
+

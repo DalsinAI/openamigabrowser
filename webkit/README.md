@@ -104,8 +104,8 @@ The patches, in order:
   (`offlineasm-py/m68k_templates.py`) with the instruction's operands written
   in (`llint/M68KTemplateJIT.cpp`). The copies run on the interpreter's own
   frames and registers and fall through into each other; op_loop_hint enters
-  the code and `jsc_m68k_tjit_redispatch` leaves it. Off unless
-  `JSC_useM68KTemplateJIT=1` is set. Tools and the qemu test are in
+  the code and `jsc_m68k_tjit_redispatch` leaves it. On by default since
+  0029; `JSC_useM68KTemplateJIT=0` turns it off. Tools and the qemu test are in
   `../tools/jsjit/`.
 
 - `0025-amiga-eclock-monotonic-time.patch`: `MonotonicTime::now()` on
@@ -124,6 +124,32 @@ The patches, in order:
   stored copy, and other responses are handed to the cache as they arrive.
   The cache itself is `src/webcore/ob_httpcache.c` (see
   `../docs/WEBCORE_PORT.md`).
+
+- `0027-jsc-m68k-jit-int32-fast-paths.patch`: J3, 32-bit integer fast
+  paths in the template JIT. For mov, add, sub, mul, inc, dec, the bit ops,
+  jmp, loop_hint and the compare-and-jump ops the JIT writes its own 68k
+  code: it checks the operands are int32s, works in 32-bit registers and
+  stores the result; anything else runs the instruction's template, kept
+  out of line. Branches between instructions are direct. JSValues stay
+  64-bit in memory. `JSC_useM68KFastPaths=0` turns it off for comparison.
+
+- `0029-jsc-m68k-template-jit-on-by-default.patch`: `useM68KTemplateJIT`
+  defaults to true, so engine builds run the template JIT and its fast
+  paths everywhere. `JSC_useM68KTemplateJIT=0` runs the interpreter alone.
+
+- `0031-jsc-m68k-jit-functions-properties-doubles.patch`: J4. Whole
+  functions: the function prologues enter a function's code once it has
+  been called often enough, not only its loops. Calls: op_enter, op_ret,
+  op_call and op_construct get their own code (a call to the callee its
+  call link holds goes straight in and returns into compiled code). The 68k interpreter stops filling value, arithmetic
+  and argument profiles, which only the optimizing JITs read. Property
+  access: get_by_id and put_by_id get their own code for sites whose
+  interpreter cache holds an own property (`JSC_useM68KPropertyFastPaths=0`
+  turns it off). Doubles: add, sub, mul and the compare-and-jumps run on the
+  FPU when an operand is a double or an int32 result overflows. Double
+  arithmetic, in the JIT and the interpreter, uses the 68040's
+  fdadd/fdsub/fdmul/fddiv/fdsqrt, which round once to double as
+  JavaScript asks.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
