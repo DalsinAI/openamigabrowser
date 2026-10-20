@@ -98,7 +98,17 @@ The patches, in order:
   connection, one TLS handshake per server. The programs link
   `libnghttp2.a` after curl.
 
-- `0024-amiga-eclock-monotonic-time.patch`: `MonotonicTime::now()` on
+- `0024-jsc-m68k-template-jit.patch`: J2's first stage, the 68k template
+  JIT. A hot loop's CodeBlock is compiled by copying, for each bytecode
+  instruction, the 68k interpreter's handler for it as a template
+  (`offlineasm-py/m68k_templates.py`) with the instruction's operands written
+  in (`llint/M68KTemplateJIT.cpp`). The copies run on the interpreter's own
+  frames and registers and fall through into each other; op_loop_hint enters
+  the code and `jsc_m68k_tjit_redispatch` leaves it. Off unless
+  `JSC_useM68KTemplateJIT=1` is set. Tools and the qemu test are in
+  `../tools/jsjit/`.
+
+- `0025-amiga-eclock-monotonic-time.patch`: `MonotonicTime::now()` on
   AmigaOS 3 reads timer.device's E-clock (`ReadEClock`) instead of libnix's
   `clock_gettime()`, which is `DateStamp()` (the wall clock in 50ths of a
   second) followed by a floating-point division and a comparison on every
@@ -107,7 +117,7 @@ The patches, in order:
   plain integer (`amigaRunLoopNextFireMicroseconds()`), so the programs
   work out their waits without floating point or libatomic.
 
-- `0025-amiga-webcore-http-disk-cache.patch`: a hook for the browser's HTTP
+- `0026-amiga-webcore-http-disk-cache.patch`: a hook for the browser's HTTP
   disk cache (`setAmigaHttpCache()` in `AmigaNetwork.h`). Before a request
   goes out the browser may answer it from a fresh stored copy, or add
   `If-None-Match`/`If-Modified-Since`; a 304 is then answered with the
