@@ -6,6 +6,41 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 20 Oct 2026, stage J6 (loop variables in registers; patch 0032)
+
+Integer loops get a second copy of their body with up to six variables in
+d2-d7, and calls into JavaScript from C++ (the sort comparator here) no
+longer copy the whole register file with memcpy twice per call: they keep
+only the slots a C call must give back, with a run of move.l. Calls from
+compiled code to a compiled function skip the interpreter's prologue (each
+function's code starts with its own).
+`lab/correct4.js` (sort, map, forEach, reduce, replace callbacks, getters,
+JSON reviver, valueOf, toString, exceptions and deep recursion through
+callbacks) prints what node prints, with the JIT on and off.
+`lab/correct.js`, `lab/correct2.js` and `lab/correct3.js` (overflow
+of add, sub, mul and inc/dec inside the copy, values turning into doubles
+and back, strings, nested loops, early exits before a variable is written,
+-0, valueOf) print the same with the JIT on and off. 0032 leaves the
+interpreter's templates as they were.
+
+| jsbench test | J4 (M) | J6 (M) | J6 vs J4 | J6 vs interpreter 0029 |
+|---|---:|---:|---:|---:|
+| int-loop    |   9.9 |   5.9 | 1.68x | 17.3x |
+| properties  |  13.1 |  12.3 | 1.07x |  8.6x |
+| double-loop |   6.5 |   6.5 | 1.00x |  7.9x |
+| calls       |  16.5 |  12.0 | 1.37x |  8.5x |
+| closures    |  10.8 |  10.8 | 1.00x |  1.8x |
+| strings     |   5.7 |   5.7 | 1.00x |  1.6x |
+| array (sort)| 107.9 |  76.8 | 1.41x |  1.9x |
+| regexp      |   7.8 |   7.8 | 1.00x |  1.1x |
+| json        |   3.7 |   3.7 | 1.00x |  1.0x |
+
+The register copy covers int32 work and get_by_id/put_by_id (int-loop,
+properties); loops that call or work on doubles are not covered yet.
+`lab/correct3.js` also covers property loops (values turning into doubles
+and strings, two objects at one site, getters, delete), checked against
+node.
+
 ## 20 Oct 2026, stage J4 (whole functions, calls, property access, doubles; patch 0031)
 
 Interpreter columns: as of patch 0029, and with 0031 (it no longer fills
