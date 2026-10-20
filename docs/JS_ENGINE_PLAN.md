@@ -77,6 +77,20 @@ times, median of 3): int-loop 520 -> 380 ms, properties 600 -> 440 ms, array
 sort 860 -> 800 ms, calls 540 -> 460 ms, double loop 380 -> 320 ms; the same
 results, and the same semantics checks. Still to do: measure on a real 68040.
 
+## J2: the 68k template JIT (started 20 October 2026)
+
+Upstream JavaScriptCore has no JIT for any CPU with 32-bit pointers
+(`PlatformEnable.h` turns `ENABLE_JIT` off without `CPU(ADDRESS64)`), and its
+JIT keeps whole 64-bit values in single registers. So J2 does not port it: it
+builds a template JIT from our own 68k interpreter. Each bytecode handler is
+made into a template (`offlineasm-py/m68k_templates.py`); a hot CodeBlock is
+compiled by copying one template per instruction and writing the
+instruction's operands into it. The code uses the interpreter's frames,
+registers and register file, so the two hand over at any instruction. Patch
+0024 is the first stage, off unless `JSC_useM68KTemplateJIT=1` is set; the
+tools and a qemu test are in `tools/jsjit/`. Next: lab runs, then dropping
+the remaining dispatch checks and operand shuffles, then inline caches.
+
 The original plan, for reference:
 
 JavaScriptCore's interpreter is written once in offlineasm

@@ -83,7 +83,7 @@ in curl.
 process, which this single-process port does not have, so until 20 October
 2026 a second visit fetched every file again. The engine now keeps one of its
 own (`src/webcore/ob_httpcache.c`, joined to WebCore by
-`AmigaHttpCache.cpp` and WebKit patch 0025) in `PROGDIR:Cache`: GET
+`AmigaHttpCache.cpp` and WebKit patch 0026) in `PROGDIR:Cache`: GET
 responses with status 200, fresh for as long as `Cache-Control: max-age` or
 `Expires` (counted from the server's `Date`) says, then checked with
 `If-None-Match`/`If-Modified-Since`, where a 304 reuses the stored copy.
