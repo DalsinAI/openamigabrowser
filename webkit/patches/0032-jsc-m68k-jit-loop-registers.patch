@@ -1,4 +1,4 @@
-From 07a5a01f5445eaabb4749b49209eb6f24b1d8ce1 Mon Sep 17 00:00:00 2001
+From d699cae436af5b1fe8c5c991399f52ddca137058 Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 21:49:53 +0000
 Subject: [PATCH] JavaScriptCore: keep loop variables in registers in the 68k
@@ -37,11 +37,18 @@ metadata table), and the call fast path jumps there when the call link's
 CodeBlock has code. Too few arguments, a stack about to overflow or a
 huge frame go to the interpreter's prologues as before. The calls test
 runs 1.37x fewer instructions.
+
+The loop copy also covers get_by_id and put_by_id, with the plain code's
+fast paths: their slow cases run the plain instruction; a get_by_id result
+kept in a register is checked to be an int32 (else the copy goes on in the
+plain code). Slots used as property bases, and the slots moved to and from
+them, stay out of the registers. put_by_id's write barrier check uses d0
+instead of d2. The properties test runs 1.07x fewer instructions.
 ---
  .../llint/LowLevelInterpreter.cpp             |  33 +-
- .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 539 ++++++++++++++++++
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 609 +++++++++++++++++-
  Source/JavaScriptCore/runtime/OptionsList.h   |   1 +
- 3 files changed, 569 insertions(+), 4 deletions(-)
+ 3 files changed, 636 insertions(+), 7 deletions(-)
 
 diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
 index 54385446f4f..6e7ecbb49ae 100644
@@ -103,7 +110,7 @@ index 54385446f4f..6e7ecbb49ae 100644
      cloopStack.setCurrentStackPointer(spAtEntry);
      return JSValue::decode(result);
 diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
-index 5f52906aca7..94c811792a4 100644
+index 5f52906aca7..13c0a569c46 100644
 --- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
 +++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
 @@ -56,6 +56,11 @@
@@ -153,6 +160,20 @@ index 5f52906aca7..94c811792a4 100644
      void branchToBytecode(Condition cc, unsigned offset)
      {
          size_t i = branch(cc);
+@@ -703,10 +729,10 @@ private:
+         } else {
+             m_hot.tstFrame(value.hi);
+             size_t notCell1 = m_hot.branchShort(Builder::NotEqual);
+-            m_hot.loadFrame(value.lo, 2);
+-            m_hot.btst1(2);
++            m_hot.loadFrame(value.lo, 0); // d0: the loop copy keeps variables in d2-d7
++            m_hot.btst1(0);
+             size_t notCell2 = m_hot.branchShort(Builder::NotEqual);
+-            m_hot.tst(2);
++            m_hot.tst(0);
+             size_t notCell3 = m_hot.branchShort(Builder::Equal);
+             m_hot.tstByteDisp(0, JSCell::cellStateOffset());
+             slowUnless(Builder::Equal);
 @@ -843,6 +869,18 @@ private:
          // cloopCallJSFunction: lr is the return point, then jump.
          size_t returnPoint = m_hot.storeCodeAddressAbs(lr + 1);
@@ -172,7 +193,7 @@ index 5f52906aca7..94c811792a4 100644
          m_hot.loadAddressAbs(linkBase + CallLinkInfo::offsetOfMonomorphicCallDestination(), 0);
          m_hot.jumpA0();
          // Back from the callee (its op_ret restored cfr and metadataTable):
-@@ -988,6 +1026,451 @@ private:
+@@ -988,6 +1026,515 @@ private:
      FloatPath* m_float { nullptr };
  };
  
@@ -189,9 +210,10 @@ index 5f52906aca7..94c811792a4 100644
 +// iteration; its back edge comes back to the preheader.
 +class LoopCopy {
 +public:
-+    LoopCopy(CodeBlock* codeBlock, Builder& code, const Vector<unsigned>& plainStart)
++    LoopCopy(CodeBlock* codeBlock, Builder& code, FastPaths& fastPaths, const Vector<unsigned>& plainStart)
 +        : m_codeBlock(codeBlock)
 +        , m_code(code)
++        , m_fastPaths(fastPaths)
 +        , m_plainStart(plainStart)
 +    {
 +    }
@@ -265,8 +287,13 @@ index 5f52906aca7..94c811792a4 100644
 +    // The variables (frame slots, by their high word's displacement) the
 +    // instruction computes with as int32s; false when the copy has no code
 +    // for it.
-+    bool operands(const JSInstruction* instruction, Vector<VirtualRegister, 3>& uses)
++    bool operands(const JSInstruction* instruction, Vector<VirtualRegister, 3>& uses, Vector<VirtualRegister, 1>* cells = nullptr)
 +    {
++        // A property access's base: a cell, never one of the registers.
++        auto cell = [&](VirtualRegister reg) {
++            if (cells)
++                cells->append(reg);
++        };
 +        // A constant that is not an int32 (a double, say) never takes the
 +        // copy's int32 code, so the copy stops before it.
 +        bool int32Constants = true;
@@ -288,6 +315,21 @@ index 5f52906aca7..94c811792a4 100644
 +            add(bytecode.m_dst);
 +            add(bytecode.m_src);
 +            return true;
++        }
++        // Property access, with the plain code's fast paths; get_by_id's
++        // result can be one of the registers.
++        case op_get_by_id: {
++            auto bytecode = instruction->as<OpGetById>();
++            add(bytecode.m_dst);
++            cell(bytecode.m_base);
++            return Options::useM68KPropertyFastPaths() && !bytecode.m_base.isConstant() && !bytecode.m_dst.isConstant();
++        }
++        case op_put_by_id: {
++            auto bytecode = instruction->as<OpPutById>();
++            cell(bytecode.m_base);
++            if (!bytecode.m_value.isConstant())
++                add(bytecode.m_value);
++            return Options::useM68KPropertyFastPaths() && !bytecode.m_base.isConstant();
 +        }
 +        case op_inc: add(instruction->as<OpInc>().m_srcDst); return true;
 +        case op_dec: add(instruction->as<OpDec>().m_srcDst); return true;
@@ -344,20 +386,30 @@ index 5f52906aca7..94c811792a4 100644
 +    {
 +        HashMap<int, unsigned, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> uses;
 +        HashSet<int, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> liveIn;
++        // Slots that hold cells (property bases), and the moves between
++        // slots: a move's ends share a kind.
++        HashSet<int, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> cellSlots;
++        Vector<std::pair<int, int>> moves;
++        auto displacement = [](VirtualRegister reg) { return reg.offset() * static_cast<int>(sizeof(Register)); };
 +        unsigned handled = 0;
 +        bool backEdge = false;
 +        const JSInstruction* instruction = head;
 +        while (true) {
 +            unsigned offset = m_codeBlock->bytecodeOffset(instruction);
 +            Vector<VirtualRegister, 3> regs;
-+            if (!operands(instruction, regs))
++            Vector<VirtualRegister, 1> cells;
++            if (!operands(instruction, regs, &cells))
 +                break;
 +            ++handled;
++            for (auto reg : cells)
++                cellSlots.add(displacement(reg));
++            if (instruction->opcodeID() == op_mov && !regs[1].isConstant())
++                moves.append({ displacement(regs[0]), displacement(regs[1]) });
 +            // mov and the arithmetic list their result first; it is written
 +            // after the others are read.
 +            OpcodeID opcode = instruction->opcodeID();
 +            bool writesFirst = opcode == op_mov || opcode == op_add || opcode == op_sub || opcode == op_mul
-+                || opcode == op_bitand || opcode == op_bitor || opcode == op_bitxor;
++                || opcode == op_bitand || opcode == op_bitor || opcode == op_bitxor || opcode == op_get_by_id;
 +            for (unsigned pass = 0; pass < 2; ++pass) {
 +                for (unsigned i = 0; i < regs.size(); ++i) {
 +                    bool isWrite = writesFirst && !i;
@@ -390,9 +442,21 @@ index 5f52906aca7..94c811792a4 100644
 +        // little in the body they never pay for the preheader.
 +        if (!backEdge || handled < 4 || uses.isEmpty())
 +            return false;
++        for (bool changed = true; changed;) {
++            changed = false;
++            for (auto [dst, src] : moves) {
++                if (cellSlots.contains(dst) != cellSlots.contains(src)) {
++                    cellSlots.add(dst);
++                    cellSlots.add(src);
++                    changed = true;
++                }
++            }
++        }
 +        Vector<std::pair<unsigned, int>> ranked;
-+        for (auto& entry : uses)
-+            ranked.append({ entry.value, entry.key });
++        for (auto& entry : uses) {
++            if (!cellSlots.contains(entry.key))
++                ranked.append({ entry.value, entry.key });
++        }
 +        std::sort(ranked.begin(), ranked.end(), [](auto& a, auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
 +        static constexpr unsigned registers[] = { 2, 3, 4, 5, 6, 7 };
 +        m_registers.clear();
@@ -400,7 +464,7 @@ index 5f52906aca7..94c811792a4 100644
 +        for (unsigned i = 0; i < ranked.size() && i < std::size(registers); ++i) {
 +            if (ranked[i].first < 2)
 +                break;
-+            m_registers.append({ ranked[i].second, registers[i] });
++            m_registers.append({ ranked[i].second, registers[m_registers.size()] });
 +            m_liveIn.append(liveIn.contains(ranked[i].second));
 +        }
 +        return !m_registers.isEmpty();
@@ -592,6 +656,26 @@ index 5f52906aca7..94c811792a4 100644
 +            store(0, value);
 +            return Next;
 +        }
++        case op_get_by_id:
++        case op_put_by_id: {
++            Vector<size_t> branches;
++            FloatPath floatPath;
++            if (!m_fastPaths.emit(instruction, offset, branches, floatPath))
++                return Stop;
++            // Its slow cases run the plain code's instruction.
++            for (size_t i : branches)
++                m_code.fixups[i].targetBuffer = m_plainStart[offset];
++            if (instruction->opcodeID() == op_get_by_id) {
++                Value dst = valueFor(instruction->as<OpGetById>().m_dst);
++                if (dst.reg >= 0) {
++                    // Not an int32: the value is in the frame; go on in the plain code.
++                    m_code.cmpFrameImm(int32Tag, dst.hi);
++                    m_code.branchToBuffer(Builder::NotEqual, m_plainStart[offset + instruction->size()]);
++                    m_code.loadFrame(dst.lo, dst.reg);
++                }
++            }
++            return Next;
++        }
 +        case op_add: return binary<OpAdd>(instruction, Arith::Add);
 +        case op_sub: return binary<OpSub>(instruction, Arith::Sub);
 +        case op_mul: return binary<OpMul>(instruction, Arith::Mul);
@@ -613,6 +697,7 @@ index 5f52906aca7..94c811792a4 100644
 +
 +    CodeBlock* m_codeBlock;
 +    Builder& m_code;
++    FastPaths& m_fastPaths;
 +    const Vector<unsigned>& m_plainStart;
 +    Vector<std::pair<int, unsigned>> m_registers; // frame slot (high word) -> data register
 +    Vector<bool> m_liveIn; // per register: its value comes in from before the loop
@@ -624,7 +709,7 @@ index 5f52906aca7..94c811792a4 100644
  bool compile(CodeBlock* codeBlock)
  {
      const auto& instructions = codeBlock->instructions();
-@@ -1012,6 +1495,48 @@ bool compile(CodeBlock* codeBlock)
+@@ -1012,6 +1559,48 @@ bool compile(CodeBlock* codeBlock)
          FloatPath floatPath;
      };
      Vector<Slow> slows;
@@ -673,7 +758,7 @@ index 5f52906aca7..94c811792a4 100644
      auto copyTemplate = [&](const JSInstruction* ptr, unsigned offset) {
          code.setPC(offset);
          const m68k_tpl* tpl = templateFor(ptr);
-@@ -1034,6 +1559,20 @@ bool compile(CodeBlock* codeBlock)
+@@ -1034,6 +1623,20 @@ bool compile(CodeBlock* codeBlock)
          copyTemplate(ptr, offset);
      }
      size_t hotSize = code.size();
@@ -682,7 +767,7 @@ index 5f52906aca7..94c811792a4 100644
 +    // Loop bodies' register copies; jumps to a loop's head (its back edges,
 +    // the interpreter's loop OSR) go to the copy's preheader from now on.
 +    if (registerCache) {
-+        LoopCopy loopCopy(codeBlock, code, plainStart);
++        LoopCopy loopCopy(codeBlock, code, fastPaths, plainStart);
 +        for (const auto& instruction : instructions) {
 +            if (instruction->opcodeID() != op_loop_hint)
 +                continue;

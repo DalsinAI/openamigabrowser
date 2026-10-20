@@ -26,7 +26,7 @@ interpreter's templates as they were.
 | jsbench test | J4 (M) | J6 (M) | J6 vs J4 | J6 vs interpreter 0029 |
 |---|---:|---:|---:|---:|
 | int-loop    |   9.9 |   5.9 | 1.68x | 17.3x |
-| properties  |  13.1 |  13.1 | 1.00x |  8.0x |
+| properties  |  13.1 |  12.3 | 1.07x |  8.6x |
 | double-loop |   6.5 |   6.5 | 1.00x |  7.9x |
 | calls       |  16.5 |  12.0 | 1.37x |  8.5x |
 | closures    |  10.8 |  10.8 | 1.00x |  1.8x |
@@ -35,9 +35,11 @@ interpreter's templates as they were.
 | regexp      |   7.8 |   7.8 | 1.00x |  1.1x |
 | json        |   3.7 |   3.7 | 1.00x |  1.0x |
 
-Only int-loop's loop qualifies for the register copy: the others' loops
-access properties, call or work on doubles, which the copy does not cover
-yet.
+The register copy covers int32 work and get_by_id/put_by_id (int-loop,
+properties); loops that call or work on doubles are not covered yet.
+`lab/correct3.js` also covers property loops (values turning into doubles
+and strings, two objects at one site, getters, delete), checked against
+node.
 
 ## 20 Oct 2026, stage J4 (whole functions, calls, property access, doubles; patch 0031)
 

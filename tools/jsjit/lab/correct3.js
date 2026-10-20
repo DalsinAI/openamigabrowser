@@ -24,4 +24,10 @@ function f15(n) { var x; var i = 0; while (i < n) { i = (i + 1) | 0; if (i > 3) 
 function f16(n) { var x; for (var i = 0; i < n; i++) { if (i >= 0) break; x = i + 1; } return x; }
 function f17() { var a = 0, b = 1, t; for (var i = 0; i < 40; i++) { t = (a + b) | 0; a = b; b = t; } return a + ":" + b + ":" + t; }
 function f18() { var s = 0; for (var i = 0; i < 2000; i++) { var k = i & 7; s = (s + k * k) | 0; } return s + ":" + k; }
-for (var r = 0; r < 3; r++) { out("f15", f15(10)); out("f15b", f15(0)); out("f16", f16(5)); out("f17", f17()); out("f18", f18()); }
+function f19() { var o = { a: 1, b: 2 }, s = 0; for (var i = 0; i < 3000; i++) { o.a = (o.b + i) | 0; s = (s + o.a) | 0; if (i == 1500) o.b = 0.5; } return s + ":" + o.a; }
+function f20() { var o = { a: 1 }, p = { b: 9, a: 2 }, s = 0; for (var i = 0; i < 2000; i++) { var q = (i & 1) ? o : p; s = (s + q.a) | 0; q.a = (q.a + 1) | 0; } return s + ":" + o.a + ":" + p.a; }
+function f21() { var o = { get a() { return 3; } }, s = 0; for (var i = 0; i < 1000; i++) s = (s + o.a) | 0; return s; }
+function f22() { var o = { a: 0 }, s = 0; for (var i = 0; i < 1000; i++) { o.a = i; s = (s + o.a) | 0; if (i == 500) o.a = "x"; } return s + ":" + o.a; }
+function f23() { var o = { a: 1 }, s = 0; for (var i = 0; i < 1000; i++) { s = (s + o.a) | 0; if (i == 600) delete o.a, o.a = 5; } return s; }
+function f24() { var o = { n: 0 }, t = 0; for (var i = 0; i < 1000; i++) { o.n = (o.n + i) | 0; t = o.n; } var r = { x: o }; return t + ":" + r.x.n; }
+for (var r = 0; r < 3; r++) { out("f19", f19()); out("f20", f20()); out("f21", f21()); out("f22", f22()); out("f23", f23()); out("f24", f24()); out("f15", f15(10)); out("f15b", f15(0)); out("f16", f16(5)); out("f17", f17()); out("f18", f18()); }
