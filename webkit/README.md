@@ -133,6 +133,14 @@ The patches, in order:
   out of line. Branches between instructions are direct. JSValues stay
   64-bit in memory. `JSC_useM68KFastPaths=0` turns it off for comparison.
 
+- `0028-amiga-webcore-worker-indexeddb-identifier.patch`: a worker's global
+  scope builds an IndexedDB connection proxy even though this single-process
+  port has no IndexedDB server, and `IDBConnectionToServer::identifier()`
+  dereferenced the empty identifier of `EmptyDatabaseProvider`'s delegate,
+  which aborted the engine (reddit's reCAPTCHA worker). On AmigaOS the
+  delegate now answers with `Process::identifier()`; requests still go
+  nowhere.
+
 - `0029-jsc-m68k-template-jit-on-by-default.patch`: `useM68KTemplateJIT`
   defaults to true, so engine builds run the template JIT and its fast
   paths everywhere. `JSC_useM68KTemplateJIT=0` runs the interpreter alone.
