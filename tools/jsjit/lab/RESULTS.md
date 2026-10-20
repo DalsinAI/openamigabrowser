@@ -8,7 +8,7 @@ Every test gives the same result with the JIT on and off.
 
 ## 20 Oct 2026, stage J3 (32-bit integer fast paths, patch 0027)
 
-Interpreter column as below; JIT column with `JSC_useM68KTemplateJIT=1`.
+Interpreter column as below; JIT column with the template JIT on (`JSC_useM68KTemplateJIT=1`, the default since patch 0028).
 
 | jsbench test | interpreter (M) | J3 (M) | speed-up |
 |---|---:|---:|---:|
