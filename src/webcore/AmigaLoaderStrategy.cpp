@@ -65,8 +65,12 @@ using namespace WebCore;
 
 static constexpr auto errorDomain = "OpenBrowser"_s;
 
-// A 68k does better with fewer connections at once than desktop browsers use.
-static constexpr unsigned maxRequestsInFlightPerHost = 4;
+// Requests handed to curl at once for one host, as desktop browsers do. This
+// is not the number of connections: curl opens at most two per host and four
+// in all (WebKit patches 0004 and 0007), since TLS handshakes made side by
+// side on a 68k slow each other down; over HTTP/2 the requests are streams on
+// one connection, and over HTTP/1.1 the rest wait in curl for a free one.
+static constexpr unsigned maxRequestsInFlightPerHost = 6;
 static constexpr unsigned maxRequestsInFlightForNonHTTPProtocols = 20;
 
 class AmigaLoaderStrategy final : public LoaderStrategy {

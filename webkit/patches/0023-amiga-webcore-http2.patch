@@ -1,0 +1,53 @@
+From 7554384880f56020058b6f47bed9b9e0bf28fb83 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 08:56:15 +0000
+Subject: [PATCH] WebCore (Amiga): HTTP/2 to HTTPS servers, multiplexed
+
+openamigacurl builds curl with nghttp2, so curl reports HTTP2 and the
+curl backend asks for it. The Amiga says what it wants instead of
+leaving it to curl's defaults: CURL_HTTP_VERSION_2TLS for https://
+(HTTP/2 when the server offers it in ALPN, HTTP/1.1 otherwise; http://
+stays on 1.1), and CURLMOPT_PIPELINING = CURLPIPE_MULTIPLEX on the multi
+handle, so requests to one server are streams on one connection and a
+page costs one TLS handshake per server. With HTTP/3 in curl the version
+is still left to Alt-Svc, as upstream does.
+---
+ .../WebCore/platform/network/curl/CurlContext.cpp   | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/Source/WebCore/platform/network/curl/CurlContext.cpp b/Source/WebCore/platform/network/curl/CurlContext.cpp
+index 64d2380c..158bbe3c 100644
+--- a/Source/WebCore/platform/network/curl/CurlContext.cpp
++++ b/Source/WebCore/platform/network/curl/CurlContext.cpp
+@@ -238,6 +238,12 @@ Lock* CurlShareHandle::mutexFor(curl_lock_data data)
+ CurlMultiHandle::CurlMultiHandle()
+ {
+     m_multiHandle = curl_multi_init();
++#if PLATFORM(AMIGA)
++    // Requests to one HTTP/2 server share a connection as streams, so a page
++    // costs one TLS handshake per server. (curl's default; said here so a
++    // curl built otherwise cannot change it.)
++    curl_multi_setopt(m_multiHandle, CURLMOPT_PIPELINING, CURLPIPE_MULTIPLEX);
++#endif
+ }
+ 
+ CurlMultiHandle::~CurlMultiHandle()
+@@ -537,8 +543,15 @@ void CurlHandle::enableHttp()
+     auto isHttp3Enabled = CurlContext::singleton().isHttp3Enabled();
+ 
+     if (m_url.protocolIs("https"_s) && (isHttp2Enabled || isHttp3Enabled)) {
++#if PLATFORM(AMIGA)
++        // HTTP/2 when the server offers it in ALPN, HTTP/1.1 otherwise; plain
++        // http:// stays on 1.1. Alt-Svc picks the version when curl has
++        // HTTP/3, which openamigacurl does not.
++        curl_easy_setopt(m_handle, CURLOPT_HTTP_VERSION, isHttp3Enabled ? CURL_HTTP_VERSION_NONE : CURL_HTTP_VERSION_2TLS);
++#else
+         // The appropriate HTTP version is selected based on ALPN, Alt-Svc, etc.
+         curl_easy_setopt(m_handle, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_NONE);
++#endif
+         curl_easy_setopt(m_handle, CURLOPT_PIPEWAIT, 1L);
+ #if LIBCURL_VERSION_NUM <= 0x075500
+         curl_easy_setopt(m_handle, CURLOPT_SSL_ENABLE_ALPN, 1L);
+-- 
+2.43.0
+
