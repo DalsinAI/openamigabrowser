@@ -108,13 +108,13 @@ The patches, in order:
   `JSC_useM68KTemplateJIT=1` is set. Tools and the qemu test are in
   `../tools/jsjit/`.
 
-- `0027-amiga-webcore-worker-indexeddb-identifier.patch`: a worker's global
+- `0028-amiga-webcore-worker-indexeddb-identifier.patch`: a worker's global
   scope builds an IndexedDB connection proxy even though this single-process
   port has no IndexedDB server, and `IDBConnectionToServer::identifier()`
   dereferenced the empty identifier of `EmptyDatabaseProvider`'s delegate,
   which aborted the engine (reddit's reCAPTCHA worker). On AmigaOS the
   delegate now answers with `Process::identifier()`; requests still go
-  nowhere. (0025 and 0026 are taken by the timer and disk cache work.)
+  nowhere. (0025 and 0026 are taken by the timer and disk cache work, 0027 by the template JIT's next stage.)
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
