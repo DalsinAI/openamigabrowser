@@ -117,6 +117,13 @@ static int visible_y(const wl_view *view, int y, int h)
     return top + h > 0 && top < view->height;
 }
 
+/* text and pictures inside a link carry its href (HTML Lite) */
+static int link_node(const ol_node *node)
+{
+    const char *href = node ? ol_node_href(node) : NULL;
+    return (href && *href) || (node && ol_node_role(node) == OL_ROLE_LINK);
+}
+
 static void draw_text_op(wl_view *view, const ol_display_op *op)
 {
     const ol_node *node;
@@ -143,12 +150,18 @@ static void draw_text_op(wl_view *view, const ol_display_op *op)
     if (op->u.text.style.text_flags & OL_TEXT_UNDERLINE) style |= FSF_UNDERLINED;
 
     SetSoftStyle(view->rp, style, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
-    pen = node && ol_node_role(node) == OL_ROLE_LINK ? view->link_pen : view->text_pen;
+    pen = link_node(node) ? view->link_pen : view->text_pen;
     SetAPen(view->rp, pen);
     Move(view->rp, view->left + x, view->top + y - view->scroll_px);
     n = (ULONG)strlen(latin1);
     Text(view->rp, (STRPTR)latin1, n);
     wl_free(latin1);
+}
+
+static int in_rect(ol_rect r, ol_unit x, ol_unit y)
+{
+    return r.width > 0 && r.height > 0 &&
+           x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height;
 }
 
 static void draw_fill_op(wl_view *view, const ol_display_op *op)
@@ -270,4 +283,38 @@ const ol_node *wl_view_hit_action(const wl_view *view,
     x = OL_CSSPX(mouse_x - view->left);
     y = OL_CSSPX(mouse_y - view->top + view->scroll_px);
     return ol_hit_action(view->document, x, y, action);
+}
+
+/* The link under the mouse, from the pieces of text and the pictures as
+ * they are drawn. The nodes' own boxes will not do: an inline element
+ * that wraps (a <b> after a link on the same line) has one box around
+ * all of its lines, which covers the link, and is deeper in the tree. */
+const char *wl_view_hit_link(const wl_view *view, WORD mouse_x, WORD mouse_y)
+{
+    ol_unit x, y;
+    size_t i;
+    const ol_node *node;
+    const char *href;
+    if (!view || !view->document) return NULL;
+    if (mouse_x < view->left || mouse_y < view->top ||
+        mouse_x >= view->left + view->width ||
+        mouse_y >= view->top + view->height)
+        return NULL;
+    x = OL_CSSPX(mouse_x - view->left);
+    y = OL_CSSPX(mouse_y - view->top + view->scroll_px);
+    for (i = ol_display_count(view->document); i-- > 0;) {
+        const ol_display_op *op = ol_display_get(view->document, i);
+        ol_id id;
+        if (!op) continue;
+        if (op->type == OL_OP_TEXT && in_rect(op->u.text.bounds, x, y)) id = op->u.text.node_id;
+        else if (op->type == OL_OP_IMAGE && in_rect(op->u.image.bounds, x, y)) id = op->u.image.node_id;
+        else continue;
+        node = ol_node_by_id(view->document, id);
+        href = node ? ol_node_href(node) : NULL;
+        if (href && *href) return href;
+    }
+    /* a link with nothing drawn in it: OpenLayout's own hit test */
+    node = ol_hit_action(view->document, x, y, OL_ACTION_ACTIVATE);
+    href = node ? ol_node_href(node) : NULL;
+    return href && *href ? href : NULL;
 }

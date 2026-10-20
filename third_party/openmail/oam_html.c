@@ -182,7 +182,9 @@ int oam_html_to_text(const char *html, size_t len, oam_buf *text, oam_buf *links
         while (ne < gt && (isalnum((unsigned char)*ne))) ne++;
         n = ne - name;
         if (!n) continue;                                          /* <!DOCTYPE>, <?xml?> */
-        if (!closing && (is(name, n, "head") || is(name, n, "script") || is(name, n, "style") || is(name, n, "title"))) {
+        /* not <head> as a whole: a page may leave out </head> (https://example.com/
+         * does), and what else stands in it writes nothing */
+        if (!closing && (is(name, n, "script") || is(name, n, "style") || is(name, n, "title"))) {
             char close[16];                                        /* skip to its end tag */
             const char *c = s;
             close[0] = '<'; close[1] = '/';

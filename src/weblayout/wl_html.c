@@ -28,6 +28,7 @@ struct frame {
     int pre;
     int ordered;
     int counter;
+    const char *href;   /* the link this is inside (the <a> node's own copy), or NULL */
 };
 
 struct parser {
@@ -327,6 +328,9 @@ static int push_frame(struct parser *p, const char *tag, ol_node *node,
     f->style = *style;
     f->pre = pre;
     f->ordered = ordered;
+    /* what is inside a link is the link's: its text and pictures carry
+     * its href, which the painter and the hit test read from them */
+    f->href = p->depth > 1 ? p->stack[p->depth - 2].href : NULL;
     return 1;
 }
 
@@ -359,6 +363,8 @@ static int append_text_node(struct parser *p, ol_node *parent,
     wl_free(copy);
     if (!node) return 0;
     ol_node_set_style(node, style);
+    if (p->depth > 0 && p->stack[p->depth - 1].href)
+        ol_node_set_href(node, p->stack[p->depth - 1].href);
     return 1;
 }
 
@@ -492,6 +498,27 @@ static int open_container(struct parser *p, const char *tag,
     return 1;
 }
 
+/* what may stand in <head> (<title>, <style> and <script> are taken
+ * before a tag gets here) */
+static int head_element(const char *tag)
+{
+    return !strcmp(tag, "meta") || !strcmp(tag, "link") || !strcmp(tag, "base") ||
+           !strcmp(tag, "noscript") || !strcmp(tag, "template") || !strcmp(tag, "html");
+}
+
+static void end_head(struct parser *p)
+{
+    p->in_head = 0;
+    pop_to_tag(p, "head");
+}
+
+static int has_text(const char *s, const char *end)
+{
+    for (; s < end; ++s)
+        if (!wl_isspace((unsigned char)*s)) return 1;
+    return 0;
+}
+
 static int handle_open(struct parser *p, const char *tag,
                        const char *attrs, const char *tag_end, int self_close)
 {
@@ -508,6 +535,9 @@ static int handle_open(struct parser *p, const char *tag,
         p->in_head = 1;
         return push_frame(p, tag, current_parent(p), &s, current_pre(p), 0);
     }
+    /* The head ends at <body> or at anything else that belongs in the
+     * body, </head> or not: https://example.com/ leaves it out. */
+    if (p->in_head && !head_element(tag)) end_head(p);
     if (!strcmp(tag, "body")) {
         block_from_parent(&s, parent);
         s.padding_top = s.padding_right = s.padding_bottom = s.padding_left = OL_CSSPX(8);
@@ -540,6 +570,8 @@ static int handle_open(struct parser *p, const char *tag,
         ol_node_set_image(node, p->next_image_id++, OL_CSSPX(w), OL_CSSPX(h));
         if (attribute(attrs, tag_end, "src", src, sizeof(src))) ol_node_set_value(node, src);
         if (attribute(attrs, tag_end, "alt", alt, sizeof(alt))) ol_node_set_name(node, alt);
+        if (p->depth > 0 && p->stack[p->depth - 1].href)
+            ol_node_set_href(node, p->stack[p->depth - 1].href);
         return 1;
     }
 
@@ -644,7 +676,9 @@ static int handle_open(struct parser *p, const char *tag,
             ol_node_set_name(node, href);
         }
         if (self_close) return 1;
-        return push_frame(p, tag, node, &s, current_pre(p), 0);
+        if (!push_frame(p, tag, node, &s, current_pre(p), 0)) return 0;
+        if (href[0]) p->stack[p->depth - 1].href = ol_node_href(node);
+        return 1;
     }
 
     if (!strcmp(tag, "strong") || !strcmp(tag, "b") ||
@@ -688,6 +722,7 @@ static int handle_open(struct parser *p, const char *tag,
 static void handle_close(struct parser *p, const char *tag)
 {
     if (!strcmp(tag, "head")) p->in_head = 0;
+    if (p->in_head && strcmp(tag, "head") && !head_element(tag)) end_head(p);
     if (!strcmp(tag, "p") || !strcmp(tag, "div") ||
         !strcmp(tag, "section") || !strcmp(tag, "article") ||
         !strcmp(tag, "header") || !strcmp(tag, "footer") ||
@@ -771,6 +806,8 @@ int wl_html_parse_in(wl_pool *pool, const char *html, size_t length,
         char tag[16];
         int closing, self_close = 0;
 
+        /* text in the head is the body's start */
+        if (p->in_head && has_text(s, lt ? lt : end)) end_head(p);
         if (!lt) {
             if (!p->in_head && !emit_text(p, s, end)) goto fail;
             break;
