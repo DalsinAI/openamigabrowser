@@ -121,14 +121,17 @@ The patches, in order:
   paths everywhere. `JSC_useM68KTemplateJIT=0` runs the interpreter alone.
 
 - `0031-jsc-m68k-jit-functions-properties-doubles.patch`: J4. Whole
-  functions: op_enter runs a function's code once it has been called often
-  enough, not only its loops. Property access: get_by_id and put_by_id get
-  their own code for sites whose interpreter cache holds an own property
-  (`JSC_useM68KPropertyFastPaths=0` turns it off). Doubles: add, sub, mul
-  and the compare-and-jumps run on the FPU when an operand is a double or an
-  int32 result overflows. Double arithmetic, in the JIT and the interpreter,
-  uses the 68040's fdadd/fdsub/fdmul/fddiv/fdsqrt, which round once to
-  double as JavaScript asks.
+  functions: the function prologues enter a function's code once it has
+  been called often enough, not only its loops. Calls: op_enter and op_ret
+  get their own code. The 68k interpreter stops filling value, arithmetic
+  and argument profiles, which only the optimizing JITs read. Property
+  access: get_by_id and put_by_id get their own code for sites whose
+  interpreter cache holds an own property (`JSC_useM68KPropertyFastPaths=0`
+  turns it off). Doubles: add, sub, mul and the compare-and-jumps run on the
+  FPU when an operand is a double or an int32 result overflows. Double
+  arithmetic, in the JIT and the interpreter, uses the 68040's
+  fdadd/fdsub/fdmul/fddiv/fdsqrt, which round once to double as
+  JavaScript asks.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

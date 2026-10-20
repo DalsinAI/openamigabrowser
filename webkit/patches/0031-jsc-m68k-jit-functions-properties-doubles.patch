@@ -1,14 +1,20 @@
-From 2848f03f94b8605cdbebfe4de28e759103f7a76b Mon Sep 17 00:00:00 2001
+From a234dd59d747146d9c199e5b2ede8330cbc6ab4d Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
-Date: Tue, 20 Oct 2026 19:58:05 +0000
-Subject: [PATCH] JavaScriptCore: whole functions, property access and doubles
- in the 68k template JIT (J4)
+Date: Tue, 20 Oct 2026 20:24:59 +0000
+Subject: [PATCH] JavaScriptCore: whole functions, calls, property access and
+ doubles in the 68k template JIT (J4)
 
-- Whole functions: op_enter runs a CodeBlock's code from its next
-  instruction when it has some, and counts calls towards compiling it; the
-  replace slow path (reached from calls and returns) compiles it instead of
-  giving up on the CodeBlock. Before, only loops reached the JIT, and a
-  function that returned often stopped its own loops from being compiled.
+- Whole functions: the function prologues enter a CodeBlock's code at its
+  op_enter when it has some; otherwise op_enter counts calls towards
+  compiling it, and the replace slow path (reached from calls and returns)
+  compiles it instead of giving up on the CodeBlock. Before, only loops
+  reached the JIT, and a function that returned often stopped its own loops
+  from being compiled.
+- Calls: op_enter and op_ret get their own code: op_enter with the local
+  count, scope register and checks known at compile time (its template is
+  the slow path), op_ret without the count towards compiling.
+- The 68k interpreter no longer fills value, arithmetic or argument
+  profiles: only the optimizing JITs read them, and the 68k has none.
 - Property access: get_by_id and put_by_id get their own code for sites
   whose interpreter cache holds an own property (a replace, for puts). The
   code reads the cache as it runs, so the garbage collector clearing it or
@@ -24,15 +30,30 @@ Subject: [PATCH] JavaScriptCore: whole functions, property access and doubles
 
 useM68KPropertyFastPaths (default true) turns the property code off.
 ---
+ Source/JavaScriptCore/bytecode/CodeBlock.h    |   2 +
  .../JavaScriptCore/llint/LLIntSlowPaths.cpp   |   5 +
- .../llint/LowLevelInterpreter64.asm           |  16 +
- .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 454 ++++++++++++++++--
+ .../llint/LowLevelInterpreter.asm             |  91 +--
+ .../llint/LowLevelInterpreter64.asm           |  26 +-
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 561 ++++++++++++++++--
  Source/JavaScriptCore/llint/M68KTemplateJIT.h |   7 +-
  .../offlineasm-py/offlineasm/m68k.py          |  12 +-
  Source/JavaScriptCore/offlineasm/m68k.rb      |   8 +-
  Source/JavaScriptCore/runtime/OptionsList.h   |   3 +-
- 7 files changed, 452 insertions(+), 53 deletions(-)
+ 9 files changed, 626 insertions(+), 89 deletions(-)
 
+diff --git a/Source/JavaScriptCore/bytecode/CodeBlock.h b/Source/JavaScriptCore/bytecode/CodeBlock.h
+index 1b52154baf4..80a38217d2c 100644
+--- a/Source/JavaScriptCore/bytecode/CodeBlock.h
++++ b/Source/JavaScriptCore/bytecode/CodeBlock.h
+@@ -990,6 +990,8 @@ public:
+     // and the map's length. jsc_m68k_tjit_redispatch reads the map.
+     void* m_m68kTemplateCode { nullptr };
+     void** m_m68kTemplateMap { nullptr };
++    // Where a call enters the code (op_enter's), for the prologues.
++    void* m_m68kTemplateEntry { nullptr };
+     unsigned m_m68kTemplateMapSize { 0 };
+     bool m_m68kTemplateFailed { false };
+ private:
 diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
 index feef09ae4e7..9333b282198 100644
 --- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
@@ -49,11 +70,169 @@ index feef09ae4e7..9333b282198 100644
      codeBlock->dontJITAnytimeSoon();
      LLINT_END_IMPL();
  #endif // ENABLE(JIT)
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+index dec4bf9fbbd..c265882e5b3 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+@@ -1615,30 +1615,45 @@ end
+ 
+ # Expects that CodeBlock is in t1, which is what prologue() leaves behind.
+ # Must call dispatch(0) after calling this.
++# The 68k template JIT (llint/M68KTemplateJIT.cpp): a function with code
++# runs it from its op_enter, on this frame.
++macro m68kEnterCompiledCode()
++    if M68K
++        loadp CodeBlock + LowWordOffset[cfr], t1
++        loadp CodeBlock::m_m68kTemplateEntry[t1], t0
++        btpz t0, .notCompiled
++        jmp t0
++    .notCompiled:
++    end
++end
++
+ macro functionInitialization(profileArgSkip)
+-    # Profile the arguments. Unfortunately, we have no choice but to do this. This
+-    # code is pretty horrendous because of the difference in ordering between
+-    # arguments and value profiles, the desire to have a simple loop-down-to-zero
+-    # loop, and the desire to use only three registers so as to preserve the PC and
+-    # the code block. It is likely that this code should be rewritten in a more
+-    # optimal way for architectures that have more than five registers available
+-    # for arbitrary use in the interpreter.
+-    loadi CodeBlock::m_numParameters[t1], t0
+-    addp -profileArgSkip, t0
+-    assert(macro (ok) bpgteq t0, 0, ok end)
+-    btpz t0, .argumentProfileDone
+-    loadp CodeBlock::m_argumentValueProfiles + ArgumentValueProfileFixedVector::m_storage[t1], t3
+-    btpz t3, .argumentProfileDone # When we can't JIT, we don't allocate any argument value profiles.
+-    mulp sizeof ArgumentValueProfile, t0, t2 # Aaaaahhhh! Need strength reduction!
+-    lshiftp 3, t0 # offset of last JSValue arguments on the stack.
+-    addp (constexpr (ArgumentValueProfileFixedVector::Storage::offsetOfData())), t3
+-    addp t2, t3 # pointer to end of ValueProfile array in the value profile array.
+-.argumentProfileLoop:
+-    loadq ThisArgumentOffset - 8 + profileArgSkip * 8[cfr, t0], t2
+-    subp sizeof ArgumentValueProfile, t3
+-    storeq t2, profileArgSkip * sizeof ArgumentValueProfile + ValueProfile::m_buckets[t3]
+-    baddpnz -8, t0, .argumentProfileLoop
+-.argumentProfileDone:
++    # The 68k has no optimizing JIT to read argument profiles.
++    if not M68K
++        # Profile the arguments. Unfortunately, we have no choice but to do this. This
++        # code is pretty horrendous because of the difference in ordering between
++        # arguments and value profiles, the desire to have a simple loop-down-to-zero
++        # loop, and the desire to use only three registers so as to preserve the PC and
++        # the code block. It is likely that this code should be rewritten in a more
++        # optimal way for architectures that have more than five registers available
++        # for arbitrary use in the interpreter.
++        loadi CodeBlock::m_numParameters[t1], t0
++        addp -profileArgSkip, t0
++        assert(macro (ok) bpgteq t0, 0, ok end)
++        btpz t0, .argumentProfileDone
++        loadp CodeBlock::m_argumentValueProfiles + ArgumentValueProfileFixedVector::m_storage[t1], t3
++        btpz t3, .argumentProfileDone # When we can't JIT, we don't allocate any argument value profiles.
++        mulp sizeof ArgumentValueProfile, t0, t2 # Aaaaahhhh! Need strength reduction!
++        lshiftp 3, t0 # offset of last JSValue arguments on the stack.
++        addp (constexpr (ArgumentValueProfileFixedVector::Storage::offsetOfData())), t3
++        addp t2, t3 # pointer to end of ValueProfile array in the value profile array.
++    .argumentProfileLoop:
++        loadq ThisArgumentOffset - 8 + profileArgSkip * 8[cfr, t0], t2
++        subp sizeof ArgumentValueProfile, t3
++        storeq t2, profileArgSkip * sizeof ArgumentValueProfile + ValueProfile::m_buckets[t3]
++        baddpnz -8, t0, .argumentProfileLoop
++    .argumentProfileDone:
++    end
+ end
+ 
+ macro doReturn()
+@@ -2229,6 +2244,7 @@ end)
+ op(llint_function_for_call_prologue, macro ()
+     prologue(_llint_entry_osr_function_for_call, _llint_trace_prologue_function_for_call)
+     functionInitialization(0)
++    m68kEnterCompiledCode()
+     dispatch(0)
+ end)
+     
+@@ -2236,6 +2252,7 @@ end)
+ op(llint_function_for_construct_prologue, macro ()
+     prologue(_llint_entry_osr_function_for_construct, _llint_trace_prologue_function_for_construct)
+     functionInitialization(1)
++    m68kEnterCompiledCode()
+     dispatch(0)
+ end)
+     
+@@ -2245,6 +2262,7 @@ op(llint_function_for_call_arity_check, macro ()
+     functionArityCheck(llint_function_for_call_arity_check, .functionForCallBegin)
+ .functionForCallBegin:
+     functionInitialization(0)
++    m68kEnterCompiledCode()
+     dispatch(0)
+ end)
+ 
+@@ -2253,6 +2271,7 @@ op(llint_function_for_construct_arity_check, macro ()
+     functionArityCheck(llint_function_for_construct_arity_check, .functionForConstructBegin)
+ .functionForConstructBegin:
+     functionInitialization(1)
++    m68kEnterCompiledCode()
+     dispatch(0)
+ end)
+ 
+@@ -2964,19 +2983,25 @@ end
+ 
+ 
+ macro updateUnaryArithProfile(size, opcodeStruct, type, scratch1, scratch2)
+-    getu(size, opcodeStruct, m_profileIndex, scratch1)
+-    loadp CodeBlock + LowWordOffset[cfr], scratch2
+-    loadp CodeBlock::m_unlinkedCode[scratch2], scratch2
+-    loadp UnlinkedCodeBlock::m_unaryArithProfiles + UnaryArithProfileFixedVector::m_storage[scratch2], scratch2
+-    orh type, (constexpr (UnaryArithProfileFixedVector::Storage::offsetOfData())) + UnaryArithProfile::m_bits[scratch2, scratch1, 2]
++    # Profiles for the optimizing JITs, which the 68k does not have.
++    if not M68K
++        getu(size, opcodeStruct, m_profileIndex, scratch1)
++        loadp CodeBlock + LowWordOffset[cfr], scratch2
++        loadp CodeBlock::m_unlinkedCode[scratch2], scratch2
++        loadp UnlinkedCodeBlock::m_unaryArithProfiles + UnaryArithProfileFixedVector::m_storage[scratch2], scratch2
++        orh type, (constexpr (UnaryArithProfileFixedVector::Storage::offsetOfData())) + UnaryArithProfile::m_bits[scratch2, scratch1, 2]
++    end
+ end
+ 
+ macro updateBinaryArithProfile(size, opcodeStruct, type, scratch1, scratch2)
+-    getu(size, opcodeStruct, m_profileIndex, scratch1)
+-    loadp CodeBlock + LowWordOffset[cfr], scratch2
+-    loadp CodeBlock::m_unlinkedCode[scratch2], scratch2
+-    loadp UnlinkedCodeBlock::m_binaryArithProfiles + BinaryArithProfileFixedVector::m_storage[scratch2], scratch2
+-    orh type, (constexpr (BinaryArithProfileFixedVector::Storage::offsetOfData())) + BinaryArithProfile::m_bits[scratch2, scratch1, 2]
++    # Profiles for the optimizing JITs, which the 68k does not have.
++    if not M68K
++        getu(size, opcodeStruct, m_profileIndex, scratch1)
++        loadp CodeBlock + LowWordOffset[cfr], scratch2
++        loadp CodeBlock::m_unlinkedCode[scratch2], scratch2
++        loadp UnlinkedCodeBlock::m_binaryArithProfiles + BinaryArithProfileFixedVector::m_storage[scratch2], scratch2
++        orh type, (constexpr (BinaryArithProfileFixedVector::Storage::offsetOfData())) + BinaryArithProfile::m_bits[scratch2, scratch1, 2]
++    end
+ end
+ 
+ if WEBASSEMBLY
 diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
-index 059ff5bacb5..c186873a669 100644
+index 059ff5bacb5..5375dfe352a 100644
 --- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
 +++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
-@@ -868,6 +868,22 @@ _llint_op_enter:
+@@ -75,9 +75,13 @@ macro makeReturnProfiled(size, opcodeStruct, get, metadata, dispatch, fn)
+ end
+ 
+ macro valueProfile(size, opcodeStruct, profileName, value, scratch)
+-    getu(size, opcodeStruct, profileName, scratch)
+-    mulq constexpr (-sizeof(ValueProfile)), scratch
+-    storeq value, constexpr (-sizeof(UnlinkedMetadataTable::LinkingData)) + ValueProfile::m_buckets[metadataTable, scratch, 1]
++    # Value profiles feed the optimizing JITs; the 68k has none of those, so
++    # it skips them (a 64-bit multiply and store per profiled instruction).
++    if not M68K
++        getu(size, opcodeStruct, profileName, scratch)
++        mulq constexpr (-sizeof(ValueProfile)), scratch
++        storeq value, constexpr (-sizeof(UnlinkedMetadataTable::LinkingData)) + ValueProfile::m_buckets[metadataTable, scratch, 1]
++    end
+ end
+ 
+ # After calling, calling bytecode is claiming input registers are not used.
+@@ -868,6 +872,22 @@ _llint_op_enter:
  
  .opEnterDispatch:
      checkTraps(macro()
@@ -77,10 +256,10 @@ index 059ff5bacb5..c186873a669 100644
      end)
  
 diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
-index bfda2d5b99b..a0551a8fdfa 100644
+index bfda2d5b99b..2fd28dedcf1 100644
 --- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
 +++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
-@@ -26,10 +26,13 @@
+@@ -26,10 +26,15 @@
  #if CPU(M68K) && ENABLE(C_LOOP)
  
  #include "BytecodeStructs.h"
@@ -88,13 +267,38 @@ index bfda2d5b99b..a0551a8fdfa 100644
  #include "CodeBlock.h"
 +#include "GetByIdMetadata.h"
  #include "JSCJSValueInlines.h"
++#include "JSCallee.h"
++#include "VMTraps.h"
  #include "M68KTemplateStitch.h"
  #include "Options.h"
 +#include "PureNaN.h"
  #include <wtf/DataLog.h>
  #include <wtf/FastMalloc.h>
  
-@@ -184,7 +187,84 @@ public:
+@@ -49,6 +54,8 @@
+ #include "LLIntTemplateIndex.h"
+ #undef M68K_TEMPLATE
+ 
++extern "C" uint64_t jsc_m68k_vrf[];
++
+ namespace JSC {
+ namespace M68KTemplateJIT {
+ 
+@@ -134,6 +141,13 @@ void flushInstructionCache(void* code, size_t size)
+ 
+ constexpr uint32_t int32Tag = 0xfffe0000; // JSValue::NumberTag's high word.
+ 
++// The interpreter's register file (LowLevelInterpreter.cpp's M68KSlot, in
++// offlineasm-py/offlineasm/m68k.py's order): one 64-bit slot per register,
++// high word first.
++constexpr unsigned m68kSlotT0 = 0;
++constexpr unsigned m68kSlotSP = 13;
++constexpr unsigned m68kSlotLR = 14;
++
+ class Builder {
+ public:
+     Vector<uint8_t> bytes;
+@@ -184,7 +198,102 @@ public:
      void addq1(unsigned dn) { word(0x5280 | dn); }
      void subq1(unsigned dn) { word(0x5380 | dn); }
  
@@ -122,6 +326,24 @@ index bfda2d5b99b..a0551a8fdfa 100644
 +    void copyIndexedToFrame(unsigned an, unsigned dn, int d8, int disp) { word(0x2b70 | an); word(index(dn, d8)); word(disp); } // move.l d8(an,dn.l),d16(a5)
 +    void copyFrameToIndexed(int disp, unsigned an, unsigned dn, int d8) { word(0x21ad | (an << 9)); word(disp); word(index(dn, d8)); } // move.l d16(a5),d8(an,dn.l)
 +    void storeImmIndexed(uint32_t imm, unsigned an, unsigned dn, int d8) { word(0x21bc | (an << 9)); longWord(imm); word(index(dn, d8)); } // move.l #imm,d8(an,dn.l)
++
++    // op_enter (stage J5).
++    void clrFrame(int disp) { word(0x42ad); word(disp); } // clr.l d16(a5)
++    void moveq(int8_t imm, unsigned dn) { word(0x7000 | (dn << 9) | static_cast<uint8_t>(imm)); }
++    void moveByteAbs(const void* address, unsigned dn) { word(0x1039 | (dn << 9)); longWord(reinterpret_cast<uintptr_t>(address)); } // move.b (abs).l,dn
++    void moveLongAbs(const void* address, unsigned dn) { word(0x2039 | (dn << 9)); longWord(reinterpret_cast<uintptr_t>(address)); } // move.l (abs).l,dn
++    void cmpLongAbs(const void* address, unsigned dn) { word(0xb0b9 | (dn << 9)); longWord(reinterpret_cast<uintptr_t>(address)); } // cmp.l (abs).l,dn
++
++    // op_ret (stage J5).
++    void copyFrameToAbs(int disp, const void* address) { word(0x23ed); word(disp); longWord(reinterpret_cast<uintptr_t>(address)); } // move.l d16(a5),(abs).l
++    void storeImmAbs(uint32_t imm, const void* address) { word(0x23fc); longWord(imm); longWord(reinterpret_cast<uintptr_t>(address)); } // move.l #imm,(abs).l
++    void storeAbs(unsigned dn, const void* address) { word(0x23c0 | dn); longWord(reinterpret_cast<uintptr_t>(address)); } // move.l dn,(abs).l
++    void storeAddressAbs(unsigned an, const void* address) { word(0x23c8 | an); longWord(reinterpret_cast<uintptr_t>(address)); } // move.l an,(abs).l
++    void clrAbs(const void* address) { word(0x42b9); longWord(reinterpret_cast<uintptr_t>(address)); } // clr.l (abs).l
++    void leaFrame(int disp, unsigned an) { word(0x41ed | (an << 9)); word(disp); } // lea d16(a5),an
++    void popFrame() { word(0x2a55); } // movea.l (a5),a5
++    void smiExt(unsigned dn) { word(0x5bc0 | dn); word(0x49c0 | dn); } // smi dn; extb.l dn
++    void jumpTo(unsigned dn) { word(0x2040 | dn); word(0x4ed0); } // movea.l dn,a0; jmp (a0)
 +
 +    // Doubles (stage J4), on the 68040's FPU. fp0 and fp1 are scratch, as in
 +    // the interpreter's handlers; C keeps fp2-fp7.
@@ -180,7 +402,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
      // b<cc>.l (68020+): a 32-bit displacement from the opcode word + 2.
      size_t branch(Condition cc)
      {
-@@ -217,20 +297,26 @@ struct Operand {
+@@ -217,20 +326,26 @@ struct Operand {
      bool valid { false };
      bool isConstant { false };
      int32_t constant { 0 };
@@ -213,7 +435,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
          return op;
      }
      int disp = reg.offset() * static_cast<int>(sizeof(Register));
-@@ -242,6 +328,19 @@ Operand operandFor(CodeBlock* codeBlock, VirtualRegister reg)
+@@ -242,6 +357,19 @@ Operand operandFor(CodeBlock* codeBlock, VirtualRegister reg)
      return op;
  }
  
@@ -233,7 +455,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
  class FastPaths {
  public:
      FastPaths(CodeBlock* codeBlock, Builder& hot)
-@@ -251,29 +350,57 @@ public:
+@@ -251,29 +379,57 @@ public:
      }
  
      // Writes fast code for the instruction, or returns false (nothing written)
@@ -294,7 +516,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
      }
      void load(const Operand& op, unsigned dn)
      {
-@@ -288,17 +415,105 @@ private:
+@@ -288,17 +444,105 @@ private:
          if (!tagAlreadyInt32)
              m_hot.storeFrameImm(int32Tag, dst.hi);
      }
@@ -405,7 +627,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
          checkInt32(lhs);
          checkInt32(rhs);
          load(lhs, 0);
-@@ -307,7 +522,7 @@ private:
+@@ -307,7 +551,7 @@ private:
          else
              (m_hot.*withFrame)(rhs.lo, 0);
          if (checkOverflow)
@@ -414,7 +636,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
          storeInt32(0, dst, same(dst, lhs) || same(dst, rhs));
          return true;
      }
-@@ -316,13 +531,18 @@ private:
+@@ -316,13 +560,18 @@ private:
      bool compareAndJump(const JSInstruction* instruction, unsigned offset, Builder::Condition cc)
      {
          auto bytecode = instruction->as<Op>();
@@ -436,7 +658,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
          checkInt32(lhs);
          checkInt32(rhs);
          load(lhs, 0);
-@@ -334,6 +554,133 @@ private:
+@@ -334,9 +583,212 @@ private:
          return true;
      }
  
@@ -567,10 +789,89 @@ index bfda2d5b99b..a0551a8fdfa 100644
 +        return true;
 +    }
 +
++    // op_enter, where calls come in (m68kEnterCompiledCode in the
++    // prologues): the interpreter's handler with what it looks up known now. Its slow path
++    // (a write barrier on the CodeBlock, a trap to handle) is the template.
++    bool enter()
++    {
++        unsigned locals = m_codeBlock->numVars();
++        constexpr unsigned calleeSaveSpaceAsVirtualRegisters = 1; // LowLevelInterpreter.asm's, for the C loop
++        if (locals < calleeSaveSpaceAsVirtualRegisters || locals - calleeSaveSpaceAsVirtualRegisters > 32 || m_codeBlock->couldBeTainted())
++            return false;
++        locals -= calleeSaveSpaceAsVirtualRegisters;
++        VM& vm = m_codeBlock->vm();
++        m_hot.moveq(0, 0);
++        m_hot.moveByteAbs(reinterpret_cast<uint8_t*>(m_codeBlock) + JSCell::cellStateOffset(), 0);
++        m_hot.cmpLongAbs(reinterpret_cast<uint8_t*>(&vm) + VM::offsetOfHeapBarrierThreshold(), 0);
++        slowUnless(Builder::LowerSame);
++        m_hot.moveLongAbs(vm.traps().trapBitsAddress(), 0);
++        m_hot.andImm(VMTraps::AsyncEvents, 0);
++        slowUnless(Builder::NotEqual);
++        // The locals are undefined, as the interpreter's loop makes them.
++        uint64_t undefined = JSValue::encode(jsUndefined());
++        RELEASE_ASSERT(!(undefined >> 32) && undefined < 128);
++        m_hot.moveq(static_cast<int8_t>(undefined), 0);
++        for (unsigned i = 0; i < locals; ++i) {
++            int disp = -static_cast<int>((calleeSaveSpaceAsVirtualRegisters + 1 + i) * sizeof(Register));
++            m_hot.clrFrame(disp);
++            m_hot.storeFrame(0, disp + 4);
++        }
++        // The scope register gets the callee's scope.
++        int scope = m_codeBlock->scopeRegister().offset() * static_cast<int>(sizeof(Register));
++        m_hot.moveaDisp(5, CallFrameSlot::callee * static_cast<int>(sizeof(Register)) + 4, 0);
++        m_hot.loadDisp(0, JSCallee::offsetOfScopeChain(), 0);
++        m_hot.clrFrame(scope);
++        m_hot.storeFrame(0, scope + 4);
++        return true;
++    }
++
++    // op_ret: the interpreter's handler (doReturn) without the count
++    // towards compiling, which is done. The result goes in r0 (t0: its low
++    // word in d4, its high word in the register file).
++    bool ret(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpRet>();
++        uint32_t* t0High = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotT0]);
++        uint32_t* sp = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotSP]);
++        uint32_t* lr = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotLR]);
++        if (bytecode.m_value.isConstant()) {
++            uint64_t bits = JSValue::encode(m_codeBlock->getConstant(bytecode.m_value));
++            m_hot.storeImmAbs(static_cast<uint32_t>(bits >> 32), t0High);
++            m_hot.moveImm(static_cast<uint32_t>(bits), 4);
++        } else {
++            Operand value = operandFor(m_codeBlock, bytecode.m_value);
++            if (!value.valid)
++                return false;
++            m_hot.copyFrameToAbs(value.hi, t0High);
++            m_hot.loadFrame(value.lo, 4);
++        }
++        // restoreCalleeSavesUsedByLLInt: metadataTable (a4).
++        m_hot.moveaDisp(5, -static_cast<int>(sizeof(void*)), 4);
++        // restoreCallerPCAndCFR: sp = cfr; pop cfr; pop lr. Then ret.
++        m_hot.loadDisp(5, sizeof(void*), 0);
++        m_hot.leaFrame(2 * sizeof(void*), 1);
++        m_hot.storeAddressAbs(1, sp + 1);
++        m_hot.clrAbs(sp);
++        m_hot.popFrame();
++        m_hot.storeAbs(0, lr + 1);
++        m_hot.tst(0); // pop sign-extends into the high word
++        m_hot.smiExt(1);
++        m_hot.storeAbs(1, lr);
++        m_hot.jumpTo(0);
++        return true;
++    }
++
      bool emitImpl(const JSInstruction* instruction, unsigned offset)
      {
          switch (instruction->opcodeID()) {
-@@ -384,13 +731,13 @@ private:
++        case op_enter:
++            return enter();
++        case op_ret:
++            return ret(instruction);
+         case op_loop_hint:
+             // Its only work is counting towards this tier, which is here.
+             return true;
+@@ -384,13 +836,13 @@ private:
              return true;
          }
          case op_add:
@@ -588,7 +889,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
          case op_bitxor: {
              auto bytecode = instruction->as<OpBitxor>();
              Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
-@@ -413,10 +760,15 @@ private:
+@@ -413,10 +865,15 @@ private:
          case op_mul: {
              auto bytecode = instruction->as<OpMul>();
              Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
@@ -607,7 +908,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
              checkInt32(lhs);
              checkInt32(rhs);
              load(lhs, 0);
-@@ -424,9 +776,9 @@ private:
+@@ -424,9 +881,9 @@ private:
                  m_hot.mulsImm(rhs.constant, 0);
              else
                  m_hot.mulsFrame(rhs.lo, 0);
@@ -620,7 +921,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
              storeInt32(0, dst, same(dst, lhs) || same(dst, rhs));
              return true;
          }
-@@ -439,6 +791,10 @@ private:
+@@ -439,6 +896,10 @@ private:
          case op_jnlesseq: return compareAndJump<OpJnlesseq>(instruction, offset, Builder::Greater);
          case op_jngreater: return compareAndJump<OpJngreater>(instruction, offset, Builder::LessEqual);
          case op_jngreatereq: return compareAndJump<OpJngreatereq>(instruction, offset, Builder::Less);
@@ -631,7 +932,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
          default:
              return false;
          }
-@@ -447,6 +803,8 @@ private:
+@@ -447,6 +908,8 @@ private:
      CodeBlock* m_codeBlock;
      Builder& m_hot;
      Vector<size_t>* m_slow { nullptr };
@@ -640,7 +941,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
  };
  
  bool compile(CodeBlock* codeBlock)
-@@ -461,7 +819,8 @@ bool compile(CodeBlock* codeBlock)
+@@ -461,7 +924,8 @@ bool compile(CodeBlock* codeBlock)
      }
  
      // Hot code in bytecode order: each instruction's fast code, or a copy of
@@ -650,7 +951,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
      Builder code;
      FastPaths fastPaths(codeBlock, code);
      Vector<unsigned> hotStart(bytecodeSize);
-@@ -469,6 +828,7 @@ bool compile(CodeBlock* codeBlock)
+@@ -469,6 +933,7 @@ bool compile(CodeBlock* codeBlock)
          const JSInstruction* instruction;
          unsigned offset;
          Vector<size_t> branches;
@@ -658,7 +959,7 @@ index bfda2d5b99b..a0551a8fdfa 100644
      };
      Vector<Slow> slows;
      auto copyTemplate = [&](const JSInstruction* ptr, unsigned offset) {
-@@ -484,21 +844,30 @@ bool compile(CodeBlock* codeBlock)
+@@ -484,21 +949,30 @@ bool compile(CodeBlock* codeBlock)
          unsigned offset = instruction.offset();
          hotStart[offset] = code.size();
          Vector<size_t> branches;
@@ -693,7 +994,15 @@ index bfda2d5b99b..a0551a8fdfa 100644
      }
  
      size_t codeSize = code.size();
-@@ -535,16 +904,19 @@ bool compile(CodeBlock* codeBlock)
+@@ -528,6 +1002,7 @@ bool compile(CodeBlock* codeBlock)
+ 
+     codeBlock->m_m68kTemplateCode = memory;
+     codeBlock->m_m68kTemplateMap = map;
++    codeBlock->m_m68kTemplateEntry = map[0];
+     codeBlock->m_m68kTemplateMapSize = bytecodeSize;
+     dataLogLnIf(Options::verboseOSR(), *codeBlock, ": 68k template JIT, ", bytecodeSize, " bytecode bytes -> ", codeSize, " code bytes (", hotSize, " hot)");
+     return true;
+@@ -535,16 +1010,19 @@ bool compile(CodeBlock* codeBlock)
  
  } // anonymous namespace
  
@@ -720,6 +1029,14 @@ index bfda2d5b99b..a0551a8fdfa 100644
      unsigned bytecodeOffset = codeBlock->bytecodeOffset(pc);
      return codeBlock->m_m68kTemplateMap[bytecodeOffset];
  }
+@@ -555,6 +1033,7 @@ void release(CodeBlock* codeBlock)
+     fastFree(codeBlock->m_m68kTemplateMap);
+     codeBlock->m_m68kTemplateCode = nullptr;
+     codeBlock->m_m68kTemplateMap = nullptr;
++    codeBlock->m_m68kTemplateEntry = nullptr;
+     codeBlock->m_m68kTemplateMapSize = 0;
+ }
+ 
 diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.h b/Source/JavaScriptCore/llint/M68KTemplateJIT.h
 index 6acb565f0ac..d9df759b72c 100644
 --- a/Source/JavaScriptCore/llint/M68KTemplateJIT.h

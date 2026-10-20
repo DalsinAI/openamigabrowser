@@ -6,29 +6,30 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
-## 20 Oct 2026, stage J4 (whole functions, property access, doubles; patch 0031)
+## 20 Oct 2026, stage J4 (whole functions, calls, property access, doubles; patch 0031)
 
-Interpreter column re-run on this build (its double arithmetic now uses
-fdadd and friends, and op_enter counts calls). `lab/correct.js` and
-`lab/correct2.js` (doubles, NaN, -0, overflow, inline and out-of-line
-properties, polymorphic sites, prototypes, getters, setters, delete,
-frozen objects, objects stored, recursion) print the same with the JIT on
-and off.
+Interpreter columns: as of patch 0029, and with 0031 (it no longer fills
+profiles, and its double arithmetic uses fdadd and friends). Speed-up is J4
+against the interpreter as of 0029. `lab/correct.js` and `lab/correct2.js`
+(doubles, NaN, -0, overflow, inline and out-of-line properties, polymorphic
+sites, prototypes, getters, setters, delete, frozen objects, objects stored,
+recursion) print the same with the JIT on and off; `check_templates.py`: 585
+templates, 0 problems.
 
-| jsbench test | interpreter (M) | J3 (M) | J4 (M) | speed-up | J4 vs J3 |
-|---|---:|---:|---:|---:|---:|
-| int-loop    | 101.8 |   9.9 |   9.9 | 10.30x | 1.00x |
-| properties  | 105.1 |  39.6 |  13.2 |  7.98x | 3.01x |
-| double-loop |  51.7 |  24.7 |   6.6 |  7.87x | 3.76x |
-| calls       | 101.9 |  54.4 |  44.3 |  2.30x | 1.23x |
-| closures    |  19.0 |  13.8 |  13.0 |  1.47x | 1.07x |
-| strings     |   9.2 |   6.6 |   6.4 |  1.44x | 1.04x |
-| array (sort)| 146.6 | 135.7 | 125.1 |  1.17x | 1.09x |
-| regexp      |   8.9 |   8.0 |   8.0 |  1.10x | 1.00x |
-| json        |   3.6 |   3.7 |   3.7 |  0.97x | 0.99x |
+| jsbench test | interpreter 0029 (M) | interpreter 0031 (M) | J3 (M) | J4 (M) | speed-up | J4 vs J3 |
+|---|---:|---:|---:|---:|---:|---:|
+| int-loop    | 101.8 |  91.0 |   9.9 |   9.9 | 10.33x | 1.00x |
+| properties  | 105.1 |  94.0 |  39.6 |  13.1 |  8.01x | 3.02x |
+| double-loop |  51.7 |  46.3 |  24.7 |   6.5 |  7.91x | 3.80x |
+| calls       | 101.9 |  95.9 |  54.4 |  26.6 |  3.83x | 2.05x |
+| closures    |  19.0 |  18.1 |  13.8 |  10.8 |  1.76x | 1.28x |
+| strings     |   9.2 |   8.8 |   6.6 |   6.2 |  1.49x | 1.06x |
+| array (sort)| 146.6 | 143.4 | 135.7 | 107.9 |  1.36x | 1.26x |
+| regexp      |   8.9 |   8.7 |   8.0 |   7.9 |  1.12x | 1.01x |
+| json        |   3.6 |   3.6 |   3.7 |   3.7 |  0.98x | 0.99x |
 
-calls is now bound by the call itself (op_call, the prologue and op_ret run
-as templates); that is the next stage.
+calls now spends most of its time in op_call's template and the prologue;
+op_call as a fast path is the next stage.
 
 ## 20 Oct 2026, stage J3 (32-bit integer fast paths, patch 0027)
 
