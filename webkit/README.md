@@ -83,6 +83,14 @@ The patches, in order:
   templates as Python forms (`.pyerb`); the outputs match the Ruby scripts'
   byte for byte. No build step of the Amiga port runs Ruby now.
 
+- `0022-amiga-webcore-curl-opentls.patch`: the engine without OpenSSL. curl
+  does TLS through OpenTLS (openamigacurl's main branch), so `USE(OPENSSL)`
+  is off and WebCore links no AmiSSL: curl's OpenSSL-only files are left
+  out, and no cipher list, curve list or CA file is set (OpenTLS picks its
+  own suites and reads `S:OpenTLS/ca-bundle.pem`). Responses carry no
+  certificate details, and WebCrypto (`crypto/amiga/CryptoAmiga.cpp`)
+  offers the SHA-1 and SHA-2 digests only.
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;
