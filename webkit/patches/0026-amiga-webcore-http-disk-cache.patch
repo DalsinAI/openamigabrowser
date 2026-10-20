@@ -40,7 +40,7 @@ index 29f73c2232..571a527cbe 100644
  // WebCoreResourceLoaderImp which avoids doing work in dealloc).
  
  #if PLATFORM(AMIGA)
-+#include "AmigaNetwork.h"
++#include "amiga/AmigaNetwork.h"
  #include "CurlRequest.h"
  #include "CurlRequestClient.h"
  #endif
