@@ -4,6 +4,17 @@
 #include <proto/exec.h>
 #include <proto/openlayout.h>
 
+#ifdef WL_LIBRARY
+/* weblayout.library opens openlayout.library in its LibOpen */
+int wl_openlayout_open(void)
+{
+    return OpenLayoutBase != NULL;
+}
+
+void wl_openlayout_close(void)
+{
+}
+#else
 struct Library *OpenLayoutBase = NULL;
 
 int wl_openlayout_open(void)
@@ -21,4 +32,5 @@ void wl_openlayout_close(void)
         OpenLayoutBase = NULL;
     }
 }
+#endif /* WL_LIBRARY */
 #endif
