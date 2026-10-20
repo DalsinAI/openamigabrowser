@@ -44,7 +44,7 @@
 #define TLS_SESSIONS "PROGDIR:TLSSessions"
 #include "oam_stack.h"
 
-static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.5 (6.10.2026)";
+static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.6 (20.10.2026)";
 
 #define HOME_PAGE "https://example.com/"
 
@@ -529,20 +529,21 @@ static void wakeUp(void *context)
     Signal(mainTask, 1UL << wakeSignal);
 }
 
-static void armTimer(double seconds)
+/* micros: the wait in microseconds, negative for none. */
+static void armTimer(long micros)
 {
     if (timerPending) {
         AbortIO((struct IORequest *)timerRequest);
         WaitIO((struct IORequest *)timerRequest);
         timerPending = 0;
     }
-    if (seconds < 0)
+    if (micros < 0)
         return;
-    if (seconds < 0.005)
-        seconds = 0.005;
+    if (micros < 5000)
+        micros = 5000;
     timerRequest->tr_node.io_Command = TR_ADDREQUEST;
-    timerRequest->tr_time.tv_secs = (ULONG)seconds;
-    timerRequest->tr_time.tv_micro = (ULONG)((seconds - (ULONG)seconds) * 1000000.0);
+    timerRequest->tr_time.tv_secs = (ULONG)micros / 1000000UL;
+    timerRequest->tr_time.tv_micro = (ULONG)micros % 1000000UL;
     SendIO((struct IORequest *)timerRequest);
     timerPending = 1;
 }
@@ -1070,11 +1071,11 @@ static int browserMain(int argc, char **argv)
 
     while (!quitNow) {
         ULONG waitMask, got;
-        double next;
+        long next;
 
         ob_webcore_cycle();
         updateWindow();
-        next = ob_webcore_next_timer();
+        next = ob_webcore_next_timer_micros();
         if (next == 0) {
             /* More is due at once: take any input, then go round again. */
             got = SetSignal(0, (1UL << window->UserPort->mp_SigBit) | (1UL << wakeSignal));
