@@ -14,6 +14,7 @@
 #include <wtf/Forward.h>
 #include <wtf/RefPtr.h>
 #include <wtf/TZoneMalloc.h>
+#include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
@@ -54,9 +55,13 @@ public:
     void setWebFontsEnabled(bool);
     void setLiteMode(bool enabled) { m_liteMode = enabled; }
     bool liteMode() const { return m_liteMode; }
-    void paint(unsigned char* argb, int stride, const WebCore::IntRect&);
+    // layOut: lay the page out first if it must. Without, an area whose
+    // layout is still due is not painted but kept dirty (returns false).
+    bool paint(unsigned char* argb, int stride, const WebCore::IntRect&, bool layOut = true);
     void reportDisplayList(unsigned char* direct, unsigned char* replayed, int stride, const WebCore::IntRect&);
     WebCore::IntRect takeDirtyRect();
+    unsigned takeDirtyRects(WebCore::IntRect*, unsigned max);
+    bool renderingUpdatePending() const { return m_renderingUpdateTimer.isActive(); }
 
     // From WebCore's clients.
     void invalidate(const WebCore::IntRect&);
@@ -81,15 +86,20 @@ public:
 
 private:
     void renderingUpdateTimerFired();
+    void addDirtyRect(const WebCore::IntRect&);
     void callString(void (*callback)(void*, const char*), const String&);
 
     OBWebViewCallbacks m_callbacks;
     WebCore::IntSize m_size;
     RefPtr<WebCore::Page> m_page;
     RefPtr<AmigaBackForwardList> m_backForwardList;
-    WebCore::IntRect m_dirtyRect;
+    static constexpr unsigned maxDirtyRects = 8;
+    Vector<WebCore::IntRect, maxDirtyRects> m_dirtyRects; // apart from each other
     WebCore::Timer m_renderingUpdateTimer;
     MonotonicTime m_nextRenderingUpdate; // while a page loads, none before this
+    unsigned m_renderingUpdates { 0 };
+    unsigned m_paintedRenderingUpdate { 0 }; // the last one takeDirtyRects() gave out
+    MonotonicTime m_nextLoadingPaint; // while a page loads, without a new rendering update
     bool m_loading { false };
     bool m_liteMode { false };
     unsigned long long m_bytesReceived { 0 };

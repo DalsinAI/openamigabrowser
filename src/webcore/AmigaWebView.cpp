@@ -234,13 +234,33 @@ void WebView::resize(const IntSize& size)
     invalidate(IntRect(IntPoint(), size));
 }
 
-void WebView::paint(unsigned char* argb, int stride, const IntRect& rect)
+// Whether the view itself covers every pixel it paints: with its base
+// background (white and opaque, from AmigaFrameLoaderClient's createView())
+// under the page. Not before it has a document laid out, or while the
+// document holds its visual updates back: then nothing is painted at all.
+static bool paintsWholeArea(LocalFrameView& view)
+{
+    if (!view.renderView() || view.needsLayout() || view.isTransparent() || !view.baseBackgroundColor().isOpaque())
+        return false;
+    RefPtr document = view.frame().document();
+    return document && document->visualUpdatesAllowed();
+}
+
+bool WebView::paint(unsigned char* argb, int stride, const IntRect& rect, bool layOut)
 {
     RefPtr view = mainFrameView();
     IntRect area = intersection(rect, IntRect(IntPoint(), m_size));
     if (area.isEmpty())
-        return;
+        return true;
     resetFPCR();
+    if (view && layOut)
+        view->updateLayoutAndStyleIfNeededRecursive();
+    else if (view && view->needsLayout()) {
+        // WebCore paints nothing where layout is due; the rendering update
+        // lays out, and the area is painted after it.
+        addDirtyRect(area);
+        return false;
+    }
     cairo_surface_t* surface = cairo_image_surface_create_for_data(argb + area.y() * stride + area.x() * 4,
         CAIRO_FORMAT_ARGB32, area.width(), area.height(), stride);
     {
@@ -248,14 +268,14 @@ void WebView::paint(unsigned char* argb, int stride, const IntRect& rect)
         // Scaled pictures with the cheapest filter: a 68k has no time for more.
         context.setImageInterpolationQuality(InterpolationQuality::Low);
         context.translate(-area.x(), -area.y());
-        context.fillRect(area, Color::white);
-        if (view) {
-            view->updateLayoutAndStyleIfNeededRecursive();
+        if (!view || !paintsWholeArea(*view))
+            context.fillRect(area, Color::white);
+        if (view)
             view->paint(context, area);
-        }
     }
     cairo_surface_flush(surface);
     cairo_surface_destroy(surface);
+    return true;
 }
 
 // The display-list experiment (5 October 2026): paint the area as today,
@@ -340,14 +360,74 @@ void WebView::reportDisplayList(unsigned char* direct, unsigned char* replayed, 
 
 IntRect WebView::takeDirtyRect()
 {
-    IntRect dirty = intersection(m_dirtyRect, IntRect(IntPoint(), m_size));
-    m_dirtyRect = { };
-    return dirty;
+    IntRect dirty;
+    for (auto& rect : m_dirtyRects)
+        dirty.unite(rect);
+    m_dirtyRects.clear();
+    return intersection(dirty, IntRect(IntPoint(), m_size));
+}
+
+// The window's repaint: the areas changed, as long as the page is laid out.
+// Layout is the rendering update's (renderingUpdateTimerFired()), which is
+// spaced out while a page loads; until it has run the areas wait, and while
+// loading they are given out once per rendering update, or after a second
+// when only pictures arrived. Once loaded, at once.
+unsigned WebView::takeDirtyRects(IntRect* rects, unsigned max)
+{
+    if (m_dirtyRects.isEmpty() || !max)
+        return 0;
+    if (RefPtr view = mainFrameView(); view && view->needsLayout()) {
+        if (!m_renderingUpdateTimer.isActive())
+            scheduleRenderingUpdate();
+        return 0;
+    }
+    if (m_loading) {
+        auto now = MonotonicTime::now();
+        if (m_paintedRenderingUpdate == m_renderingUpdates && now < m_nextLoadingPaint)
+            return 0;
+        m_nextLoadingPaint = now + 1_s;
+    }
+    m_paintedRenderingUpdate = m_renderingUpdates;
+    unsigned count = 0;
+    if (m_dirtyRects.size() > max)
+        rects[count++] = takeDirtyRect();
+    else {
+        for (auto& rect : m_dirtyRects)
+            rects[count++] = rect;
+        m_dirtyRects.clear();
+    }
+    return count;
+}
+
+// A few areas apart (a picture here, a line of text there) are kept apart,
+// to be painted and copied one by one; areas that overlap become one. Past
+// maxDirtyRects, one area around them all.
+void WebView::addDirtyRect(const IntRect& rect)
+{
+    IntRect area = intersection(rect, IntRect(IntPoint(), m_size));
+    if (area.isEmpty())
+        return;
+    for (size_t i = 0; i < m_dirtyRects.size();) {
+        if (m_dirtyRects[i].contains(area))
+            return;
+        if (m_dirtyRects[i].intersects(area)) {
+            area.unite(m_dirtyRects[i]);
+            m_dirtyRects.removeAt(i);
+            i = 0;
+        } else
+            i++;
+    }
+    if (m_dirtyRects.size() == maxDirtyRects) {
+        for (auto& dirty : m_dirtyRects)
+            area.unite(dirty);
+        m_dirtyRects.clear();
+    }
+    m_dirtyRects.append(area);
 }
 
 void WebView::invalidate(const IntRect& rect)
 {
-    m_dirtyRect.unite(rect);
+    addDirtyRect(rect);
     if (m_callbacks.invalidate)
         m_callbacks.invalidate(m_callbacks.context, rect.x(), rect.y(), rect.width(), rect.height());
 }
@@ -374,10 +454,14 @@ void WebView::renderingUpdateTimerFired()
     auto start = MonotonicTime::now();
     m_page->updateRendering();
     m_page->finalizeRenderingUpdate({ });
+    m_renderingUpdates++;
     // The next one while loading: a second from now, or twice as long as
     // this one took, so loading keeps at least two thirds of the time.
     auto end = MonotonicTime::now();
     m_nextRenderingUpdate = end + std::max(1_s, (end - start) * 2);
+    // The page is laid out now: the window's moment to paint what changed.
+    if (m_callbacks.rendered)
+        m_callbacks.rendered(m_callbacks.context);
 }
 
 void WebView::setScriptsEnabled(bool enabled)
