@@ -31,6 +31,9 @@ typedef struct {
     /* A request for the page or one of its parts starts (started = 1) or
      * ends (started = 0, with error NULL or the reason it failed). */
     void (*resource)(void *context, const char *url, int started, const char *error);
+    /* After each rendering update (style and layout of the page): the page
+     * is laid out, and ob_webview_dirty_rects() gives out what changed. */
+    void (*rendered)(void *context);
 } OBWebViewCallbacks;
 
 /* Mouse buttons and the qualifiers that go with events. */
@@ -99,6 +102,17 @@ void ob_webview_report_display_list(OBWebView *view, unsigned char *direct, unsi
     int x, int y, int width, int height);
 /* The area changed since the last call (width 0 when none). */
 void ob_webview_dirty(OBWebView *view, int *x, int *y, int *width, int *height);
+/* The areas changed, up to max of them (x, y, width, height each in rects),
+ * once they are laid out: none while the page's layout is still due (for
+ * at most two rendering updates; after that they come to be painted laid out
+ * first), and while a page loads at most once per rendering update or
+ * second. Returns how many. Paint them with ob_webview_paint_laid_out(). */
+int ob_webview_dirty_rects(OBWebView *view, int *rects, int max);
+/* As ob_webview_paint(), without laying the page out first: where layout is
+ * still due it paints nothing, keeps the area changed and returns 0. */
+int ob_webview_paint_laid_out(OBWebView *view, unsigned char *argb, int stride, int x, int y, int width, int height);
+/* 1 while a rendering update (style and layout) is waiting to run. */
+int ob_webview_rendering_pending(OBWebView *view);
 
 void ob_webview_mouse(OBWebView *view, int type, int x, int y, int button, int qualifiers, int clickCount);
 void ob_webview_wheel(OBWebView *view, int x, int y, int deltaX, int deltaY, int qualifiers);
