@@ -4,11 +4,9 @@
  */
 #include "wl_css.h"
 
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <strings.h>
+
+#include "wl_libc.h"
 
 #define OB_CSS_CLASS_MAX 4
 
@@ -22,21 +20,17 @@ struct wl_css_rule {
     char *decl;
 };
 
-static char *range_dup(const char *s, size_t n)
+static char *range_dup(wl_pool *pool, const char *s, size_t n)
 {
-    char *p = (char *)malloc(n + 1);
-    if (!p) return NULL;
-    memcpy(p, s, n);
-    p[n] = 0;
-    return p;
+    return wl_strndup(pool, s, n);
 }
 
 static char *trim(char *s)
 {
     char *e;
-    while (*s && isspace((unsigned char)*s)) ++s;
+    while (*s && wl_isspace((unsigned char)*s)) ++s;
     e = s + strlen(s);
-    while (e > s && isspace((unsigned char)e[-1])) --e;
+    while (e > s && wl_isspace((unsigned char)e[-1])) --e;
     *e = 0;
     return s;
 }
@@ -44,7 +38,7 @@ static char *trim(char *s)
 static void lower_ascii(char *s)
 {
     while (*s) {
-        *s = (char)tolower((unsigned char)*s);
+        *s = (char)wl_tolower((unsigned char)*s);
         ++s;
     }
 }
@@ -57,10 +51,13 @@ void wl_css_init(wl_css_sheet *sheet)
 void wl_css_free(wl_css_sheet *sheet)
 {
     size_t i;
+    wl_pool *pool;
     if (!sheet) return;
-    for (i = 0; i < sheet->count; ++i) free(sheet->rules[i].decl);
-    free(sheet->rules);
+    pool = sheet->pool;
+    for (i = 0; i < sheet->count; ++i) wl_free(sheet->rules[i].decl);
+    wl_free(sheet->rules);
     memset(sheet, 0, sizeof(*sheet));
+    sheet->pool = pool;
 }
 
 size_t wl_css_rule_count(const wl_css_sheet *sheet)
@@ -76,7 +73,7 @@ static int reserve_rules(wl_css_sheet *sheet, size_t extra)
     if (need <= sheet->capacity) return 1;
     cap = sheet->capacity ? sheet->capacity : 16;
     while (cap < need) cap *= 2;
-    p = (wl_css_rule *)realloc(sheet->rules, cap * sizeof(*p));
+    p = (wl_css_rule *)wl_realloc(sheet->pool, sheet->rules, cap * sizeof(*p));
     if (!p) return 0;
     sheet->rules = p;
     sheet->capacity = cap;
@@ -85,7 +82,7 @@ static int reserve_rules(wl_css_sheet *sheet, size_t extra)
 
 static int ident_char(int c)
 {
-    return isalnum((unsigned char)c) || c == '-' || c == '_';
+    return wl_isalnum((unsigned char)c) || c == '-' || c == '_';
 }
 
 static int parse_selector(const char *text, wl_css_rule *rule)
@@ -95,16 +92,16 @@ static int parse_selector(const char *text, wl_css_rule *rule)
     size_t n;
 
     memset(rule, 0, sizeof(*rule));
-    while (*p && isspace((unsigned char)*p)) ++p;
+    while (*p && wl_isspace((unsigned char)*p)) ++p;
     if (!*p) return 0;
 
     if (*p == '*') {
         ++p;
-    } else if (isalpha((unsigned char)*p)) {
+    } else if (wl_isalpha((unsigned char)*p)) {
         dst = rule->tag;
         n = 0;
         while (*p && ident_char(*p) && n + 1 < sizeof(rule->tag))
-            dst[n++] = (char)tolower((unsigned char)*p++);
+            dst[n++] = (char)wl_tolower((unsigned char)*p++);
         dst[n] = 0;
         rule->specificity += 1;
         while (*p && ident_char(*p)) ++p;
@@ -137,8 +134,8 @@ static int parse_selector(const char *text, wl_css_rule *rule)
                 ++rule->nclasses;
             }
             rule->specificity += 10;
-        } else if (isspace((unsigned char)*p)) {
-            while (*p && isspace((unsigned char)*p)) ++p;
+        } else if (wl_isspace((unsigned char)*p)) {
+            while (*p && wl_isspace((unsigned char)*p)) ++p;
             if (*p) return 0; /* no descendant/child combinators in Lite CSS yet */
         } else {
             return 0; /* pseudo, attribute and combinator selectors are not guessed */
@@ -154,17 +151,17 @@ static int add_rule(wl_css_sheet *sheet, const char *selector,
     wl_css_rule rule;
     char *sel, *body;
     if (!sheet || !selector || !decl) return 0;
-    sel = range_dup(selector, strlen(selector));
+    sel = range_dup(sheet->pool, selector, strlen(selector));
     if (!sel) return 0;
     if (!parse_selector(trim(sel), &rule)) {
-        free(sel);
+        wl_free(sel);
         return 1; /* unsupported selector: ignore safely */
     }
-    free(sel);
-    body = range_dup(decl, decl_len);
+    wl_free(sel);
+    body = range_dup(sheet->pool, decl, decl_len);
     if (!body) return 0;
     if (!reserve_rules(sheet, 1)) {
-        free(body);
+        wl_free(body);
         return 0;
     }
     rule.order = ++sheet->order;
@@ -194,7 +191,7 @@ int wl_css_add(wl_css_sheet *sheet, const char *css, size_t length)
         const char *sel_start, *brace, *body_start, *close, *q, *part;
         while (p < end) {
             if (p + 1 < end && p[0] == '/' && p[1] == '*') p = skip_comment(p, end);
-            else if (isspace((unsigned char)*p)) ++p;
+            else if (wl_isspace((unsigned char)*p)) ++p;
             else break;
         }
         if (p >= end) break;
@@ -218,14 +215,14 @@ int wl_css_add(wl_css_sheet *sheet, const char *css, size_t length)
             q = sel_start;
             while (q <= brace) {
                 if (q == brace || *q == ',') {
-                    char *one = range_dup(part, (size_t)(q - part));
+                    char *one = range_dup(sheet->pool, part, (size_t)(q - part));
                     if (!one) return 0;
                     if (!add_rule(sheet, trim(one), body_start,
                                   (size_t)(close - body_start))) {
-                        free(one);
+                        wl_free(one);
                         return 0;
                     }
-                    free(one);
+                    wl_free(one);
                     part = q + 1;
                 }
                 ++q;
@@ -246,9 +243,9 @@ static int class_has(const char *classes, const char *want)
     p = classes;
     while (*p) {
         const char *s;
-        while (*p && isspace((unsigned char)*p)) ++p;
+        while (*p && wl_isspace((unsigned char)*p)) ++p;
         s = p;
-        while (*p && !isspace((unsigned char)*p)) ++p;
+        while (*p && !wl_isspace((unsigned char)*p)) ++p;
         if ((size_t)(p - s) == n && !memcmp(s, want, n)) return 1;
     }
     return 0;
@@ -258,7 +255,7 @@ static int rule_matches(const wl_css_rule *r, const char *tag,
                         const char *id, const char *classes)
 {
     unsigned i;
-    if (r->tag[0] && (!tag || strcasecmp(r->tag, tag))) return 0;
+    if (r->tag[0] && (!tag || wl_strcasecmp(r->tag, tag))) return 0;
     if (r->id[0] && (!id || strcmp(r->id, id))) return 0;
     for (i = 0; i < r->nclasses; ++i)
         if (!class_has(classes, r->classes[i])) return 0;
@@ -268,9 +265,32 @@ static int rule_matches(const wl_css_rule *r, const char *tag,
 static int hexv(int c)
 {
     if (c >= '0' && c <= '9') return c - '0';
-    c = tolower((unsigned char)c);
+    c = wl_tolower((unsigned char)c);
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     return -1;
+}
+
+/* "r , g , b" as sscanf's "%d , %d , %d" reads it */
+static int rgb_triplet(const char *v, int *r, int *g, int *b)
+{
+    int *out[3];
+    int i;
+    char *end;
+    out[0] = r; out[1] = g; out[2] = b;
+    for (i = 0; i < 3; ++i) {
+        long n;
+        if (i) {
+            while (wl_isspace((unsigned char)*v)) ++v;
+            if (*v++ != ',') return 0;
+        }
+        n = wl_strtol(v, &end, 10);
+        if (end == v) return 0;
+        if (n > 100000) n = 100000;
+        if (n < -100000) n = -100000;
+        *out[i] = (int)n;
+        v = end;
+    }
+    return 1;
 }
 
 static int parse_color(const char *v, uint32_t *argb)
@@ -280,7 +300,7 @@ static int parse_color(const char *v, uint32_t *argb)
     char name[32];
     size_t n;
 
-    while (*v && isspace((unsigned char)*v)) ++v;
+    while (*v && wl_isspace((unsigned char)*v)) ++v;
     if (*v == '#') {
         ++v;
         n = strlen(v);
@@ -299,8 +319,8 @@ static int parse_color(const char *v, uint32_t *argb)
         return 1;
     }
 
-    if (!strncasecmp(v, "rgb(", 4)) {
-        if (sscanf(v + 4, "%d , %d , %d", &r, &g, &bl) == 3) {
+    if (!wl_strncasecmp(v, "rgb(", 4)) {
+        if (rgb_triplet(v + 4, &r, &g, &bl)) {
             if (r < 0) r = 0;
             if (r > 255) r = 255;
             if (g < 0) g = 0;
@@ -314,8 +334,8 @@ static int parse_color(const char *v, uint32_t *argb)
     }
 
     n = 0;
-    while (v[n] && !isspace((unsigned char)v[n]) && n + 1 < sizeof(name)) {
-        name[n] = (char)tolower((unsigned char)v[n]);
+    while (v[n] && !wl_isspace((unsigned char)v[n]) && n + 1 < sizeof(name)) {
+        name[n] = (char)wl_tolower((unsigned char)v[n]);
         ++n;
     }
     name[n] = 0;
@@ -343,17 +363,17 @@ static int parse_decimal(const char *v, const char **end_out,
     long whole = 0, frac = 0, den = 1;
     int sign = 1, digits = 0, frac_digits = 0;
 
-    while (*p && isspace((unsigned char)*p)) ++p;
+    while (*p && wl_isspace((unsigned char)*p)) ++p;
     if (*p == '-') { sign = -1; ++p; }
     else if (*p == '+') ++p;
 
-    while (isdigit((unsigned char)*p)) {
+    while (wl_isdigit((unsigned char)*p)) {
         whole = whole * 10 + (*p++ - '0');
         digits = 1;
     }
     if (*p == '.') {
         ++p;
-        while (isdigit((unsigned char)*p)) {
+        while (wl_isdigit((unsigned char)*p)) {
             if (frac_digits < 4) {
                 frac = frac * 10 + (*p - '0');
                 den *= 10;
@@ -375,17 +395,17 @@ static int parse_length(const char *v, ol_unit basis, ol_unit *out)
     const char *end;
     long num, den;
     int64_t value;
-    while (*v && isspace((unsigned char)*v)) ++v;
-    if (!strcasecmp(v, "thin")) { *out = OL_CSSPX(1); return 1; }
-    if (!strcasecmp(v, "medium")) { *out = OL_CSSPX(3); return 1; }
-    if (!strcasecmp(v, "thick")) { *out = OL_CSSPX(5); return 1; }
+    while (*v && wl_isspace((unsigned char)*v)) ++v;
+    if (!wl_strcasecmp(v, "thin")) { *out = OL_CSSPX(1); return 1; }
+    if (!wl_strcasecmp(v, "medium")) { *out = OL_CSSPX(3); return 1; }
+    if (!wl_strcasecmp(v, "thick")) { *out = OL_CSSPX(5); return 1; }
     if (!parse_decimal(v, &end, &num, &den)) return 0;
-    while (*end && isspace((unsigned char)*end)) ++end;
-    if (!*end || !strcasecmp(end, "px"))
+    while (*end && wl_isspace((unsigned char)*end)) ++end;
+    if (!*end || !wl_strcasecmp(end, "px"))
         value = (int64_t)num * OL_UNITS_PER_CSSPX / den;
-    else if (!strcasecmp(end, "pt"))
+    else if (!wl_strcasecmp(end, "pt"))
         value = (int64_t)num * OL_UNITS_PER_POINT / den;
-    else if (!strcasecmp(end, "em"))
+    else if (!wl_strcasecmp(end, "em"))
         value = (int64_t)num * basis / den;
     else if (!strcmp(end, "%"))
         value = (int64_t)num * basis / (den * 100L);
@@ -397,15 +417,15 @@ static int parse_length(const char *v, ol_unit basis, ol_unit *out)
 
 static int parse_font_size(const char *v, ol_style *s, ol_unit *out)
 {
-    if (!strcasecmp(v, "xx-small")) { *out = OL_CSSPX(9); return 1; }
-    if (!strcasecmp(v, "x-small"))  { *out = OL_CSSPX(10); return 1; }
-    if (!strcasecmp(v, "small"))    { *out = OL_CSSPX(13); return 1; }
-    if (!strcasecmp(v, "medium"))   { *out = OL_CSSPX(16); return 1; }
-    if (!strcasecmp(v, "large"))    { *out = OL_CSSPX(18); return 1; }
-    if (!strcasecmp(v, "x-large"))  { *out = OL_CSSPX(24); return 1; }
-    if (!strcasecmp(v, "xx-large")) { *out = OL_CSSPX(32); return 1; }
-    if (!strcasecmp(v, "smaller"))  { *out = s->font_size * 4 / 5; return 1; }
-    if (!strcasecmp(v, "larger"))   { *out = s->font_size * 6 / 5; return 1; }
+    if (!wl_strcasecmp(v, "xx-small")) { *out = OL_CSSPX(9); return 1; }
+    if (!wl_strcasecmp(v, "x-small"))  { *out = OL_CSSPX(10); return 1; }
+    if (!wl_strcasecmp(v, "small"))    { *out = OL_CSSPX(13); return 1; }
+    if (!wl_strcasecmp(v, "medium"))   { *out = OL_CSSPX(16); return 1; }
+    if (!wl_strcasecmp(v, "large"))    { *out = OL_CSSPX(18); return 1; }
+    if (!wl_strcasecmp(v, "x-large"))  { *out = OL_CSSPX(24); return 1; }
+    if (!wl_strcasecmp(v, "xx-large")) { *out = OL_CSSPX(32); return 1; }
+    if (!wl_strcasecmp(v, "smaller"))  { *out = s->font_size * 4 / 5; return 1; }
+    if (!wl_strcasecmp(v, "larger"))   { *out = s->font_size * 6 / 5; return 1; }
     return parse_length(v, s->font_size, out);
 }
 
@@ -419,10 +439,10 @@ static int split_lengths(const char *value, ol_style *s, ol_unit out[4], int *n)
     p = buf;
     while (*p && count < 4) {
         char *start;
-        while (*p && isspace((unsigned char)*p)) ++p;
+        while (*p && wl_isspace((unsigned char)*p)) ++p;
         if (!*p) break;
         start = p;
-        while (*p && !isspace((unsigned char)*p)) ++p;
+        while (*p && !wl_isspace((unsigned char)*p)) ++p;
         if (*p) *p++ = 0;
         tok = start;
         if (!parse_length(tok, s->font_size, &out[count])) return 0;
@@ -473,13 +493,13 @@ static void apply_property(ol_style *s, char *name, char *value)
     } else if (!strcmp(name, "font-size")) {
         if (parse_font_size(value, s, &u) && u > 0) s->font_size = u;
     } else if (!strcmp(name, "line-height")) {
-        if (!strcasecmp(value, "normal")) {
+        if (!wl_strcasecmp(value, "normal")) {
             s->line_height = s->font_size * 5 / 4;
         } else {
             const char *e;
             long num, den;
             if (parse_decimal(value, &e, &num, &den)) {
-                while (*e && isspace((unsigned char)*e)) ++e;
+                while (*e && wl_isspace((unsigned char)*e)) ++e;
                 if (!*e && num > 0)
                     s->line_height = (ol_unit)((int64_t)num * s->font_size / den);
                 else if (parse_length(value, s->font_size, &u) && u > 0)
@@ -489,32 +509,32 @@ static void apply_property(ol_style *s, char *name, char *value)
             }
         }
     } else if (!strcmp(name, "font-weight")) {
-        if (!strcasecmp(value, "bold") || !strcasecmp(value, "bolder") ||
-            atoi(value) >= 600) s->text_flags |= OL_TEXT_BOLD;
-        else if (!strcasecmp(value, "normal") || !strcasecmp(value, "lighter"))
+        if (!wl_strcasecmp(value, "bold") || !wl_strcasecmp(value, "bolder") ||
+            wl_atoi(value) >= 600) s->text_flags |= OL_TEXT_BOLD;
+        else if (!wl_strcasecmp(value, "normal") || !wl_strcasecmp(value, "lighter"))
             s->text_flags &= ~OL_TEXT_BOLD;
     } else if (!strcmp(name, "font-style")) {
-        if (!strcasecmp(value, "italic") || !strcasecmp(value, "oblique"))
+        if (!wl_strcasecmp(value, "italic") || !wl_strcasecmp(value, "oblique"))
             s->text_flags |= OL_TEXT_ITALIC;
-        else if (!strcasecmp(value, "normal"))
+        else if (!wl_strcasecmp(value, "normal"))
             s->text_flags &= ~OL_TEXT_ITALIC;
     } else if (!strcmp(name, "text-decoration")) {
         if (strstr(value, "underline")) s->text_flags |= OL_TEXT_UNDERLINE;
-        else if (!strcasecmp(value, "none")) s->text_flags &= ~OL_TEXT_UNDERLINE;
+        else if (!wl_strcasecmp(value, "none")) s->text_flags &= ~OL_TEXT_UNDERLINE;
     } else if (!strcmp(name, "font-family")) {
         if (strstr(value, "monospace") || strstr(value, "Monospace") ||
             strstr(value, "Courier") || strstr(value, "courier"))
             s->text_flags |= OL_TEXT_MONO;
     } else if (!strcmp(name, "text-align")) {
-        if (!strcasecmp(value, "center")) s->text_align = OL_ALIGN_CENTER;
-        else if (!strcasecmp(value, "right") || !strcasecmp(value, "end"))
+        if (!wl_strcasecmp(value, "center")) s->text_align = OL_ALIGN_CENTER;
+        else if (!wl_strcasecmp(value, "right") || !wl_strcasecmp(value, "end"))
             s->text_align = OL_ALIGN_END;
-        else if (!strcasecmp(value, "left") || !strcasecmp(value, "start"))
+        else if (!wl_strcasecmp(value, "left") || !wl_strcasecmp(value, "start"))
             s->text_align = OL_ALIGN_START;
     } else if (!strcmp(name, "display")) {
-        if (!strcasecmp(value, "none")) s->display = OL_DISPLAY_NONE;
-        else if (!strcasecmp(value, "block")) s->display = OL_DISPLAY_BLOCK;
-        else if (!strcasecmp(value, "inline") || !strcasecmp(value, "inline-block"))
+        if (!wl_strcasecmp(value, "none")) s->display = OL_DISPLAY_NONE;
+        else if (!wl_strcasecmp(value, "block")) s->display = OL_DISPLAY_BLOCK;
+        else if (!wl_strcasecmp(value, "inline") || !wl_strcasecmp(value, "inline-block"))
             s->display = OL_DISPLAY_INLINE;
     } else if (!strcmp(name, "margin")) {
         apply_box(s, 0, value);
@@ -539,26 +559,26 @@ static void apply_property(ol_style *s, char *name, char *value)
     }
 }
 
-static void apply_declarations(ol_style *style, const char *decl)
+static void apply_declarations(wl_pool *pool, ol_style *style, const char *decl)
 {
     const char *p = decl;
     while (*p) {
         const char *colon, *semi;
         char *name, *value;
-        while (*p && (isspace((unsigned char)*p) || *p == ';')) ++p;
+        while (*p && (wl_isspace((unsigned char)*p) || *p == ';')) ++p;
         if (!*p) break;
         colon = strchr(p, ':');
         if (!colon) break;
         semi = strchr(colon + 1, ';');
         if (!semi) semi = p + strlen(p);
-        name = range_dup(p, (size_t)(colon - p));
-        value = range_dup(colon + 1, (size_t)(semi - colon - 1));
+        name = range_dup(pool, p, (size_t)(colon - p));
+        value = range_dup(pool, colon + 1, (size_t)(semi - colon - 1));
         if (!name || !value) {
-            free(name); free(value);
+            wl_free(name); wl_free(value);
             return;
         }
         apply_property(style, name, value);
-        free(name); free(value);
+        wl_free(name); wl_free(value);
         p = *semi ? semi + 1 : semi;
     }
 }
@@ -590,12 +610,13 @@ void wl_css_apply(const wl_css_sheet *sheet,
                 }
             }
             if (best == (size_t)-1) break;
-            apply_declarations(style, sheet->rules[best].decl);
+            apply_declarations(sheet->pool, style, sheet->rules[best].decl);
             last_spec = best_spec;
             last_order = best_order;
             have_last = 1;
         }
     }
 
-    if (inline_style && *inline_style) apply_declarations(style, inline_style);
+    if (inline_style && *inline_style)
+        apply_declarations(sheet ? sheet->pool : NULL, style, inline_style);
 }

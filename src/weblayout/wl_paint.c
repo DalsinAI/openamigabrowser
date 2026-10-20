@@ -8,10 +8,9 @@
 #include <graphics/regions.h>
 #include <proto/graphics.h>
 #include <proto/layers.h>
-#include <stdlib.h>
 #include <string.h>
 
-#include "oam_text.h"
+#include "wl_text.h"
 
 static int to_px(ol_unit u)
 {
@@ -19,37 +18,20 @@ static int to_px(ol_unit u)
     return -(int)((-u + OL_UNITS_PER_CSSPX / 2) / OL_UNITS_PER_CSSPX);
 }
 
-static char *slice_latin1(const char *text, size_t offset, size_t length)
-{
-    char *utf8, *latin1;
-    if (!text) return NULL;
-    utf8 = (char *)malloc(length + 1);
-    if (!utf8) return NULL;
-    memcpy(utf8, text + offset, length);
-    utf8[length] = 0;
-    latin1 = oam_utf8_to_latin1(utf8);
-    free(utf8);
-    return latin1;
-}
 
 static int measure_text(void *userdata, const char *utf8, size_t length,
                         const ol_style *style, ol_text_metrics *metrics)
 {
     wl_view *view = (wl_view *)userdata;
-    char *copy, *latin1;
+    char *latin1;
     ULONG width, n;
     (void)style;
     if (!view || !view->rp || !view->font || !metrics) return 0;
-    copy = (char *)malloc(length + 1);
-    if (!copy) return 0;
-    memcpy(copy, utf8, length);
-    copy[length] = 0;
-    latin1 = oam_utf8_to_latin1(copy);
-    free(copy);
+    latin1 = wl_utf8_to_latin1(view->pool, utf8, length);
     if (!latin1) return 0;
     n = (ULONG)strlen(latin1);              /* no call inside a library call's arguments */
     width = TextLength(view->rp, (STRPTR)latin1, n);
-    free(latin1);
+    wl_free(latin1);
     metrics->width = OL_CSSPX((ol_unit)width);
     metrics->ascent = OL_CSSPX((ol_unit)view->font->tf_Baseline);
     metrics->descent = OL_CSSPX((ol_unit)(view->font->tf_YSize - view->font->tf_Baseline));
@@ -153,7 +135,7 @@ static void draw_text_op(wl_view *view, const ol_display_op *op)
     h = to_px(op->u.text.bounds.height);
     if (!visible_y(view, to_px(op->u.text.bounds.y), h)) return;
 
-    latin1 = slice_latin1(text, op->u.text.text_offset, op->u.text.text_length);
+    latin1 = wl_utf8_to_latin1(view->pool, text + op->u.text.text_offset, op->u.text.text_length);
     if (!latin1) return;
 
     if (op->u.text.style.text_flags & OL_TEXT_BOLD) style |= FSF_BOLD;
@@ -166,7 +148,7 @@ static void draw_text_op(wl_view *view, const ol_display_op *op)
     Move(view->rp, view->left + x, view->top + y - view->scroll_px);
     n = (ULONG)strlen(latin1);
     Text(view->rp, (STRPTR)latin1, n);
-    free(latin1);
+    wl_free(latin1);
 }
 
 static void draw_fill_op(wl_view *view, const ol_display_op *op)
@@ -206,13 +188,14 @@ static void draw_image_op(wl_view *view, const ol_display_op *op)
     Draw(view->rp, view->left + x, view->top + y - view->scroll_px);
 
     if (alt && *alt) {
-        char *latin1 = oam_utf8_to_latin1(alt);
+        size_t len = strlen(alt);
+        char *latin1 = wl_utf8_to_latin1(view->pool, alt, len);
         if (latin1) {
             ULONG n = (ULONG)strlen(latin1);
             Move(view->rp, view->left + x + 3,
                  view->top + y - view->scroll_px + view->font->tf_Baseline + 2);
             Text(view->rp, (STRPTR)latin1, n);
-            free(latin1);
+            wl_free(latin1);
         }
     }
 }

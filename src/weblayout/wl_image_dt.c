@@ -14,6 +14,18 @@
 #include <proto/graphics.h>
 #include <string.h>
 
+#ifdef WL_LIBRARY
+/* weblayout.library opens datatypes.library 44 in its LibOpen when there is
+ * one; without it pictures are drawn as their boxes */
+int wl_dt_open(void)
+{
+    return DataTypesBase != NULL;
+}
+
+void wl_dt_close(void)
+{
+}
+#else
 struct Library *DataTypesBase = NULL;
 
 int wl_dt_open(void)
@@ -30,6 +42,7 @@ void wl_dt_close(void)
         DataTypesBase = NULL;
     }
 }
+#endif
 
 void wl_dt_image_free(wl_dt_image *image)
 {
