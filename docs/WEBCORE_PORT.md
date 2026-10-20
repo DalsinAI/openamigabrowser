@@ -19,7 +19,7 @@ layer, the way MorphOS's and Haiku's browsers did it:
 | Drawing | cairo image surfaces with pixman | Proven on big-endian CPUs; Skia refuses to build for them |
 | Text | FreeType, HarfBuzz and fontconfig | WebCore's Cairo backend uses all three |
 | Fonts | Liberation and DejaVu, in `PROGDIR:Fonts` | Free licences; Liberation has the metrics of Arial, Times and Courier |
-| Network | libcurl with AmiSSL 5 | WebCore's curl backend handles cookies, redirects and TLS |
+| Network | libcurl on OpenTLS (opentls.library) | WebCore's curl backend handles cookies and redirects; curl does TLS (AmiSSL 5 until 19 October 2026) |
 | Images | the system's datatypes | Our rule: the formats are the ones the user has datatypes for |
 | JavaScript | JavaScriptCore's C-loop interpreter | No JIT on 68k |
 
@@ -38,8 +38,8 @@ thread; the datatypes decoder does it after each call.
 
 **NDK macros.** The NDK's `exec/types.h` defines `IMPORT`, `STATIC`,
 `GLOBAL` and `REGISTER` as macros, which break WebCore and JavaScriptCore
-names (the parser's `IMPORT` token, for one). AmiSSL's and curl's headers
-include it, so WebCore's prefix header includes it first and removes those
+names (the parser's `IMPORT` token, for one). curl's headers (and AmiSSL's,
+before 19 October 2026) include it, so WebCore's prefix header includes it first and removes those
 macros; `VOID` and `CONST` stay because later NDK headers use them.
 
 **libpthread's macros.** Szilard Biro's `pthread.h` turns `read()`,
@@ -55,11 +55,15 @@ before `unistd.h` keeps them off.
 WebCore's "this struct must stay this size" checks see a smaller struct. They
 accept smaller-or-equal on 68k.
 
-**AmiSSL from C++.** AmiSSL's headers turn every OpenSSL function into an
-inline library call, which C++ such as `::BIO_new()` cannot use. WebCore is
-built with `PROTO_AMISSL_H` defined, so the plain prototypes stay and calls go
-through AmiSSL's stub library. Each task that uses AmiSSL opens it
-(`OpenAmiSSLTags`, or `InitAmiSSL` in a subprocess).
+**TLS without OpenSSL.** Since 19 October 2026 (WebKit patch 0022) curl does
+TLS through OpenTLS (openamigacurl's OpenTLS backend opens opentls.library
+itself) and WebCore links no OpenSSL: `USE(OPENSSL)` is off, curl's
+OpenSSL-only files are left out, and no cipher list, curve list or CA file is
+set (OpenTLS picks its own suites and reads `S:OpenTLS/ca-bundle.pem`).
+Responses carry no certificate details, and WebCrypto offers the SHA digests
+only. Before that the engine called AmiSSL from C++, built with
+`PROTO_AMISSL_H` so calls went through AmiSSL's stub library, and each task
+that used it had to open it.
 
 **Sockets are not file descriptors.** libcurl's configure finds libnix's
 `fcntl()` and `pipe()`; on bsdsocket sockets they fail. curl is built to use

@@ -756,7 +756,7 @@ static int openBrowserWindow(const char *url, int network)
     if (!quitNow) {
         makeMenus();
         updateButtons();
-        setStatus(network ? "Ready." : "No network: bsdsocket.library or AmiSSL is missing.");
+        setStatus(network ? "Ready." : "No network: bsdsocket.library is missing.");
         ob_webview_load(view, url);
     }
     return !quitNow;

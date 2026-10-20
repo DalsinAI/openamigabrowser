@@ -1,6 +1,6 @@
 /*
- * OpenBrowser: bsdsocket.library and AmiSSL for WebCore's network thread
- * (AmigaNetworkSetup.c).
+ * OpenBrowser: bsdsocket.library for WebCore's network thread
+ * (AmigaNetworkSetup.c); curl opens opentls.library itself.
  * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #ifndef OB_NETWORK_H
