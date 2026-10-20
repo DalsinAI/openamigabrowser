@@ -1,0 +1,46 @@
+From 2f6be2494487f143241ae4430c9ceaa6930a9f19 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 17:30:00 +0000
+Subject: [PATCH] WebCore: workers can make an IndexedDB connection proxy in a
+ single-process port
+
+EmptyDatabaseProvider's delegate had no identifier, and
+IDBConnectionToServer::identifier() dereferences it when a worker's global
+scope builds its connection proxy (reddit's reCAPTCHA worker). Give it the
+process's own identifier on AmigaOS.
+---
+ Source/WebCore/loader/EmptyClients.cpp | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/Source/WebCore/loader/EmptyClients.cpp b/Source/WebCore/loader/EmptyClients.cpp
+index 49596f0e66..7534bb626e 100644
+--- a/Source/WebCore/loader/EmptyClients.cpp
++++ b/Source/WebCore/loader/EmptyClients.cpp
+@@ -60,6 +60,7 @@
+ #include "HTMLFormElement.h"
+ #include "HistoryItem.h"
+ #include "IDBConnectionToServer.h"
++#include "ProcessIdentifier.h"
+ #include "IDBIndexIdentifier.h"
+ #include "IDBObjectStoreIdentifier.h"
+ #include "Icon.h"
+@@ -210,7 +211,16 @@ class EmptyDatabaseProvider final : public DatabaseProvider {
+         void NODELETE ref() const final { RefCounted::ref(); }
+         void deref() const final { RefCounted::deref(); }
+ 
++#if PLATFORM(AMIGA)
++        // A single-process port has no IndexedDB server, but a worker's
++        // global scope still builds a connection proxy, and
++        // IDBConnectionToServer::identifier() dereferences this. Give it the
++        // process's own identifier so the proxy can be made; requests still
++        // go nowhere.
++        std::optional<IDBConnectionIdentifier> identifier() const final { return Process::identifier(); }
++#else
+         std::optional<IDBConnectionIdentifier> NODELETE identifier() const final { return std::nullopt; }
++#endif
+         void NODELETE deleteDatabase(const IDBOpenRequestData&) final { }
+         void NODELETE openDatabase(const IDBOpenRequestData&) final { }
+         void NODELETE abortTransaction(const IDBResourceIdentifier&) final { }
+-- 
+2.43.0
+
