@@ -2,38 +2,79 @@
 # OpenBrowser (DalsinAI/openamigabrowser)
 # Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 #
-# OpenBrowser Lite, the GadTools browser, for AmigaOS 3.x (68040) with the
-# os32-gcc16 stove (OpenAmigaGCC 16.2.0-open2, libnix, OpenNDK; the os32
-# GCC 6.5 stove builds it too). TLS is OpenTLS: opentls.library's API
-# headers are in third_party/opentls, and no AmiSSL SDK is needed or used.
-# Soft float: it runs on a full 68040 and on an LC or EC040.
+# OpenBrowser Lite, the GadTools browser, for AmigaOS 3.2 on a 68040 with
+# its FPU (-m68040 -m68881; not an LC or EC040). Its page engine is
+# weblayout (src/weblayout) on OpenLayout (DalsinAI/openamigalayout); TLS is
+# OpenTLS, whose API headers are in third_party/opentls (no AmiSSL).
 #
-#   build-openbrowser.sh [OUT_DIR]     (default build/os3)
-#   STOVE   stove root holding prefix/bin/m68k-amigaos-gcc
+#   build-openbrowser.sh [OUT_DIR]          (default build/os3)
 #
-# Until 19 October 2026 the first argument was the AmiSSL SDK's include
-# folder; such an argument (or "-") is still taken and skipped.
+#   TOOLCHAIN_DIR   an unpacked OpenAmigaGCC release (openamigagcc-16.2.0-open3-
+#                   x86_64-linux), or
+#   STOVE           a stove root holding prefix/bin/m68k-amigaos-gcc
+#                   (default ~/AmigaChrome/stoves/os32-gcc16)
+#   NDK_INCLUDE     OpenNDK's Include_H (openamigasdk OpenNDK/Include_H); not
+#                   needed with a stove that carries the NDK
+#   OPENLAYOUT_SRC  an openamigalayout checkout (default ../openamigalayout)
+#   OPENLAYOUT      static (default: OpenLayout built in) or library (the
+#                   resident openlayout.library 2, from LIBS:)
+#   TESTS           1: the Amiga test programs as well (OUT_DIR/tests)
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-# Soft float: the specs file links libnix's soft libm020 (maths through the
-# mathieee libraries), not libm881, so one build runs on every 68040.
-SPECS="-specs=$HERE/toolchain/m68k-soft-m68040.specs"
-STOVE=${STOVE:-"$HOME/AmigaChrome/stoves/os32-gcc16"}
-CC="$STOVE/prefix/bin/m68k-amigaos-gcc"
-if [ $# -ge 1 ] && { [ "$1" = "-" ] || [ -f "$1/proto/amissl.h" ]; }; then
-    [ "$1" = "-" ] || echo "build-openbrowser.sh: OpenBrowser Lite is OpenTLS only now; $1 (an AmiSSL SDK) is not used"
-    shift
-fi
+if [ $# -ge 1 ] && [ "$1" = "-" ]; then shift; fi     # the old AmiSSL argument's place
 OUT=${1:-"$HERE/build/os3"}
+if [ -n "${TOOLCHAIN_DIR:-}" ]; then
+    BIN="$TOOLCHAIN_DIR/bin"
+else
+    BIN="${STOVE:-"$HOME/AmigaChrome/stoves/os32-gcc16"}/prefix/bin"
+fi
+CC="$BIN/m68k-amigaos-gcc"
+OL=${OPENLAYOUT_SRC:-"$HERE/../openamigalayout"}
 OM="$HERE/third_party/openmail"
 OT="$HERE/third_party/opentls/include"
+WL="$HERE/src/weblayout"
+[ -x "$CC" ] || { echo "build-openbrowser.sh: no compiler at $CC (set TOOLCHAIN_DIR or STOVE)" >&2; exit 2; }
+[ -f "$OL/src/openlayout.c" ] || { echo "build-openbrowser.sh: no OpenLayout at $OL (set OPENLAYOUT_SRC)" >&2; exit 2; }
+
+# 68040 with its FPU, libnix; address 0 is real memory on the Amiga
+CPU="-m68040 -m68881 -mcrt=nix20"
+CFLAGS="$CPU -std=gnu99 -O2 -fno-delete-null-pointer-checks -fno-common -Wall -Wextra -Werror"
+INC="-I$HERE/src -I$WL -I$OM -I$OT -I$OL/include"
+[ -n "${NDK_INCLUDE:-}" ] && INC="$INC -I$NDK_INCLUDE"
+case "${OPENLAYOUT:-static}" in
+    static)  LAYOUT="$OL/src/openlayout.c"; LDEF="" ;;
+    library) LAYOUT=""; LDEF="-DWL_USE_OPENLAYOUT_LIBRARY=1" ;;
+    *) echo "build-openbrowser.sh: OPENLAYOUT is static or library" >&2; exit 2 ;;
+esac
 mkdir -p "$OUT"
-"$CC" -noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -Wno-pointer-sign -O2 -fno-delete-null-pointer-checks -fno-common \
-    -I"$HERE/src" -I"$OM" -I"$OT" \
-    "$HERE"/src/*.c "$OM"/*.c -lamiga -o "$OUT/OpenBrowser"
-echo "$OUT/OpenBrowser ($(wc -c < "$OUT/OpenBrowser") bytes)"
-# obfetch: the same engine from a Shell, for tests.
-"$CC" -noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -Wno-pointer-sign -O2 -fno-delete-null-pointer-checks -fno-common \
-    -I"$HERE/src" -I"$OM" -I"$OT" \
-    "$HERE/src/ob_http.c" "$OM"/*.c "$HERE/tools/obfetch.c" -o "$OUT/obfetch"
+
+# OpenBrowserLite: the window (src/ob_main.c), HTTP (src/ob_http.c), weblayout,
+# OpenLayout and OpenMail's network layer
+"$CC" $CFLAGS $LDEF $INC \
+    "$HERE"/src/ob_main.c "$HERE"/src/ob_http.c "$WL"/*.c $LAYOUT "$OM"/*.c \
+    -lamiga -o "$OUT/OpenBrowserLite"
+echo "$OUT/OpenBrowserLite ($(wc -c < "$OUT/OpenBrowserLite") bytes)"
+
+# obfetch: the same HTTP/HTTPS engine from a Shell, without the window or
+# the layout, so network faults can be told from layout faults
+"$CC" $CFLAGS $INC \
+    "$HERE/src/ob_http.c" "$WL/wl_url.c" "$OM"/*.c "$HERE/tools/obfetch.c" \
+    -o "$OUT/obfetch"
 echo "$OUT/obfetch ($(wc -c < "$OUT/obfetch") bytes)"
+
+if [ "${TESTS:-0}" = 1 ]; then
+    T="$OUT/tests"
+    mkdir -p "$T"
+    # HTML Lite and CSS Lite on the Amiga (the same tests as tests/run-host-tests.sh)
+    "$CC" $CFLAGS $INC "$WL/wl_html.c" "$WL/wl_css.c" "$OL/src/openlayout.c" \
+        "$HERE/tests/test_wl_html.c" -o "$T/HTMLLiteTest"
+    "$CC" $CFLAGS $INC "$WL/wl_css.c" "$OL/src/openlayout.c" \
+        "$HERE/tests/test_wl_css.c" -o "$T/CSSLiteTest"
+    # a picture through picture.datatype: DTImageTest <picture>
+    "$CC" $CFLAGS $INC "$WL/wl_image_dt.c" "$HERE/tests/test_wl_image_dt.c" \
+        -lamiga -o "$T/DTImageTest"
+    # a picture over HTTPS, then through picture.datatype: ImageFetchTest [address]
+    "$CC" $CFLAGS $INC "$HERE/src/ob_http.c" "$WL/wl_url.c" "$WL/wl_image_dt.c" "$OM"/*.c \
+        "$HERE/tests/test_image_fetch.c" -lamiga -o "$T/ImageFetchTest"
+    for f in "$T"/*; do echo "$f ($(wc -c < "$f") bytes)"; done
+fi
