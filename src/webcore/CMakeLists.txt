@@ -71,6 +71,16 @@ set(OB_SYSTEM_INCLUDE_DIRECTORIES
 # cairo, fontconfig...) are linked as one group, so their order does not
 # matter, followed by what libnix programs need. curl (openamigacurl, on
 # OpenTLS) opens opentls.library itself: there is no TLS library to link.
+# openamigacurl builds curl's HTTP/2 with nghttp2 (libnghttp2.a beside
+# libcurl.a); a curl built before that has none, and links without it. A new
+# libcurl.a makes CMake look again; build-webcore.sh also does when
+# libnghttp2.a comes or goes (it reads OB_NGHTTP2 from the cache).
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${AC_WEBCORE_DEPS}/lib/libcurl.a")
+if (EXISTS "${AC_WEBCORE_DEPS}/lib/libnghttp2.a")
+    set(OB_NGHTTP2 nghttp2 CACHE INTERNAL "nghttp2 linked after curl")
+else ()
+    set(OB_NGHTTP2 "" CACHE INTERNAL "nghttp2 linked after curl")
+endif ()
 macro(OB_LINK _target)
     target_link_directories(${_target} PRIVATE ${AC_WEBCORE_DEPS}/lib ${AC_WEBKIT_DEPS}/lib)
     # A link map beside each program (bin/NAME.map): which object every
@@ -80,7 +90,7 @@ macro(OB_LINK _target)
     target_link_libraries(${_target} PRIVATE
         -Wl,--start-group
         OBCore WebCore PAL JavaScriptCore WTF bmalloc
-        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z xml2 sqlite3 curl psl
+        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z xml2 sqlite3 curl ${OB_NGHTTP2} psl
         icui18n icuuc icudata
         amiga pthread atomic stdc++ m
         -Wl,--end-group
