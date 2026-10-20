@@ -43,6 +43,7 @@ public:
     // From the window.
     void load(const String& url);
     void loadHTML(const String& html, const String& baseURL);
+    void loadData(const String& text, const String& mimeType, const String& baseURL);
     void goBack();
     void goForward();
     void reload();
