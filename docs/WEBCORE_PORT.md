@@ -204,6 +204,20 @@ What is done about it:
   rendering update (style and layout of the whole page) after each piece of a
   page arrives. Until the page has loaded, OpenBrowser lets one through at
   most every second, or every twice as long as the last one took.
+- **The window paints what is laid out, no faster than WebCore renders**
+  (20 October 2026; the gain is still to be measured). Painting no longer
+  lays the page out first: the window paints right after each rendering
+  update, and between them only areas whose layout is not due, while a page
+  loads at most once a second. Changed areas are kept as up to eight
+  rectangles (beyond that, one around them all), each painted and copied by
+  itself. Of the mouse moves waiting, only the last is handled; while a
+  page loads the status line changes at most four times a second, and the
+  gadgets change only when what they show does. After each load the window
+  prints `OBVIEW_BENCH gui_legacy= gui_load_ms= gui_settled_ms= gui_paints=
+  gui_rounds= paint_ms= paint_max_ms= blit_ms= blit_max_ms=` once the page
+  has settled; with the environment variable `OB_PAINT_LEGACY=1` it paints
+  as before (one area around all the changes, laid out first, after every
+  run-loop turn), to compare both in one build.
 - **Cookies stay off the disk until needed.** The cookie database keeps its
   journal in memory and does not sync, instead of writing, syncing and
   deleting a journal file for every cookie.
