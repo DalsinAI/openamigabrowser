@@ -100,6 +100,8 @@ private:
     unsigned m_renderingUpdates { 0 };
     unsigned m_paintedRenderingUpdate { 0 }; // the last one takeDirtyRects() gave out
     MonotonicTime m_nextLoadingPaint; // while a page loads, without a new rendering update
+    std::optional<unsigned> m_layoutHeldSince; // m_renderingUpdates when areas began to wait for layout
+    bool m_layOutForPaint { false }; // the areas given out are painted laid out first
     bool m_loading { false };
     bool m_liteMode { false };
     unsigned long long m_bytesReceived { 0 };
