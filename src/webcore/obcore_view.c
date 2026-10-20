@@ -10,6 +10,11 @@
  *                         the second time with caches warm), report the
  *                         commands and timings, and save the replayed
  *                         picture as page-dl.png beside page.png
+ *   obcore-view -text ...  also print the page's text (OBVIEW_TEXT, cut
+ *                         to 2000 bytes), for pages that show a score
+ *
+ * At the end it prints one OBVIEW_BENCH line of timings and memory for
+ * tools/bench (see docs/BENCHMARKS.md and the block marked "Benchmark").
  *
  * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
@@ -22,6 +27,7 @@
 #include <proto/dos.h>
 #include <proto/exec.h>
 #include <dos/dosextens.h>
+#include <exec/memory.h>
 #include <unistd.h>
 
 #include "ob_webview.h"
@@ -71,10 +77,53 @@ static int invalidations;
 static long busyCycles, waits;  /* run loop turns with work waiting, and waits */
 static time_t startTime;        /* for the seconds in OBVIEW_CREATED and OBVIEW_RAN */
 
+/* Benchmark (tools/bench): milliseconds since the program started for each
+ * step, the requests, and free memory as AvailMem(MEMF_ANY) sees it. All of
+ * it is printed once, as OBVIEW_BENCH, at the end; -1 means it did not
+ * happen. Free memory is sampled at most every 100 ms while the page runs,
+ * so avail_min (and the peak use worked out from it) can miss short peaks. */
+static struct timeval benchStart;
+static long benchInit = -1, benchLoad = -1, benchCommit = -1, benchFirstLoaded = -1, benchFirstInvalidate = -1,
+    benchLoadDone = -1, benchLastResource = -1, benchPainted = -1, benchLastSample = -1000;
+static long benchRequests, benchLoaded, benchFailed;
+static unsigned long availStart, availReady, availMin, availPainted, largestStart;
+
+static long benchNow(void)
+{
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    return (now.tv_sec - benchStart.tv_sec) * 1000L + (now.tv_usec - benchStart.tv_usec) / 1000L;
+}
+
+static void benchSample(int always)
+{
+    long now = benchNow();
+    unsigned long avail;
+    if (!always && now - benchLastSample < 100)
+        return;
+    benchLastSample = now;
+    avail = AvailMem(MEMF_ANY);
+    if (!availMin || avail < availMin)
+        availMin = avail;
+}
+
+static void benchReport(unsigned long bytes)
+{
+    printf("OBVIEW_BENCH init_ms=%ld load_ms=%ld commit_ms=%ld first_loaded_ms=%ld first_invalidate_ms=%ld"
+        " load_done_ms=%ld last_resource_ms=%ld painted_ms=%ld end_ms=%ld requests=%ld loaded=%ld failed=%ld bytes=%lu"
+        " avail_start=%lu avail_ready=%lu avail_min=%lu avail_painted=%lu avail_end=%lu largest_start=%lu\n",
+        benchInit, benchLoad, benchCommit, benchFirstLoaded, benchFirstInvalidate, benchLoadDone, benchLastResource,
+        benchPainted, benchNow(), benchRequests, benchLoaded, benchFailed, bytes, availStart, availReady, availMin,
+        availPainted, (unsigned long)AvailMem(MEMF_ANY), largestStart);
+    fflush(stdout);
+}
+
 static void onInvalidate(void *context, int x, int y, int w, int h)
 {
     (void)context; (void)x; (void)y; (void)w; (void)h;
     invalidations++;
+    if (benchFirstInvalidate < 0)
+        benchFirstInvalidate = benchNow();
 }
 
 static void onTitle(void *context, const char *title)
@@ -86,6 +135,8 @@ static void onTitle(void *context, const char *title)
 static void onURL(void *context, const char *url)
 {
     (void)context;
+    if (benchCommit < 0)
+        benchCommit = benchNow();
     printf("OBVIEW_URL %s\n", url);
 }
 
@@ -94,6 +145,8 @@ static void onLoading(void *context, int isLoading, int percent)
     (void)context;
     if (isLoading != loading || !isLoading)
         printf("OBVIEW_LOADING %d %d%%\n", isLoading, percent);
+    if (!isLoading && loading == 1)
+        benchLoadDone = benchNow();
     loading = isLoading;
 }
 
@@ -129,6 +182,18 @@ static long sinceStart(void)
 static void onResource(void *context, const char *url, int started, const char *error)
 {
     (void)context;
+    if (started)
+        benchRequests++;
+    else {
+        benchLastResource = benchNow();
+        if (benchFirstLoaded < 0)
+            benchFirstLoaded = benchLastResource;
+        if (error)
+            benchFailed++;
+        else
+            benchLoaded++;
+    }
+    benchSample(0);
     printf("OBVIEW_%s [%ld ms] %.200s%s%s\n", started ? "REQUEST" : "LOADED", sinceStart(), url, error ? " FAILED: " : "", error ? error : "");
     fflush(stdout);
 }
@@ -162,6 +227,7 @@ static void run(double seconds)
     while (difftime(time(NULL), start) < seconds) {
         double next;
         ob_webcore_cycle();
+        benchSample(0);
         next = ob_webcore_next_timer();
         if (loading == 0 && (next < 0 || next > 0.05))
             break;
@@ -264,7 +330,8 @@ static int viewMain(int argc, char **argv)
 {
     OBWebViewCallbacks callbacks = { 0 };
     OBWebView *view;
-    int width = 800, height = 600, argi = 1, isURL = 0, inputTest = 0, displayList = 0;
+    int width = 800, height = 600, argi = 1, isURL = 0, inputTest = 0, displayList = 0, showText = 0;
+    unsigned long bytes = 0;
     double seconds = 120.0;
     const char *source, *png = NULL;
     unsigned char *pixels;
@@ -287,12 +354,16 @@ static int viewMain(int argc, char **argv)
         displayList = 1;
         argi++;
     }
+    if (argc > argi && !strcmp(argv[argi], "-text")) {
+        showText = 1;
+        argi++;
+    }
     if (argc > argi && !strcmp(argv[argi], "-url")) {
         isURL = 1;
         argi++;
     }
     if (argc <= argi) {
-        printf("usage: obcore-view [-wait seconds] [-tls file] [-input] [-dl] [-url] <file.html|address> [width height] [page.png]\n");
+        printf("usage: obcore-view [-wait seconds] [-tls file] [-input] [-dl] [-text] [-url] <file.html|address> [width height] [page.png]\n");
         return 10;
     }
     source = argv[argi++];
@@ -317,6 +388,9 @@ static int viewMain(int argc, char **argv)
         return 20;
     }
     sinceStart();
+    benchInit = benchNow();
+    availReady = AvailMem(MEMF_ANY);
+    availMin = availReady;
     if (isURL && tlsFile)
         printf("OBVIEW_TLS %d sessions read\n", ob_webview_load_tls_sessions(tlsFile));
     callbacks.invalidate = onInvalidate;
@@ -331,6 +405,7 @@ static int viewMain(int argc, char **argv)
     printf("OBVIEW_CREATED %dx%d after %lds\n", width, height, (long)(time(NULL) - startTime));
     fflush(stdout);
 
+    benchLoad = benchNow();
     if (isURL)
         ob_webview_load(view, source);
     else
@@ -351,11 +426,23 @@ static int viewMain(int argc, char **argv)
         (long)(time(NULL) - startTime));
     fflush(stdout);
 
+    if (showText) {
+        char text[2001];
+        int length = ob_webview_text(view, text, sizeof text), i;
+        for (i = 0; text[i]; i++)
+            if (text[i] == '\n' || text[i] == '\r' || text[i] == '\t')
+                text[i] = ' ';
+        printf("OBVIEW_TEXT %d %s\n", length, text);
+        fflush(stdout);
+    }
     if (displayList)
         reportDisplayList(view, width, height, png);
     pixels = calloc((size_t)width * height, 4);
     if (pixels) {
         ob_webview_paint(view, pixels, width * 4, 0, 0, width, height);
+        benchPainted = benchNow();
+        benchSample(1);
+        availPainted = AvailMem(MEMF_ANY);
         printf("OBVIEW_PAINTED %dx%d\n", width, height);
         if (png) {
             cairo_surface_t *surface = cairo_image_surface_create_for_data(pixels, CAIRO_FORMAT_ARGB32, width, height, width * 4);
@@ -365,6 +452,7 @@ static int viewMain(int argc, char **argv)
         }
         free(pixels);
     }
+    bytes = ob_webview_bytes_received(view);
     ob_webview_destroy(view);
     if (isURL && tlsFile)
         ob_webview_save_tls_sessions(tlsFile);
@@ -373,6 +461,7 @@ static int viewMain(int argc, char **argv)
     else
         ob_webcore_stop_threads();
     free(html);
+    benchReport(bytes);
     printf("OBVIEW_DONE\n");
     fflush(stdout);
     return 0;
@@ -382,5 +471,8 @@ int main(int argc, char **argv)
 {
     findCode();
     startTime = time(NULL);
+    gettimeofday(&benchStart, NULL);
+    availStart = AvailMem(MEMF_ANY);
+    largestStart = AvailMem(MEMF_ANY | MEMF_LARGEST);
     return oam_run_with_stack(2 * 1024 * 1024, viewMain, argc, argv);
 }

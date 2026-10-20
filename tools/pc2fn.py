@@ -1,19 +1,29 @@
 #!/usr/bin/env python3
 # OpenBrowser (DalsinAI/openamigabrowser). Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 """pc2fn.py NMFILE MAIN_RUNTIME_ADDR ADDR... : map runtime code addresses to
-functions using `nm -n` of the hunk executable (text symbols only; mangled
-names ending in 'E' are variables such as s_info and are skipped)."""
+functions using `nm -n` of the hunk executable (text symbols only; C++
+names that demangle without a parameter list are variables such as s_info,
+which the hunk format puts in the code, and are skipped)."""
 import subprocess, sys
 nm, mainrt, addrs = sys.argv[1], int(sys.argv[2], 16), [int(x, 16) for x in sys.argv[3:]]
-syms = []
+cand = []
 for line in open(nm):
     t = line.split()
     if len(t) != 3 or t[1] not in "Tt":
         continue
-    name = t[2]
-    if name.startswith("__Z") and name.endswith("E"):
-        continue
-    syms.append((int(t[0], 16), name))
+    cand.append((int(t[0], 16), t[2]))
+def demangle_all(ns):
+    try:
+        out = subprocess.run(["c++filt", "-_"], input="\n".join(ns) + "\n",
+                             capture_output=True, text=True).stdout.split("\n")
+        if len(out) >= len(ns):
+            return out[:len(ns)]
+    except Exception:
+        pass
+    return list(ns)
+plain = demangle_all([n for _, n in cand])
+syms = [(a, n) for (a, n), d in zip(cand, plain)
+        if not (n.startswith("__Z") and "(" not in d)]
 syms.sort()
 main = next(a for a, n in syms if n == "_main")
 base = mainrt - main

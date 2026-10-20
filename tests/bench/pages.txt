@@ -1,0 +1,51 @@
+# OpenBrowser benchmark pages (tools/bench, docs/BENCHMARKS.md).
+# MIT, Copyright (c) 2026 The AmigaChrome Team.
+#
+# One page per line:  id  set  target  [option=value ...]
+#   id      letters, digits and "-" (AmigaDOS file names: logs/<id>.log, png/<id>.png)
+#   set     local   our own pages from this repository, no network
+#           compat  feature probe and conformance pages
+#           live    sites on the internet over https://, fetched read-only
+#   target  a repository path (local pages) or an http(s):// address
+#   options wait=N   seconds obcore-view lets the page load (default BENCH_WAIT, 120)
+#           text=1   also print the page's text (OBVIEW_TEXT; Acid3's score)
+#           lite=0   do not run OpenBrowser Lite's obfetch on it
+#
+# Live pages change from day to day: compare runs from the same day, or
+# look at trends over several runs, never one live number on its own.
+
+# Local: fixed pages, no network variance
+text        local   tests/bench/local/text.html
+table       local   tests/bench/local/table.html
+grid        local   tests/bench/local/grid.html
+images      local   tests/bench/local/images.html
+dom         local   tests/bench/local/dom.html
+jsbench     local   tests/jsbench.html
+jsops       local   tests/jsops.html
+test1       local   tests/pages/test1.html
+
+# Compatibility
+features    compat  tests/bench/compat/features.html
+acid3       compat  http://acid3.acidtests.org/            text=1 wait=180 lite=0
+
+# Live: common sites over https://
+example     live    https://example.com/
+wiki-amiga  live    https://en.wikipedia.org/wiki/Amiga
+wiki-main   live    https://en.wikipedia.org/wiki/Main_Page
+bbc-news    live    https://www.bbc.co.uk/news
+guardian    live    https://www.theguardian.com/uk
+github      live    https://github.com/
+google      live    https://www.google.com/
+youtube     live    https://www.youtube.com/
+amazon      live    https://www.amazon.co.uk/
+reddit      live    https://www.reddit.com/
+hn          live    https://news.ycombinator.com/
+mdn         live    https://developer.mozilla.org/en-US/
+so          live    https://stackoverflow.com/questions
+ebay        live    https://www.ebay.co.uk/
+gov-uk      live    https://www.gov.uk/
+w3c         live    https://www.w3.org/
+ddg-html    live    https://html.duckduckgo.com/html/
+amiga-org   live    https://www.amiga.org/
+eab         live    https://eab.abime.net/
+aminet      live    https://aminet.net/

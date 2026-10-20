@@ -289,6 +289,11 @@ void ob_webview_paint(OBWebView* handle, unsigned char* argb, int stride, int x,
     handle->view->paint(argb, stride, IntRect(x, y, width, height));
 }
 
+unsigned long ob_webview_bytes_received(OBWebView* handle)
+{
+    return static_cast<unsigned long>(handle->view->bytesReceived());
+}
+
 int ob_webview_text(OBWebView* handle, char* buffer, int size)
 {
     auto* frame = handle->view->mainFrame();

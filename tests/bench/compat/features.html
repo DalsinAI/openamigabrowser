@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<!-- OpenBrowser CSS/HTML/JS feature probe (tests/bench). MIT, Copyright (c) 2026 The AmigaChrome Team. Our own content. -->
+<html lang="en"><head><meta charset="utf-8"><title>Bench: features</title>
+<style>
+body { font-family: sans-serif; font-size: 11px; margin: 4px; }
+h1 { font-size: 15px; margin: 2px 0; }
+#out { columns: 4; column-gap: 8px; }
+#out div { break-inside: avoid; }
+.yes { color: #060; } .no { color: #b00; font-weight: bold; }
+</style></head>
+<body>
+<h1 id="h">Feature probe</h1>
+<div id="out"></div>
+<script>
+// Feature detection only: what the engine says it supports, not whether it
+// draws it right (that is what the render comparison is for). Prints one
+// console line, "OBBENCH_FEATURES {json}", and sets the title to the score.
+var results = {}, order = [];
+function probe(name, f) {
+    var ok;
+    try { ok = !!f(); } catch (e) { ok = false; }
+    results[name] = ok; order.push(name);
+}
+function css(decl) {
+    if (window.CSS && CSS.supports) return CSS.supports(decl);
+    var i = decl.indexOf(":"), el = document.createElement("div");
+    el.style.cssText = decl;
+    return el.style.length > 0 && i > 0;
+}
+function syntax(src) { new Function(src); return true; }
+function sel(s) { document.querySelector(s); return true; }
+
+// CSS
+probe("css.flex", function () { return css("display: flex"); });
+probe("css.grid", function () { return css("display: grid"); });
+probe("css.grid-areas", function () { return css("grid-template-areas: 'a b'"); });
+probe("css.subgrid", function () { return css("grid-template-columns: subgrid"); });
+probe("css.display-contents", function () { return css("display: contents"); });
+probe("css.gap", function () { return css("gap: 4px"); });
+probe("css.sticky", function () { return css("position: sticky"); });
+probe("css.aspect-ratio", function () { return css("aspect-ratio: 16 / 9"); });
+probe("css.custom-properties", function () { return css("--x: 1"); });
+probe("css.calc", function () { return css("width: calc(100% - 4px)"); });
+probe("css.clamp", function () { return css("width: clamp(1px, 50%, 300px)"); });
+probe("css.transform", function () { return css("transform: rotate(5deg)"); });
+probe("css.transition", function () { return css("transition: opacity 1s"); });
+probe("css.animation", function () { return css("animation-name: x"); });
+probe("css.filter", function () { return css("filter: blur(2px)"); });
+probe("css.backdrop-filter", function () { return css("backdrop-filter: blur(2px)") || css("-webkit-backdrop-filter: blur(2px)"); });
+probe("css.object-fit", function () { return css("object-fit: cover"); });
+probe("css.mask", function () { return css("mask-image: none") || css("-webkit-mask-image: none"); });
+probe("css.writing-mode", function () { return css("writing-mode: vertical-rl"); });
+probe("css.container-queries", function () { return css("container-type: inline-size"); });
+probe("css.color-mix", function () { return css("color: color-mix(in srgb, red 50%, blue)"); });
+probe("css.lab", function () { return css("color: lab(50% 40 59)"); });
+probe("css.inset", function () { return css("inset: 0"); });
+probe("css.logical", function () { return css("margin-inline-start: 1px"); });
+probe("css.scroll-behavior", function () { return css("scroll-behavior: smooth"); });
+probe("css.accent-color", function () { return css("accent-color: red"); });
+probe("css.text-decoration-thickness", function () { return css("text-decoration-thickness: 2px"); });
+probe("css.multicol", function () { return css("columns: 2"); });
+probe("css.sel-is", function () { return sel(":is(p, div)"); });
+probe("css.sel-where", function () { return sel(":where(p)"); });
+probe("css.sel-has", function () { return sel("div:has(p)"); });
+probe("css.sel-focus-visible", function () { return sel(":focus-visible"); });
+probe("css.layer", function () { return "CSSLayerBlockRule" in window; });
+probe("css.nesting", function () { return "CSSNestedDeclarations" in window || css("selector(&)"); });
+probe("css.font-face-api", function () { return !!(document.fonts && window.FontFace); });
+
+// HTML
+function el(name) { return document.createElement(name); }
+function inputType(t) { var i = el("input"); i.setAttribute("type", t); return i.type === t; }
+probe("html.canvas-2d", function () { return el("canvas").getContext("2d"); });
+probe("html.webgl", function () { var c = el("canvas"); return c.getContext("webgl") || c.getContext("experimental-webgl"); });
+probe("html.svg", function () { return document.createElementNS("http://www.w3.org/2000/svg", "svg").createSVGRect; });
+probe("html.dialog", function () { return typeof el("dialog").showModal === "function"; });
+probe("html.details", function () { return "open" in el("details"); });
+probe("html.template", function () { return "content" in el("template"); });
+probe("html.picture", function () { return window.HTMLPictureElement; });
+probe("html.srcset", function () { return "srcset" in el("img"); });
+probe("html.img-lazy", function () { return "loading" in el("img"); });
+probe("html.input-date", function () { return inputType("date"); });
+probe("html.input-color", function () { return inputType("color"); });
+probe("html.input-range", function () { return inputType("range"); });
+probe("html.video-mp4", function () { return el("video").canPlayType('video/mp4; codecs="avc1.42E01E"'); });
+probe("html.video-webm", function () { return el("video").canPlayType('video/webm; codecs="vp9"'); });
+probe("html.audio-mp3", function () { return el("audio").canPlayType("audio/mpeg"); });
+probe("html.custom-elements", function () { return window.customElements && customElements.define; });
+probe("html.shadow-dom", function () { return el("div").attachShadow({ mode: "open" }); });
+
+// DOM and web APIs
+probe("api.fetch", function () { return window.fetch; });
+probe("api.xhr", function () { return new XMLHttpRequest(); });
+probe("api.promise", function () { return window.Promise; });
+probe("api.mutation-observer", function () { return window.MutationObserver; });
+probe("api.intersection-observer", function () { return window.IntersectionObserver; });
+probe("api.resize-observer", function () { return window.ResizeObserver; });
+probe("api.raf", function () { return window.requestAnimationFrame; });
+probe("api.local-storage", function () { localStorage.setItem("obbench", "1"); localStorage.removeItem("obbench"); return true; });
+probe("api.session-storage", function () { return window.sessionStorage; });
+probe("api.indexeddb", function () { return window.indexedDB; });
+probe("api.websocket", function () { return window.WebSocket; });
+probe("api.worker", function () { return window.Worker; });
+probe("api.service-worker", function () { return navigator.serviceWorker; });
+probe("api.crypto-random", function () { return crypto.getRandomValues(new Uint8Array(4)); });
+probe("api.crypto-subtle", function () { return crypto.subtle; });
+probe("api.text-encoder", function () { return new TextEncoder().encode("a").length === 1; });
+probe("api.url", function () { return new URL("https://a.example/b?c=1").searchParams.get("c") === "1"; });
+probe("api.abort-controller", function () { return new AbortController().signal; });
+probe("api.structured-clone", function () { return structuredClone({ a: 1 }).a === 1; });
+probe("api.intl-datetime", function () { return new Intl.DateTimeFormat("en-GB").format(new Date(0)); });
+probe("api.intl-number", function () { return new Intl.NumberFormat("de-DE").format(1234.5) === "1.234,5"; });
+probe("api.blob", function () { return new Blob(["a"]).size === 1; });
+probe("api.file-reader", function () { return window.FileReader; });
+probe("api.form-data", function () { return new FormData(); });
+probe("api.history-push", function () { return history.pushState; });
+probe("api.match-media", function () { return window.matchMedia("(min-width: 1px)").matches; });
+probe("api.closest", function () { return document.body.closest("html"); });
+probe("api.replace-children", function () { return el("div").replaceChildren; });
+probe("api.web-animations", function () { return el("div").animate; });
+probe("api.performance-now", function () { return performance.now() >= 0; });
+probe("api.queue-microtask", function () { return window.queueMicrotask; });
+probe("api.clipboard", function () { return navigator.clipboard; });
+
+// JavaScript syntax and built-ins
+probe("js.arrow-let-const", function () { return syntax("let a = 1; const f = (x) => x + a;"); });
+probe("js.class-fields", function () { return syntax("class A { #p = 1; static s = 2; get p() { return this.#p; } }"); });
+probe("js.async-await", function () { return syntax("async function f() { await 1; }"); });
+probe("js.optional-chaining", function () { return syntax("var a = null; a?.b?.(); a ?? 1;"); });
+probe("js.logical-assign", function () { return syntax("var a; a ||= 1; a &&= 2; a ??= 3;"); });
+probe("js.module-script", function () { return "noModule" in el("script"); });
+probe("js.bigint", function () { return typeof BigInt(1) === "bigint"; });
+probe("js.weakref", function () { return window.WeakRef; });
+probe("js.proxy", function () { return new Proxy({}, {}); });
+probe("js.array-at", function () { return [1, 2, 3].at(-1) === 3; });
+probe("js.array-flat", function () { return [[1], [2]].flat().length === 2; });
+probe("js.object-fromentries", function () { return Object.fromEntries([["a", 1]]).a === 1; });
+probe("js.string-replaceall", function () { return "aa".replaceAll("a", "b") === "bb"; });
+probe("js.regexp-lookbehind", function () { return new RegExp("(?<=a)b").test("ab"); });
+probe("js.regexp-named-groups", function () { return new RegExp("(?<x>a)").exec("a").groups.x === "a"; });
+probe("js.structured-error-cause", function () { return new Error("x", { cause: 1 }).cause === 1; });
+
+var pass = 0, missing = [], out = [];
+for (var i = 0; i < order.length; i++) {
+    var n = order[i];
+    if (results[n]) pass++; else missing.push(n);
+    out.push('<div class="' + (results[n] ? "yes" : "no") + '">' + (results[n] ? "+ " : "- ") + n + "</div>");
+}
+document.getElementById("out").innerHTML = out.join("");
+document.getElementById("h").textContent = "Feature probe: " + pass + " of " + order.length;
+console.log("OBBENCH_FEATURES " + JSON.stringify({ pass: pass, total: order.length, missing: missing, results: results }));
+document.title = "Bench: features " + pass + "/" + order.length;
+</script>
+</body></html>
