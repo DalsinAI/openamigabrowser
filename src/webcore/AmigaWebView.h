@@ -75,6 +75,9 @@ public:
     void consoleMessage(const String& message, unsigned line, const String& source);
     void resourceStarted(const String& url);
     void resourceEnded(const String& url, const String& error);
+    // Bytes the page's requests have received so far (ob_webview_bytes_received).
+    void addBytesReceived(int bytes) { if (bytes > 0) m_bytesReceived += static_cast<unsigned>(bytes); }
+    unsigned long long bytesReceived() const { return m_bytesReceived; }
 
 private:
     void renderingUpdateTimerFired();
@@ -89,6 +92,7 @@ private:
     MonotonicTime m_nextRenderingUpdate; // while a page loads, none before this
     bool m_loading { false };
     bool m_liteMode { false };
+    unsigned long long m_bytesReceived { 0 };
 };
 
 } // namespace OpenBrowser
