@@ -108,7 +108,8 @@ Patch 0032 (J6) keeps the busiest variables of integer loops in data
 registers d2-d7, in a second copy of the loop body: int-loop runs 1.68x
 fewer instructions than with 0031 (17.3x fewer than the interpreter as of
 0029). It also makes calls into JavaScript from C++ cheaper (sort with a
-comparator: 1.41x). Next: a run on a real 68040, loop copies that carry on past property
+comparator: 1.41x) and calls from compiled code to compiled functions
+(calls test: 1.37x). Next: a run on a real 68040, loop copies that carry on past property
 access and calls, then 32-bit values (`docs/JS_32BIT_VALUES.md`).
 
 The original plan, for reference:

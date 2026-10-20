@@ -11,7 +11,9 @@ Every test gives the same result with the JIT on and off.
 Integer loops get a second copy of their body with up to six variables in
 d2-d7, and calls into JavaScript from C++ (the sort comparator here) no
 longer copy the whole register file with memcpy twice per call: they keep
-only the slots a C call must give back, with a run of move.l.
+only the slots a C call must give back, with a run of move.l. Calls from
+compiled code to a compiled function skip the interpreter's prologue (each
+function's code starts with its own).
 `lab/correct4.js` (sort, map, forEach, reduce, replace callbacks, getters,
 JSON reviver, valueOf, toString, exceptions and deep recursion through
 callbacks) prints what node prints, with the JIT on and off.
@@ -26,7 +28,7 @@ interpreter's templates as they were.
 | int-loop    |   9.9 |   5.9 | 1.68x | 17.3x |
 | properties  |  13.1 |  13.1 | 1.00x |  8.0x |
 | double-loop |   6.5 |   6.5 | 1.00x |  7.9x |
-| calls       |  16.5 |  16.5 | 1.00x |  6.2x |
+| calls       |  16.5 |  12.0 | 1.37x |  8.5x |
 | closures    |  10.8 |  10.8 | 1.00x |  1.8x |
 | strings     |   5.7 |   5.7 | 1.00x |  1.6x |
 | array (sort)| 107.9 |  76.8 | 1.41x |  1.9x |

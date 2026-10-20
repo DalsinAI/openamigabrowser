@@ -142,7 +142,9 @@ The patches, in order:
   back at the next back edge. `JSC_useM68KRegisterCache=0` turns it off.
   Calls into JavaScript from C++ (sort comparators, map, forEach, getters)
   cost less: the 68k entry keeps only the register slots a C call must
-  give back, copied with move.l instead of memcpy.
+  give back, copied with move.l instead of memcpy. Calls from compiled
+  code to a compiled function skip the interpreter's prologue: each
+  function's code starts with its own.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
