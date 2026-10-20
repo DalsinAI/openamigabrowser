@@ -48,6 +48,10 @@
 #   GENERATOR       CMake generator for a new build folder (default: Ninja
 #                   when ninja is installed, otherwise Unix Makefiles; an
 #                   existing folder keeps the generator it was made with)
+#   OB_OPTIMIZE     "size" (-Os, CMake's MinSizeRel) or "speed" (-O2,
+#                   Release with -O2 rather than CMake's -O3) for a new build
+#                   folder; an existing folder keeps its choice. Use a
+#                   separate WEBKIT_BUILD to compare the two.   (default size)
 #   OB_CCACHE       the ccache program, or "none"  (default: ccache on PATH)
 #   OB_CCACHE_DIR   ccache's folder for this build
 #                   (default ~/.cache/ccache-openbrowser)
@@ -265,10 +269,15 @@ configure_engine() {
         cmake "$BUILD" "$@"
         return
     fi
+    case "${OB_OPTIMIZE:-size}" in
+        size) set -- "$@" -DCMAKE_BUILD_TYPE=MinSizeRel ;;
+        speed) set -- "$@" -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG" "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG" ;;
+        *) echo "OB_OPTIMIZE must be size or speed" >&2; exit 2 ;;
+    esac
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "$(generator)" "$@" \
       -DPORT=Amiga \
       -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain/amigaos3-gcc16.cmake" \
-      -DCMAKE_BUILD_TYPE=MinSizeRel \
       -DENABLE_WEBCORE=ON \
       -DOPENBROWSER_WEBCORE_DIR="$ROOT/src/webcore"
 }
