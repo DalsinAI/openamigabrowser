@@ -6,7 +6,9 @@
  * Opens weblayout.library 1 (which opens openlayout.library 2), then runs
  * its calls on a small page laid out and drawn into an off-screen RastPort
  * with topaz 8: title, stylesheet and picture resources, layout, drawing,
- * the link under a point, the resolver, plain text, and 50 pages made and
+ * the link under a point (in a paragraph with bold text after the link),
+ * the title still good after layout and drawing, the resolver, plain text,
+ * https://example.com/'s markup (no </head>), and 50 pages made and
  * disposed of to see the memory come back. Prints WEBLAYOUTLIB PASS, or what
  * failed and returns 10.
  *
@@ -42,6 +44,15 @@ static const char page[] =
     "<p><img src=\"/pics/one.png\" width=\"32\" height=\"16\" alt=\"one\"></p>"
     "<ul><li>first</li><li>second</li></ul>"
     "</body></html>";
+
+static const char example_com[] =
+    "<!doctype html><html lang=\"en\"><head><title>Example Domain</title>"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+    "<style>body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}"
+    "h1{font-size:1.5em}div{opacity:0.8}a:link,a:visited{color:#348}</style>"
+    "<body><div><h1>Example Domain</h1><p>This domain is for use in documentation "
+    "examples without needing permission. Avoid use in operations.<p>"
+    "<a href=\"https://iana.org/domains/example\">Learn more</a></div></body></html>\n";
 
 static const char sheet[] = "h1 { color: #800000; } p { padding-left: 4px; }";
 
@@ -82,7 +93,9 @@ int main(void)
     struct WLResource res;
     WLDocument *doc;
     CONST_STRPTR title, href = NULL;
-    ULONG n, inked = 0, before, after;
+    char title_copy[64];
+    ULONG n, inked = 0, linked = 0, before, after;
+    LONG pen;
     LONG height;
     WORD x, y;
     int i;
@@ -135,6 +148,8 @@ int main(void)
     if (doc) {
         title = WL_GetTitle(doc);
         CHECK(!strcmp((const char *)title, "weblayout & the library"));
+        strncpy(title_copy, (const char *)title, sizeof title_copy - 1);
+        title_copy[sizeof title_copy - 1] = 0;
         n = WL_CountResources(doc, WLRES_STYLESHEET);
         CHECK(n == 1);
         res.wr_Size = sizeof res;
@@ -158,8 +173,16 @@ int main(void)
         WL_Draw(doc, &view);
         for (y = 0; y < 400; y += 2)
             for (x = 0; x < 320; x += 2)
-                if (ReadPixel(&rp, x, y) != 0) inked++;
+                if ((pen = ReadPixel(&rp, x, y)) != 0) {
+                    inked++;
+                    if (pen == view.wv_LinkPen) linked++;
+                }
         CHECK(inked > 50);
+        CHECK(linked > 0);                               /* the link's text in the link pen */
+        /* the title lasts until disposal: WL_Layout built the page again
+         * for the stylesheet, and WL_Draw drew it */
+        CHECK(WL_GetTitle(doc) == title);
+        CHECK(!strcmp((const char *)title, title_copy));
 
         for (y = view.wv_Top; y < view.wv_Top + view.wv_Height && !href; y += 2)
             for (x = view.wv_Left; x < view.wv_Left + view.wv_Width && !href; x += 2)
@@ -182,6 +205,26 @@ int main(void)
         WL_Draw(doc, &view);
         WL_DisposeDocument(doc);
     }
+    /* https://example.com/ leaves out </head>: its heading, text and link */
+    doc = WL_NewDocument((CONST_STRPTR)example_com, (ULONG)strlen(example_com), WLKIND_HTML,
+                         (CONST_STRPTR)"https://example.com/");
+    CHECK(doc != NULL);
+    if (doc) {
+        CHECK(!strcmp((const char *)WL_GetTitle(doc), "Example Domain"));
+        CHECK(WL_Layout(doc, &view));
+        height = WL_ContentHeight(doc);
+        CHECK(height > 60);
+        WL_Draw(doc, &view);
+        href = NULL;
+        for (y = view.wv_Top; y < view.wv_Top + view.wv_Height && !href; y += 2)
+            for (x = view.wv_Left; x < view.wv_Left + view.wv_Width && !href; x += 2)
+                href = WL_HitLink(doc, &view, x, y);
+        CHECK(href && !strcmp((const char *)href, "https://iana.org/domains/example"));
+        printf("example.com: %ld px high, link %s\n", (long)height,
+               href ? (const char *)href : "(none)");
+        WL_DisposeDocument(doc);
+    }
+
     CHECK(WL_NewDocument((CONST_STRPTR)"x", 1, 99, NULL) == NULL);   /* no such kind */
     WL_Draw(NULL, &view);                                              /* clears the area */
     WL_DisposeDocument(NULL);
