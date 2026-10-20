@@ -18,6 +18,7 @@ git apply /path/to/openamigabrowser/webkit/patches/0007-amiga-host-connections-l
 git apply /path/to/openamigabrowser/webkit/patches/0008-jsc-for-in-big-endian.patch
 git apply /path/to/openamigabrowser/webkit/patches/0009-amiga-stop-run-loops-at-exit.patch
 git apply /path/to/openamigabrowser/webkit/patches/0010-amiga-fetch-proxy-experiment.patch
+# then the rest the same way, in number order (0030 last)
 ```
 
 The patches, in order:
@@ -61,7 +62,6 @@ The patches, in order:
   With the Shell variable `OB_FETCH_PROXY` set (see
   `scripts/ob-fetch-proxy.py`), requests go to a proxy on another PC, which
   makes the TLS connections. Off unless the variable is set.
-
 - `0019-jsc-generators-in-python.patch`: JavaScriptCore builds without
   Ruby. offlineasm (front end and the M68K back end), the bytecode generator
   and GeneratePreferences run as Python 3 ports (standard library only), in
@@ -144,6 +144,15 @@ The patches, in order:
 - `0029-jsc-m68k-template-jit-on-by-default.patch`: `useM68KTemplateJIT`
   defaults to true, so engine builds run the template JIT and its fast
   paths everywhere. `JSC_useM68KTemplateJIT=0` runs the interpreter alone.
+
+- `0030-amiga-xml-parser-oxp.patch`: XML (SVG, XHTML, `DOMParser`,
+  `responseXML`) through OXP, the Team's own XML parser
+  (DalsinAI/openamigaxml, `oxp/`), in place of libxml2 (`USE(OXP)`).
+  `XMLDocumentParserOXP.cpp` is WebKit's libxml2 backend moved onto OXP.
+  `XMLDocumentParserOXPBridge.h` gives `XMLDocumentParser` OXP's events in
+  libxml2's shapes, and is tested on the host against libxml2
+  (`../tests/xml-oxp/`). No external entity or DTD is loaded; XSLT and EME
+  stay off.
 
 - `0031-jsc-m68k-jit-functions-properties-doubles.patch`: J4. Whole
   functions: the function prologues enter a function's code once it has

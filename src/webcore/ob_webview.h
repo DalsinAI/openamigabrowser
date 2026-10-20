@@ -77,6 +77,8 @@ void ob_webview_destroy(OBWebView *view);
 
 void ob_webview_load(OBWebView *view, const char *url);
 void ob_webview_load_html(OBWebView *view, const char *html, const char *baseURL);
+/* As load_html, with the MIME type given ("application/xhtml+xml", "image/svg+xml"...). */
+void ob_webview_load_data(OBWebView *view, const char *text, const char *mimeType, const char *baseURL);
 void ob_webview_back(OBWebView *view);
 void ob_webview_forward(OBWebView *view);
 void ob_webview_reload(OBWebView *view);

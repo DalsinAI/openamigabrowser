@@ -16,6 +16,10 @@ for OpenBrowser itself.
 | `input.html` | `obcore-view -input input.html` | A click into a text box, typing an address key by key, then a click on a link | `OBVIEW_ALERT clicked with someone@example.com keys=19 inputs=19` |
 | `forin.html` | `obcore-view forin.html` | `for (k in o)` over a small object, an array and a 1000-key object | `OBVIEW_TITLE forin names=abcd sum=10 array=012 big=1000/499500` (before WebKit patch 0008 the loops never ended, and the program crashed) |
 
+The XML pages (`xml.html`, `xml-xhtml.xhtml`, `xml-svg.svg`) test WebKit
+patch 0030, XML through OXP. Their commands and expected results are in
+`../xml-oxp/README.md`.
+
 `obcore-view -input` clicks at (30, 35), types `someone@example.com` with
 Intuition raw key codes, as OpenBrowser's window does, then clicks at
 (30, 110). `-wait seconds` changes how long it lets a page load (120 by

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="400" height="300" viewBox="0 0 400 300">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3060c0"/>
+      <stop offset="1" stop-color="#c03060"/>
+    </linearGradient>
+    <circle id="dot" r="20" fill="#f0c000"/>
+  </defs>
+  <rect x="10" y="10" width="380" height="280" rx="16" fill="url(#g)"/>
+  <use xlink:href="#dot" x="80" y="80"/>
+  <use xlink:href="#dot" x="320" y="220"/>
+  <text x="200" y="160" font-size="28" text-anchor="middle" fill="white">OXP &amp; SVG</text>
+</svg>
