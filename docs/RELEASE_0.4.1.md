@@ -48,3 +48,36 @@ standard", and "lite should almost create the bones of a weblayout.library".
 - On an AmigaOS 3.2.3 instance and on a real 68040: the window, scrolling,
   the clipping, a click-through, pictures and an https:// page through
   OpenTLS. 0.2 to 0.4 were qualified on AC090 with AmiSSL; 0.4.1 is not yet.
+
+## The release archive
+
+`scripts/package-lite.sh` packs a build into
+`build/package/OpenBrowserLite-0.4.1.lha`: the drawer `OpenBrowserLite`
+with the program, its icon, the readme and its icon, and the licence, and
+the drawer's own icon beside it (the icon set in `icons/`). It writes the
+archive's sha256 beside it, and the readme as `OpenBrowserLite-0.4.1.readme`
+for Aminet. Files are dated from the last commit, so one build packs to the
+same bytes every time. The packer is `lha` from Ubuntu's `jlha-utils`
+(level 2 headers, which LhA on the Amiga reads). weblayout.library is not
+in it: Lite 0.4.1 has the engine built in.
+
+CI (`.github/workflows/lite.yml`) builds the archive on every run, checks
+it with lhasa, prints its sha256 in the run's summary and keeps it as the
+artifact `openbrowser-lite-release`.
+
+To publish v0.4.1, on a PC with `gh` signed in, once this is merged to
+main and the Lite workflow's run on main is green:
+
+```sh
+gh run list -R DalsinAI/openamigabrowser --workflow lite.yml --branch main --limit 1
+gh run download <run id> -R DalsinAI/openamigabrowser -n openbrowser-lite-release -D lite-0.4.1
+cd lite-0.4.1
+sha256sum -c OpenBrowserLite-0.4.1.lha.sha256
+gh release create v0.4.1 -R DalsinAI/openamigabrowser --target main \
+    --title "OpenBrowser Lite 0.4.1" --notes-file OpenBrowserLite-0.4.1.readme \
+    OpenBrowserLite-0.4.1.lha OpenBrowserLite-0.4.1.lha.sha256
+```
+
+The asset is then
+`https://github.com/DalsinAI/openamigabrowser/releases/download/v0.4.1/OpenBrowserLite-0.4.1.lha`,
+which OpenUp pins by that sha256.

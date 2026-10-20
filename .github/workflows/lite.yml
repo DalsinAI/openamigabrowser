@@ -15,6 +15,9 @@ on:
       - 'tests/run-host-tests.sh'
       - 'tools/obfetch.c'
       - 'scripts/build-openbrowser.sh'
+      - 'scripts/package-lite.sh'
+      - 'openbrowserlite.readme'
+      - 'icons/**'
       - '.github/workflows/lite.yml'
   pull_request:
     paths:
@@ -27,6 +30,9 @@ on:
       - 'tests/run-host-tests.sh'
       - 'tools/obfetch.c'
       - 'scripts/build-openbrowser.sh'
+      - 'scripts/package-lite.sh'
+      - 'openbrowserlite.readme'
+      - 'icons/**'
       - '.github/workflows/lite.yml'
   workflow_dispatch:
 
@@ -94,6 +100,20 @@ jobs:
           strings build/os3/OpenBrowserLite | grep '^\$VER: OpenBrowserLite 0\.4\.' 
           if strings build/os3/OpenBrowserLite | grep -i amissl; then echo "AmiSSL is still named in OpenBrowser"; exit 1; fi
           sha256sum build/os3/OpenBrowserLite build/os3/obfetch
+      - name: Install the LhA packer
+        # jlha-utils packs (jlha, also as lha); lhasa reads, to check the archive
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jlha-utils lhasa
+      - name: Release archive
+        run: |
+          scripts/package-lite.sh build/os3 build/package
+          lhasa t build/package/OpenBrowserLite-*.lha
+          lhasa v build/package/OpenBrowserLite-*.lha
+          echo "### OpenBrowser Lite release archive" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat build/package/OpenBrowserLite-*.lha.sha256 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: openbrowser-lite-68040
@@ -102,3 +122,11 @@ jobs:
             build/os3/obfetch
             build/os3/tests/
           retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openbrowser-lite-release
+          path: |
+            build/package/OpenBrowserLite-*.lha
+            build/package/OpenBrowserLite-*.lha.sha256
+            build/package/OpenBrowserLite-*.readme
+          retention-days: 30
