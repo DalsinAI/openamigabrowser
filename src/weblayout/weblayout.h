@@ -6,10 +6,13 @@
  * geometry and the display list) and page pictures through
  * picture.datatype. OpenBrowser Lite calls nothing else of the engine.
  *
- * It is shaped as a library already (docs/WEBLAYOUT_LIBRARY.md): opaque
- * documents, Exec types, no callbacks, no varargs and no C library types in
- * the calls, and structures that carry their own size. Today it is linked
- * into the program; as weblayout.library these calls become its vectors.
+ * It is shaped as a library (docs/WEBLAYOUT_LIBRARY.md): opaque documents,
+ * Exec types, no callbacks, no varargs and no C library types in the calls,
+ * and structures that carry their own size. It is linked into a program,
+ * or opened as LIBS:weblayout.library 1, whose vectors are these calls
+ * (src/weblayout/library: weblayout_lib.sfd, and <proto/weblayout.h> from
+ * it). A program using the library includes <proto/weblayout.h> after this
+ * header and opens WebLayoutBase before WL_Open.
  *
  * A page, step by step:
  *
@@ -36,7 +39,7 @@ extern "C" {
 #endif
 
 #define WEBLAYOUT_NAME    "weblayout.library"
-#define WEBLAYOUT_VERSION 0   /* not a library yet: docs/WEBLAYOUT_LIBRARY.md */
+#define WEBLAYOUT_VERSION 1   /* the first weblayout.library: docs/WEBLAYOUT_LIBRARY.md */
 
 struct RastPort;
 struct TextFont;

@@ -5,11 +5,11 @@
  */
 #include "weblayout.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "wl_html.h"
 #include "wl_image_dt.h"
+#include "wl_mem.h"
 #include "wl_openlayout.h"
 #include "wl_paint.h"
 #include "wl_url.h"
@@ -24,6 +24,7 @@ struct wl_image {
 };
 
 struct WLDocument {
+    wl_pool *pool;                  /* everything below comes from it */
     ULONG kind;
     char *source;                   /* the page's bytes, for building it again with CSS */
     ULONG source_len;
@@ -44,13 +45,9 @@ struct WLDocument {
     int nimages;
 };
 
-static char *copy_bytes(const char *s, ULONG n)
+static char *copy_bytes(WLDocument *doc, const char *s, ULONG n)
 {
-    char *p = (char *)malloc((size_t)n + 1);
-    if (!p) return NULL;
-    if (n) memcpy(p, s, n);
-    p[n] = 0;
-    return p;
+    return wl_strndup(doc->pool, s, (size_t)n);
 }
 
 static LONG to_px(ol_unit u)
@@ -63,8 +60,8 @@ static void free_sheet_urls(WLDocument *doc)
 {
     int i;
     if (!doc->sheet_urls) return;
-    for (i = 0; i < doc->nsheets; ++i) free(doc->sheet_urls[i]);
-    free(doc->sheet_urls);
+    for (i = 0; i < doc->nsheets; ++i) wl_free(doc->sheet_urls[i]);
+    wl_free(doc->sheet_urls);
     doc->sheet_urls = NULL;
     doc->nsheets = 0;
 }
@@ -82,12 +79,12 @@ static int resolve_sheets(WLDocument *doc)
     int i;
     free_sheet_urls(doc);
     if (doc->page.nstylesheets <= 0) return 1;
-    doc->sheet_urls = (char **)calloc((size_t)doc->page.nstylesheets, sizeof(char *));
+    doc->sheet_urls = (char **)wl_alloc(doc->pool, (size_t)doc->page.nstylesheets * sizeof(char *));
     if (!doc->sheet_urls) return 0;
     doc->nsheets = doc->page.nstylesheets;
     for (i = 0; i < doc->page.nstylesheets; ++i) {
         wl_url_resolve(doc->base, doc->page.stylesheet_href[i], doc->url, sizeof doc->url);
-        doc->sheet_urls[i] = copy_bytes(doc->url, (ULONG)strlen(doc->url));
+        doc->sheet_urls[i] = copy_bytes(doc, doc->url, (ULONG)strlen(doc->url));
         if (!doc->sheet_urls[i]) return 0;
     }
     return 1;
@@ -99,8 +96,9 @@ static int build_text(WLDocument *doc)
     ol_node *root, *pre, *text;
     ol_style style;
     memset(&doc->page, 0, sizeof doc->page);
+    doc->page.pool = doc->pool;
     doc->page.document = ol_document_new();
-    doc->page.title = copy_bytes("", 0);
+    doc->page.title = copy_bytes(doc, "", 0);
     if (!doc->page.document || !doc->page.title) return 0;
     root = ol_document_root(doc->page.document);
     pre = ol_node_append(doc->page.document, root, OL_ROLE_BLOCK, NULL);
@@ -124,26 +122,34 @@ static int build(WLDocument *doc)
     doc->laid_out = FALSE;
     doc->css_changed = FALSE;
     if (doc->kind == WLKIND_TEXT) return build_text(doc);
-    if (doc->css_len)
-        return wl_html_parse_with_css(doc->source, doc->source_len, doc->css, doc->css_len, &doc->page);
-    return wl_html_parse(doc->source, doc->source_len, &doc->page);
+    return wl_html_parse_in(doc->pool, doc->source, doc->source_len,
+                            doc->css_len ? doc->css : NULL, doc->css_len, &doc->page);
 }
 
 WLDocument *WL_NewDocument(CONST_STRPTR data, ULONG length, ULONG kind,
                            CONST_STRPTR base_url)
 {
     WLDocument *doc;
+    wl_pool *pool;
+    ULONG baselen;
     if (!data) length = 0;
     if (kind != WLKIND_HTML && kind != WLKIND_TEXT) return NULL;
-    doc = (WLDocument *)calloc(1, sizeof *doc);
-    if (!doc) return NULL;
+    pool = wl_pool_new();
+    if (!pool) return NULL;
+    doc = (WLDocument *)wl_alloc(pool, sizeof *doc);
+    if (!doc) {
+        wl_pool_delete(pool);
+        return NULL;
+    }
+    doc->pool = pool;
+    doc->page.pool = pool;
     doc->kind = kind;
-    doc->source = copy_bytes((const char *)data, length);
+    doc->source = copy_bytes(doc, (const char *)data, length);
     doc->source_len = length;
-    doc->base = base_url ? copy_bytes((const char *)base_url, (ULONG)strlen((const char *)base_url))
-                         : copy_bytes("", 0);
+    baselen = base_url ? (ULONG)strlen((const char *)base_url) : 0;
+    doc->base = copy_bytes(doc, base_url ? (const char *)base_url : "", baselen);
     if (!doc->source || !doc->base || !build(doc) ||
-        !(doc->title = copy_bytes(doc->page.title, (ULONG)strlen(doc->page.title))) ||
+        !(doc->title = copy_bytes(doc, doc->page.title, (ULONG)strlen(doc->page.title))) ||
         !resolve_sheets(doc)) {
         WL_DisposeDocument(doc);
         return NULL;
@@ -153,15 +159,18 @@ WLDocument *WL_NewDocument(CONST_STRPTR data, ULONG length, ULONG kind,
 
 void WL_DisposeDocument(WLDocument *doc)
 {
+    wl_pool *pool;
     if (!doc) return;
     free_images(doc);
     free_sheet_urls(doc);
     wl_html_result_free(&doc->page);
-    free(doc->source);
-    free(doc->base);
-    free(doc->css);
-    free(doc->title);
-    free(doc);
+    wl_free(doc->source);
+    wl_free(doc->base);
+    wl_free(doc->css);
+    wl_free(doc->title);
+    pool = doc->pool;
+    wl_free(doc);
+    wl_pool_delete(pool);           /* and anything still in it */
 }
 
 CONST_STRPTR WL_GetTitle(const WLDocument *doc)
@@ -175,7 +184,7 @@ BOOL WL_AddStyleSheet(WLDocument *doc, CONST_STRPTR css, ULONG length)
     char *more;
     if (!doc || !css || !length || doc->kind != WLKIND_HTML) return FALSE;
     if (doc->css_len + length + 1 > WL_CSS_MAX) return FALSE;
-    more = (char *)realloc(doc->css, (size_t)doc->css_len + length + 2);
+    more = (char *)wl_realloc(doc->pool, doc->css, (size_t)doc->css_len + length + 2);
     if (!more) return FALSE;
     memcpy(more + doc->css_len, css, length);
     doc->css_len += length;
@@ -272,6 +281,7 @@ static int view_from(wl_view *v, const WLDocument *doc, const struct WLView *vie
     wl_view_set_rect(v, view->wv_Left, view->wv_Top, view->wv_Width, view->wv_Height);
     wl_view_set_pens(v, view->wv_TextPen, view->wv_BackPen, view->wv_LinkPen, view->wv_FillPen);
     if (doc) {
+        v->pool = doc->pool;
         wl_view_set_image_drawer(v, draw_image, (void *)doc);
         v->document = doc->page.document;
         wl_view_scroll_to(v, view->wv_ScrollY);
@@ -283,6 +293,7 @@ BOOL WL_Layout(WLDocument *doc, const struct WLView *view)
 {
     wl_view v;
     if (!doc || !view_from(&v, NULL, view)) return FALSE;
+    v.pool = doc->pool;
     if (doc->css_changed && !build(doc)) return FALSE;
     doc->laid_out = wl_view_set_document(&v, doc->page.document) ? TRUE : FALSE;
     return doc->laid_out;

@@ -43,6 +43,11 @@
 #include "oam_text.h"
 #include "ob_http.h"
 #include "weblayout/weblayout.h"
+#ifdef OB_WEBLAYOUT_LIBRARY
+/* built with WEBLAYOUT=library: the engine is LIBS:weblayout.library */
+#include <proto/weblayout.h>
+struct Library *WebLayoutBase = NULL;
+#endif
 
 struct Library *GadToolsBase = NULL;
 
@@ -752,16 +757,37 @@ static void rexx_events(void)
     }
 }
 
+/* weblayout's WL_Close, and the library when it is one */
+static void close_weblayout(void)
+{
+#ifdef OB_WEBLAYOUT_LIBRARY
+    if (!WebLayoutBase) return;
+    WL_Close();
+    CloseLibrary(WebLayoutBase);
+    WebLayoutBase = NULL;
+#else
+    WL_Close();
+#endif
+}
+
 static int browser_main(int argc, char **argv)
 {
     char err[200];
+#ifdef OB_WEBLAYOUT_LIBRARY
+    WebLayoutBase = OpenLibrary((CONST_STRPTR)WEBLAYOUT_NAME, WEBLAYOUT_VERSION);
+    if (!WebLayoutBase) {
+        PutStr((STRPTR)"OpenBrowser needs weblayout.library 1 and openlayout.library 2 or later\n");
+        return 20;
+    }
+#endif
     if (!WL_Open()) {
         PutStr((STRPTR)"OpenBrowser needs openlayout.library 2 or later\n");
+        close_weblayout();
         return 20;
     }
     if (!(GadToolsBase = OpenLibrary((STRPTR)"gadtools.library", 39))) {
         PutStr((STRPTR)"OpenBrowser needs AmigaOS 3.0 or later (gadtools.library 39)\n");
-        WL_Close();
+        close_weblayout();
         return 20;
     }
     Forbid();
@@ -776,7 +802,7 @@ static int browser_main(int argc, char **argv)
         close_window();
         if (rexx_port) { RemPort(rexx_port); DeleteMsgPort(rexx_port); }
         CloseLibrary(GadToolsBase);
-        WL_Close();
+        close_weblayout();
         return 20;
     }
     ob_http_progress = progress;
@@ -811,7 +837,7 @@ static int browser_main(int argc, char **argv)
     while (nhistory) free(history[--nhistory]);
     oam_net_cleanup();
     CloseLibrary(GadToolsBase);
-    WL_Close();
+    close_weblayout();
     return 0;
 }
 

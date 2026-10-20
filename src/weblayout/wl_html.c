@@ -7,14 +7,14 @@
 #include "wl_html.h"
 #include "wl_css.h"
 
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+
+#include "wl_libc.h"
 
 #define WL_HTML_MAX_DEPTH 64
 
 struct sb {
+    wl_pool *pool;
     char *p;
     size_t n;
     size_t cap;
@@ -51,7 +51,7 @@ static int sb_reserve(struct sb *b, size_t extra)
     if (need <= b->cap) return 1;
     cap = b->cap ? b->cap : 64;
     while (cap < need) cap *= 2;
-    p = (char *)realloc(b->p, cap);
+    p = (char *)wl_realloc(b->pool, b->p, cap);
     if (!p) {
         b->failed = 1;
         return 0;
@@ -99,23 +99,23 @@ static int sb_utf8(struct sb *b, unsigned long c)
     return sb_add(b, s, 4);
 }
 
+static void sb_init(struct sb *b, wl_pool *pool)
+{
+    memset(b, 0, sizeof(*b));
+    b->pool = pool;
+}
+
 static void sb_free(struct sb *b)
 {
     if (!b) return;
-    free(b->p);
-    memset(b, 0, sizeof(*b));
+    wl_free(b->p);
+    sb_init(b, b->pool);
 }
 
-static char *dup0(const char *s)
+static char *dup0(wl_pool *pool, const char *s)
 {
-    size_t n;
-    char *p;
     if (!s) s = "";
-    n = strlen(s);
-    p = (char *)malloc(n + 1);
-    if (!p) return NULL;
-    memcpy(p, s, n + 1);
-    return p;
+    return wl_strndup(pool, s, strlen(s));
 }
 
 static int cieq_n(const char *a, size_t n, const char *b)
@@ -123,7 +123,7 @@ static int cieq_n(const char *a, size_t n, const char *b)
     size_t i;
     if (strlen(b) != n) return 0;
     for (i = 0; i < n; ++i)
-        if (tolower((unsigned char)a[i]) != tolower((unsigned char)b[i]))
+        if (wl_tolower((unsigned char)a[i]) != wl_tolower((unsigned char)b[i]))
             return 0;
     return 1;
 }
@@ -131,7 +131,7 @@ static int cieq_n(const char *a, size_t n, const char *b)
 static void lower_name(char *out, size_t out_size, const char *s, size_t n)
 {
     size_t i, m = n < out_size - 1 ? n : out_size - 1;
-    for (i = 0; i < m; ++i) out[i] = (char)tolower((unsigned char)s[i]);
+    for (i = 0; i < m; ++i) out[i] = (char)wl_tolower((unsigned char)s[i]);
     out[m] = 0;
 }
 
@@ -154,9 +154,9 @@ static size_t decode_entity(const char *s, const char *end, unsigned long *code)
         p += hex ? 2 : 1;
         n = 0;
         while (p < end && n < 8 &&
-               (hex ? isxdigit((unsigned char)*p) : isdigit((unsigned char)*p))) {
-            if (isdigit((unsigned char)*p)) v = v * (hex ? 16 : 10) + (unsigned long)(*p - '0');
-            else v = v * 16 + (unsigned long)(tolower((unsigned char)*p) - 'a' + 10);
+               (hex ? wl_isxdigit((unsigned char)*p) : wl_isdigit((unsigned char)*p))) {
+            if (wl_isdigit((unsigned char)*p)) v = v * (hex ? 16 : 10) + (unsigned long)(*p - '0');
+            else v = v * 16 + (unsigned long)(wl_tolower((unsigned char)*p) - 'a' + 10);
             ++p;
             ++n;
         }
@@ -185,18 +185,18 @@ static int attribute(const char *tag, const char *end, const char *name,
     out[0] = 0;
     while (p < end) {
         const char *k, *ke, *v, *ve;
-        while (p < end && isspace((unsigned char)*p)) ++p;
+        while (p < end && wl_isspace((unsigned char)*p)) ++p;
         if (p >= end) break;
         k = p;
-        while (p < end && (isalnum((unsigned char)*p) || *p == '-' || *p == '_')) ++p;
+        while (p < end && (wl_isalnum((unsigned char)*p) || *p == '-' || *p == '_')) ++p;
         ke = p;
-        while (p < end && isspace((unsigned char)*p)) ++p;
+        while (p < end && wl_isspace((unsigned char)*p)) ++p;
         if (p >= end || *p != '=') {
-            while (p < end && !isspace((unsigned char)*p)) ++p;
+            while (p < end && !wl_isspace((unsigned char)*p)) ++p;
             continue;
         }
         ++p;
-        while (p < end && isspace((unsigned char)*p)) ++p;
+        while (p < end && wl_isspace((unsigned char)*p)) ++p;
         v = p;
         if (p < end && (*p == '"' || *p == '\'')) {
             char q = *p++;
@@ -205,7 +205,7 @@ static int attribute(const char *tag, const char *end, const char *name,
             ve = p;
             if (p < end) ++p;
         } else {
-            while (p < end && !isspace((unsigned char)*p) && *p != '>') ++p;
+            while (p < end && !wl_isspace((unsigned char)*p) && *p != '>') ++p;
             ve = p;
         }
         if ((size_t)(ke - k) == nl && cieq_n(k, nl, name)) {
@@ -226,9 +226,9 @@ static int token_ci(const char *list, const char *want)
     if (!list || !want) return 0;
     while (*p) {
         const char *s;
-        while (*p && isspace((unsigned char)*p)) ++p;
+        while (*p && wl_isspace((unsigned char)*p)) ++p;
         s = p;
-        while (*p && !isspace((unsigned char)*p)) ++p;
+        while (*p && !wl_isspace((unsigned char)*p)) ++p;
         if ((size_t)(p - s) == n && cieq_n(s, n, want)) return 1;
     }
     return 0;
@@ -239,11 +239,11 @@ static int add_stylesheet_ref(wl_html_result *result, const char *href)
     char **refs;
     char *copy;
     if (!result || !href || !*href || result->nstylesheets >= 8) return 1;
-    copy = dup0(href);
+    copy = dup0(result->pool, href);
     if (!copy) return 0;
-    refs = (char **)realloc(result->stylesheet_href,
+    refs = (char **)wl_realloc(result->pool, result->stylesheet_href,
                             (size_t)(result->nstylesheets + 1) * sizeof(*refs));
-    if (!refs) { free(copy); return 0; }
+    if (!refs) { wl_free(copy); return 0; }
     result->stylesheet_href = refs;
     result->stylesheet_href[result->nstylesheets++] = copy;
     return 1;
@@ -255,7 +255,7 @@ static int numeric_attr(const char *tag, const char *end, const char *name, int 
     char *ep;
     long v;
     if (!attribute(tag, end, name, buf, sizeof(buf))) return fallback;
-    v = strtol(buf, &ep, 10);
+    v = wl_strtol(buf, &ep, 10);
     if (ep == buf || v <= 0 || v > 4096) return fallback;
     return (int)v;
 }
@@ -357,12 +357,10 @@ static int append_text_node(struct parser *p, ol_node *parent,
     char *copy;
     ol_node *node;
     if (!len) return 1;
-    copy = (char *)malloc(len + 1);
+    copy = wl_strndup(p->result->pool, text, len);
     if (!copy) return 0;
-    memcpy(copy, text, len);
-    copy[len] = 0;
     node = ol_node_append(p->result->document, parent, OL_ROLE_TEXT, copy);
-    free(copy);
+    wl_free(copy);
     if (!node) return 0;
     ol_node_set_style(node, style);
     if (p->depth > 0 && p->stack[p->depth - 1].href)
@@ -375,7 +373,7 @@ static int emit_text(struct parser *p, const char *s, const char *end)
     struct sb b;
     ol_style style;
     int pre = current_pre(p);
-    memset(&b, 0, sizeof(b));
+    sb_init(&b, p->result->pool);
     inherited_inline(&style, current_style(p));
 
     while (s < end) {
@@ -396,7 +394,7 @@ static int emit_text(struct parser *p, const char *s, const char *end)
             continue;
         }
 
-        if (!pre && isspace((unsigned char)*s)) {
+        if (!pre && wl_isspace((unsigned char)*s)) {
             p->pending_space = 1;
             ++s;
             continue;
@@ -423,11 +421,11 @@ static int emit_text(struct parser *p, const char *s, const char *end)
     return 1;
 }
 
-static int decode_title(const char *s, const char *end, char **title)
+static int decode_title(wl_pool *pool, const char *s, const char *end, char **title)
 {
     struct sb b;
     int pending = 0, have = 0;
-    memset(&b, 0, sizeof(b));
+    sb_init(&b, pool);
     while (s < end) {
         unsigned long c;
         size_t n;
@@ -441,7 +439,7 @@ static int decode_title(const char *s, const char *end, char **title)
             pending = 0;
             if (!sb_utf8(&b, c)) break;
             have = 1;
-        } else if (isspace((unsigned char)*s)) {
+        } else if (wl_isspace((unsigned char)*s)) {
             pending = 1;
             ++s;
         } else {
@@ -455,8 +453,8 @@ static int decode_title(const char *s, const char *end, char **title)
         sb_free(&b);
         return 0;
     }
-    free(*title);
-    *title = dup0(b.p ? b.p : "");
+    wl_free(*title);
+    *title = dup0(pool, b.p ? b.p : "");
     sb_free(&b);
     return *title != NULL;
 }
@@ -475,7 +473,7 @@ static int nearest_list_prefix(struct parser *p, char *out, size_t out_size)
     for (i = p->depth - 1; i >= 0; --i) {
         if (!strcmp(p->stack[i].tag, "ol")) {
             ++p->stack[i].counter;
-            snprintf(out, out_size, "%d. ", p->stack[i].counter);
+            wl_snprintf(out, out_size, "%d. ", p->stack[i].counter);
             return 1;
         }
         if (!strcmp(p->stack[i].tag, "ul")) {
@@ -517,7 +515,7 @@ static void end_head(struct parser *p)
 static int has_text(const char *s, const char *end)
 {
     for (; s < end; ++s)
-        if (!isspace((unsigned char)*s)) return 1;
+        if (!wl_isspace((unsigned char)*s)) return 1;
     return 0;
 }
 
@@ -744,7 +742,7 @@ static const char *find_close_tag(const char *s, const char *end, const char *ta
     while (s + n + 3 <= end) {
         if (s[0] == '<' && s[1] == '/' && cieq_n(s + 2, n, tag)) {
             const char *p = s + 2 + n;
-            while (p < end && isspace((unsigned char)*p)) ++p;
+            while (p < end && wl_isspace((unsigned char)*p)) ++p;
             if (p < end && *p == '>') return s;
         }
         ++s;
@@ -752,9 +750,9 @@ static const char *find_close_tag(const char *s, const char *end, const char *ta
     return NULL;
 }
 
-int wl_html_parse_with_css(const char *html, size_t length,
-                                const char *extra_css, size_t extra_css_length,
-                                wl_html_result *result)
+int wl_html_parse_in(wl_pool *pool, const char *html, size_t length,
+                     const char *extra_css, size_t extra_css_length,
+                     wl_html_result *result)
 {
     const char *s, *end;
     struct parser *p = NULL;
@@ -762,9 +760,10 @@ int wl_html_parse_with_css(const char *html, size_t length,
 
     if (!html || !result) return 0;
     memset(result, 0, sizeof(*result));
+    result->pool = pool;
     result->document = ol_document_new();
     if (!result->document) return 0;
-    result->title = dup0("");
+    result->title = dup0(pool, "");
     if (!result->title) {
         wl_html_result_free(result);
         return 0;
@@ -774,7 +773,7 @@ int wl_html_parse_with_css(const char *html, size_t length,
      * normal Amiga Shell command may have only a few KiB of stack; the old
      * local struct worked in the browser's 64 KiB worker stack but could
      * overflow small utilities before parsing even <p>x</p>. */
-    p = (struct parser *)calloc(1, sizeof(*p));
+    p = (struct parser *)wl_alloc(pool, sizeof(*p));
     if (!p) {
         wl_html_result_free(result);
         return 0;
@@ -782,10 +781,11 @@ int wl_html_parse_with_css(const char *html, size_t length,
     p->result = result;
     p->next_image_id = 1;
     wl_css_init(&p->css);
+    p->css.pool = pool;
     if (extra_css && extra_css_length &&
         !wl_css_add(&p->css, extra_css, extra_css_length)) {
         wl_css_free(&p->css);
-        free(p);
+        wl_free(p);
         wl_html_result_free(result);
         return 0;
     }
@@ -793,7 +793,7 @@ int wl_html_parse_with_css(const char *html, size_t length,
     base.display = OL_DISPLAY_BLOCK;
     if (!push_frame(p, "#document", ol_document_root(result->document), &base, 0, 0)) {
         wl_css_free(&p->css);
-        free(p);
+        wl_free(p);
         wl_html_result_free(result);
         return 0;
     }
@@ -828,14 +828,14 @@ int wl_html_parse_with_css(const char *html, size_t length,
         }
 
         name = lt + 1;
-        while (name < gt && isspace((unsigned char)*name)) ++name;
+        while (name < gt && wl_isspace((unsigned char)*name)) ++name;
         closing = name < gt && *name == '/';
         if (closing) {
             ++name;
-            while (name < gt && isspace((unsigned char)*name)) ++name;
+            while (name < gt && wl_isspace((unsigned char)*name)) ++name;
         }
         ne = name;
-        while (ne < gt && (isalnum((unsigned char)*ne) || *ne == '-' || *ne == '_')) ++ne;
+        while (ne < gt && (wl_isalnum((unsigned char)*ne) || *ne == '-' || *ne == '_')) ++ne;
         if (ne == name) {
             s = gt + 1;
             continue;
@@ -845,14 +845,14 @@ int wl_html_parse_with_css(const char *html, size_t length,
 
         {
             const char *q = gt;
-            while (q > lt && isspace((unsigned char)q[-1])) --q;
+            while (q > lt && wl_isspace((unsigned char)q[-1])) --q;
             if (q > lt && q[-1] == '/') self_close = 1;
         }
 
         if (!closing && !strcmp(tag, "title")) {
             const char *close = find_close_tag(gt + 1, end, "title");
             if (close) {
-                if (!decode_title(gt + 1, close, &result->title)) goto fail;
+                if (!decode_title(pool, gt + 1, close, &result->title)) goto fail;
                 gt = memchr(close, '>', (size_t)(end - close));
                 s = gt ? gt + 1 : end;
             } else {
@@ -887,30 +887,40 @@ int wl_html_parse_with_css(const char *html, size_t length,
     }
 
     wl_css_free(&p->css);
-    free(p);
+    wl_free(p);
     return 1;
 
 fail:
     wl_css_free(&p->css);
-    free(p);
+    wl_free(p);
     wl_html_result_free(result);
     return 0;
+}
+
+int wl_html_parse_with_css(const char *html, size_t length,
+                           const char *extra_css, size_t extra_css_length,
+                           wl_html_result *result)
+{
+    return wl_html_parse_in(NULL, html, length, extra_css, extra_css_length, result);
 }
 
 int wl_html_parse(const char *html, size_t length,
                        wl_html_result *result)
 {
-    return wl_html_parse_with_css(html, length, NULL, 0, result);
+    return wl_html_parse_in(NULL, html, length, NULL, 0, result);
 }
 
 void wl_html_result_free(wl_html_result *result)
 {
     int i;
+    wl_pool *pool;
     if (!result) return;
+    pool = result->pool;
     ol_document_free(result->document);
-    free(result->title);
+    wl_free(result->title);
     for (i = 0; i < result->nstylesheets; ++i)
-        free(result->stylesheet_href[i]);
-    free(result->stylesheet_href);
+        wl_free(result->stylesheet_href[i]);
+    wl_free(result->stylesheet_href);
     memset(result, 0, sizeof(*result));
+    result->pool = pool;
 }

@@ -2,7 +2,8 @@ name: OpenBrowser Lite
 
 # OpenBrowser Lite and weblayout (src/ob_*.c, src/weblayout, OpenMail's
 # network layer): the host tests, and the 68040 build with the OpenAmigaGCC
-# release and OpenNDK, pinned as openamigacurl's CI pins them.
+# release and OpenNDK, pinned as openamigacurl's CI pins them; and
+# weblayout.library with its test program.
 on:
   push:
     paths:
@@ -17,6 +18,7 @@ on:
       - 'tools/obfetch.c'
       - 'scripts/build-openbrowser.sh'
       - 'scripts/package-lite.sh'
+      - 'scripts/build-weblayout-library.sh'
       - 'openbrowserlite.readme'
       - 'icons/**'
       - '.github/workflows/lite.yml'
@@ -33,6 +35,7 @@ on:
       - 'tools/obfetch.c'
       - 'scripts/build-openbrowser.sh'
       - 'scripts/package-lite.sh'
+      - 'scripts/build-weblayout-library.sh'
       - 'openbrowserlite.readme'
       - 'icons/**'
       - '.github/workflows/lite.yml'
@@ -94,6 +97,39 @@ jobs:
           NDK_INCLUDE=$PWD/openamigasdk/OpenNDK/Include_H \
           OPENLAYOUT_SRC=$PWD/openamigalayout OPENLAYOUT=library \
           scripts/build-openbrowser.sh build/os3-library
+      - name: 68040 build (weblayout.library and WebLayoutLibTest)
+        # also checks src/weblayout/library/sdk against the SFD with OpenSDK's ndkgen.py
+        run: |
+          TOOLCHAIN_DIR=tc/openamigagcc-16.2.0-open3-x86_64-linux \
+          NDK_INCLUDE=$PWD/openamigasdk/OpenNDK/Include_H \
+          OPENLAYOUT_SRC=$PWD/openamigalayout OPENSDK_SRC=$PWD/openamigasdk \
+          scripts/build-weblayout-library.sh build/weblayout-library
+      - name: 68040 build (OpenBrowserLite on weblayout.library)
+        run: |
+          TOOLCHAIN_DIR=tc/openamigagcc-16.2.0-open3-x86_64-linux \
+          NDK_INCLUDE=$PWD/openamigasdk/OpenNDK/Include_H \
+          OPENLAYOUT_SRC=$PWD/openamigalayout WEBLAYOUT=library \
+          scripts/build-openbrowser.sh build/os3-weblayout
+      - name: Check the library
+        run: |
+          D=tc/openamigagcc-16.2.0-open3-x86_64-linux/bin
+          L=build/weblayout-library/weblayout.library
+          for f in $L build/weblayout-library/tests/WebLayoutLibTest build/os3-weblayout/OpenBrowserLite; do
+            $D/m68k-amigaos-objdump -f "$f" | grep -q 'file format amiga' || { echo "$f is not an Amiga executable"; exit 1; }
+          done
+          # nothing left to resolve, and no C library in it
+          if [ -n "$($D/m68k-amigaos-nm -u $L)" ]; then $D/m68k-amigaos-nm -u $L; exit 1; fi
+          if grep -E 'lib(nix|c)[^ ]*\.a\(' build/weblayout-library/weblayout.library.map; then
+            echo "weblayout.library links a C library"; exit 1
+          fi
+          # its only global state: SysBase and the bases it opens
+          G=$($D/m68k-amigaos-nm $L | awk '$2 ~ /^[bBdD]$/ {print $3}' | grep -v '^__' | sort | tr '\n' ' ')
+          echo "globals: $G"
+          [ "$G" = "_DataTypesBase _GfxBase _LayersBase _OpenLayoutBase _SysBase " ] || { echo "weblayout.library has other globals"; exit 1; }
+          strings $L | grep '^\$VER: weblayout.library 1\.'
+          strings $L | grep -q '^weblayout.library 1\.0 .*The AmigaChrome Team'
+          strings build/os3-weblayout/OpenBrowserLite | grep -q '^weblayout.library$'
+          sha256sum $L build/weblayout-library/tests/WebLayoutLibTest
       - name: Check the programs
         run: |
           D=tc/openamigagcc-16.2.0-open3-x86_64-linux/bin
@@ -124,6 +160,14 @@ jobs:
             build/os3/OpenBrowserLite
             build/os3/obfetch
             build/os3/tests/
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weblayout-library-68040
+          path: |
+            build/weblayout-library/weblayout.library
+            build/weblayout-library/tests/WebLayoutLibTest
+            build/os3-weblayout/OpenBrowserLite
           retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
