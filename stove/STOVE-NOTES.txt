@@ -46,7 +46,10 @@ WebKit/JavaScriptCore needs C++23, which GCC 6.5 cannot do.
    (ldbl/ with -fno-builtin)
    and archive them. Programs link
      ... -lpthread -latomic -lstdc++ -L<stove>/compat -los32compat
-   and, for aligned_alloc to pair with free():
+   (-DOS32_MALLOC_DEBUG on os32compat_malloc.c: freed blocks filled and
+   every block's end checked, for chasing heap faults)
+   and, for the allocator to take malloc's place and aligned_alloc to pair
+   with free():
      -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free
      -Wl,-u,___wrap_malloc -Wl,-u,___wrap_free -Wl,-u,___wrap_calloc
      -Wl,-u,___wrap_realloc
