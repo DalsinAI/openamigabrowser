@@ -60,6 +60,8 @@ struct ob_httpcache_request {
     int hasConditional;         /* If-None-Match, If-Modified-Since, If-Range or Range */
 };
 int ob_httpcache_request_policy(const struct ob_httpcache_request *request);
+/* The request's Cache-Control max-age in seconds, or -1 without one. */
+long ob_httpcache_request_max_age(const struct ob_httpcache_request *request);
 
 /* What a response allows: seconds it stays fresh from now (0: ask the
  * server each time), or -1 if it must not be stored. */
@@ -83,6 +85,7 @@ long ob_httpcache_parse_date(const char *text);
 /* The stored response for url, or NULL. */
 ob_httpcache_entry *ob_httpcache_lookup(ob_httpcache *cache, const char *url, time_t now);
 int ob_httpcache_entry_fresh(const ob_httpcache_entry *entry, time_t now);
+long ob_httpcache_entry_age(const ob_httpcache_entry *entry, time_t now);   /* seconds since stored or refreshed */
 const char *ob_httpcache_entry_etag(const ob_httpcache_entry *entry);           /* "" without one */
 const char *ob_httpcache_entry_last_modified(const ob_httpcache_entry *entry);  /* "" without one */
 unsigned ob_httpcache_entry_header_count(const ob_httpcache_entry *entry);
