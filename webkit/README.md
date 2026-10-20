@@ -105,7 +105,7 @@ The patches, in order:
   in (`llint/M68KTemplateJIT.cpp`). The copies run on the interpreter's own
   frames and registers and fall through into each other; op_loop_hint enters
   the code and `jsc_m68k_tjit_redispatch` leaves it. On by default since
-  0028; `JSC_useM68KTemplateJIT=0` turns it off. Tools and the qemu test are in
+  0029; `JSC_useM68KTemplateJIT=0` turns it off. Tools and the qemu test are in
   `../tools/jsjit/`.
 
 - `0027-jsc-m68k-jit-int32-fast-paths.patch`: J3, 32-bit integer fast
@@ -116,7 +116,7 @@ The patches, in order:
   out of line. Branches between instructions are direct. JSValues stay
   64-bit in memory. `JSC_useM68KFastPaths=0` turns it off for comparison.
 
-- `0028-jsc-m68k-template-jit-on-by-default.patch`: `useM68KTemplateJIT`
+- `0029-jsc-m68k-template-jit-on-by-default.patch`: `useM68KTemplateJIT`
   defaults to true, so engine builds run the template JIT and its fast
   paths everywhere. `JSC_useM68KTemplateJIT=0` runs the interpreter alone.
 

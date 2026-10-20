@@ -87,7 +87,7 @@ made into a template (`offlineasm-py/m68k_templates.py`); a hot CodeBlock is
 compiled by copying one template per instruction and writing the
 instruction's operands into it. The code uses the interpreter's frames,
 registers and register file, so the two hand over at any instruction. Patch
-0024 is the first stage (on by default since patch 0028; `JSC_useM68KTemplateJIT=0` turns it off); the
+0024 is the first stage (on by default since patch 0029; `JSC_useM68KTemplateJIT=0` turns it off); the
 tools and a qemu test are in `tools/jsjit/`. A peephole pass over the
 templates (T4) came with it.
 
