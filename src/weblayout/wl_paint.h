@@ -38,6 +38,8 @@ LONG wl_view_content_px(const wl_view *view);
 LONG wl_view_max_scroll(const wl_view *view);
 void wl_view_scroll_to(wl_view *view, LONG scroll_px);
 void wl_view_draw(wl_view *view);
+/* the href (as written on the page) of the link at the mouse, or NULL */
+const char *wl_view_hit_link(const wl_view *view, WORD mouse_x, WORD mouse_y);
 const ol_node *wl_view_hit_action(const wl_view *view,
                                          WORD mouse_x, WORD mouse_y,
                                          ULONG action);

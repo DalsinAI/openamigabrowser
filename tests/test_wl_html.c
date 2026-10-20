@@ -45,6 +45,50 @@ static const ol_style *find_text_style(const ol_document *doc, const char *text)
     return NULL;
 }
 
+/* https://example.com/ as it is served: no </head>, its <p>s left open */
+static int example_com(void)
+{
+    static const char html[] =
+        "<!doctype html><html lang=\"en\"><head><title>Example Domain</title>"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<style>body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}"
+        "h1{font-size:1.5em}div{opacity:0.8}a:link,a:visited{color:#348}</style>"
+        "<body><div><h1>Example Domain</h1><p>This domain is for use in documentation "
+        "examples without needing permission. Avoid use in operations.<p>"
+        "<a href=\"https://iana.org/domains/example\">Learn more</a></div></body></html>\n";
+    wl_html_result r;
+    const ol_node *node;
+    ol_id id;
+    int links = 0, headings = 0;
+    CHECK(wl_html_parse(html, sizeof(html) - 1, &r));
+    CHECK(!strcmp(r.title, "Example Domain"));
+    CHECK(ol_layout(r.document, OL_CSSPX(360), NULL, NULL));
+    CHECK(find_text_style(r.document, "Example Domain") != NULL);
+    CHECK(find_text_style(r.document, "documentation examples") != NULL);
+    CHECK(find_text_style(r.document, "Learn more") != NULL);
+    CHECK(find_text_style(r.document, "background") == NULL);
+    for (id = 1; (node = ol_node_by_id(r.document, id)) != NULL; ++id) {
+        if (ol_node_role(node) == OL_ROLE_LINK) {
+            ++links;
+            CHECK(!strcmp(ol_node_href(node), "https://iana.org/domains/example"));
+        }
+        if (ol_node_role(node) == OL_ROLE_HEADING) ++headings;
+    }
+    CHECK(links == 1);
+    CHECK(headings == 1);
+    /* the head also ends at text, and at a body element */
+    wl_html_result_free(&r);
+    CHECK(wl_html_parse("<head><title>t</title>Hello <b>there</b>", 40, &r));
+    CHECK(ol_layout(r.document, OL_CSSPX(360), NULL, NULL));
+    CHECK(find_text_style(r.document, "Hello") != NULL);
+    wl_html_result_free(&r);
+    CHECK(wl_html_parse("<head><meta charset=utf-8><p>Para", 33, &r));
+    CHECK(ol_layout(r.document, OL_CSSPX(360), NULL, NULL));
+    CHECK(find_text_style(r.document, "Para") != NULL);
+    wl_html_result_free(&r);
+    return 1;
+}
+
 int main(void)
 {
     static const char html[] =
@@ -71,6 +115,8 @@ int main(void)
     MARK("open-begin");
     CHECK(wl_openlayout_open());
     MARK("opened");
+    CHECK(example_com() == 1);
+    MARK("example-com");
     CHECK(probe_case("p", "<p>x</p>"));
     CHECK(probe_case("link", "<p><a href=\"https://example.com/\">x</a></p>"));
     CHECK(probe_case("list", "<ul><li>one</li><li>two</li></ul>"));

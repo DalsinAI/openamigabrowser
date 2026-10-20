@@ -12,6 +12,7 @@ on:
       - 'third_party/openmail/**'
       - 'third_party/opentls/**'
       - 'tests/test_*.c'
+      - 'tests/host/**'
       - 'tests/run-host-tests.sh'
       - 'tools/obfetch.c'
       - 'scripts/build-openbrowser.sh'
@@ -27,6 +28,7 @@ on:
       - 'third_party/openmail/**'
       - 'third_party/opentls/**'
       - 'tests/test_*.c'
+      - 'tests/host/**'
       - 'tests/run-host-tests.sh'
       - 'tools/obfetch.c'
       - 'scripts/build-openbrowser.sh'
@@ -44,7 +46,8 @@ env:
 
 jobs:
   host:
-    # HTML Lite, CSS Lite and the address resolver with the host's compiler
+    # HTML Lite, CSS Lite, the address resolver, weblayout's calls and
+    # OpenMail's HTML-to-text converter with the host's compiler
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

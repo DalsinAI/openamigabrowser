@@ -34,7 +34,12 @@ struct WLDocument {
     wl_html_result page;            /* page.document is the OpenLayout tree */
     BOOL laid_out;
     char url[WL_URL_MAX];           /* WL_GetResource's and WL_HitLink's answer */
+    /* The title and the stylesheets' addresses are the page's own, made
+     * once by WL_NewDocument: building the page again with CSS (WL_Layout
+     * after WL_AddStyleSheet) leaves them, as weblayout.h promises. */
+    char *title;                    /* WL_GetTitle's answer */
     char **sheet_urls;              /* absolute, one per page.stylesheet_href */
+    int nsheets;
     struct wl_image images[WL_IMAGE_MAX];
     int nimages;
 };
@@ -58,9 +63,10 @@ static void free_sheet_urls(WLDocument *doc)
 {
     int i;
     if (!doc->sheet_urls) return;
-    for (i = 0; i < doc->page.nstylesheets; ++i) free(doc->sheet_urls[i]);
+    for (i = 0; i < doc->nsheets; ++i) free(doc->sheet_urls[i]);
     free(doc->sheet_urls);
     doc->sheet_urls = NULL;
+    doc->nsheets = 0;
 }
 
 static void free_images(WLDocument *doc)
@@ -78,6 +84,7 @@ static int resolve_sheets(WLDocument *doc)
     if (doc->page.nstylesheets <= 0) return 1;
     doc->sheet_urls = (char **)calloc((size_t)doc->page.nstylesheets, sizeof(char *));
     if (!doc->sheet_urls) return 0;
+    doc->nsheets = doc->page.nstylesheets;
     for (i = 0; i < doc->page.nstylesheets; ++i) {
         wl_url_resolve(doc->base, doc->page.stylesheet_href[i], doc->url, sizeof doc->url);
         doc->sheet_urls[i] = copy_bytes(doc->url, (ULONG)strlen(doc->url));
@@ -112,18 +119,14 @@ static int build_text(WLDocument *doc)
 /* the page's tree, from its bytes and the CSS added so far */
 static int build(WLDocument *doc)
 {
-    int ok;
-    free_sheet_urls(doc);
     wl_html_result_free(&doc->page);
     free_images(doc);
     doc->laid_out = FALSE;
     doc->css_changed = FALSE;
     if (doc->kind == WLKIND_TEXT) return build_text(doc);
     if (doc->css_len)
-        ok = wl_html_parse_with_css(doc->source, doc->source_len, doc->css, doc->css_len, &doc->page);
-    else
-        ok = wl_html_parse(doc->source, doc->source_len, &doc->page);
-    return ok && resolve_sheets(doc);
+        return wl_html_parse_with_css(doc->source, doc->source_len, doc->css, doc->css_len, &doc->page);
+    return wl_html_parse(doc->source, doc->source_len, &doc->page);
 }
 
 WLDocument *WL_NewDocument(CONST_STRPTR data, ULONG length, ULONG kind,
@@ -139,7 +142,9 @@ WLDocument *WL_NewDocument(CONST_STRPTR data, ULONG length, ULONG kind,
     doc->source_len = length;
     doc->base = base_url ? copy_bytes((const char *)base_url, (ULONG)strlen((const char *)base_url))
                          : copy_bytes("", 0);
-    if (!doc->source || !doc->base || !build(doc)) {
+    if (!doc->source || !doc->base || !build(doc) ||
+        !(doc->title = copy_bytes(doc->page.title, (ULONG)strlen(doc->page.title))) ||
+        !resolve_sheets(doc)) {
         WL_DisposeDocument(doc);
         return NULL;
     }
@@ -155,13 +160,14 @@ void WL_DisposeDocument(WLDocument *doc)
     free(doc->source);
     free(doc->base);
     free(doc->css);
+    free(doc->title);
     free(doc);
 }
 
 CONST_STRPTR WL_GetTitle(const WLDocument *doc)
 {
-    if (!doc || !doc->page.title) return (CONST_STRPTR)"";
-    return (CONST_STRPTR)doc->page.title;
+    if (!doc || !doc->title) return (CONST_STRPTR)"";
+    return (CONST_STRPTR)doc->title;
 }
 
 BOOL WL_AddStyleSheet(WLDocument *doc, CONST_STRPTR css, ULONG length)
@@ -198,7 +204,7 @@ ULONG WL_CountResources(const WLDocument *doc, ULONG kind)
     size_t i, count;
     ULONG n = 0;
     if (!doc) return 0;
-    if (kind == WLRES_STYLESHEET) return doc->page.nstylesheets > 0 ? (ULONG)doc->page.nstylesheets : 0;
+    if (kind == WLRES_STYLESHEET) return doc->nsheets > 0 ? (ULONG)doc->nsheets : 0;
     if (kind != WLRES_IMAGE || !doc->laid_out) return 0;
     count = ol_display_count(doc->page.document);
     for (i = 0; i < count; ++i) {
@@ -325,12 +331,10 @@ void WL_Draw(const WLDocument *doc, const struct WLView *view)
 CONST_STRPTR WL_HitLink(WLDocument *doc, const struct WLView *view, WORD x, WORD y)
 {
     wl_view v;
-    const ol_node *node;
     const char *href;
     if (!doc || !doc->laid_out || !view_from(&v, doc, view)) return NULL;
-    node = wl_view_hit_action(&v, x, y, OL_ACTION_ACTIVATE);
-    href = node ? ol_node_href(node) : NULL;
-    if (!href || !*href) return NULL;
+    href = wl_view_hit_link(&v, x, y);
+    if (!href) return NULL;
     wl_url_resolve(doc->base, href, doc->url, sizeof doc->url);
     return (CONST_STRPTR)doc->url;
 }
