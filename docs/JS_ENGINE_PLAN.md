@@ -88,8 +88,15 @@ compiled by copying one template per instruction and writing the
 instruction's operands into it. The code uses the interpreter's frames,
 registers and register file, so the two hand over at any instruction. Patch
 0024 is the first stage, off unless `JSC_useM68KTemplateJIT=1` is set; the
-tools and a qemu test are in `tools/jsjit/`. Next: lab runs, then dropping
-the remaining dispatch checks and operand shuffles, then inline caches.
+tools and a qemu test are in `tools/jsjit/`. A peephole pass over the
+templates (T4) came with it.
+
+Patch 0025 (J3) adds 32-bit integer fast paths: for the commonest integer
+operations the JIT writes its own code, with the template out of line as the
+slow path. Lab counts (68k instructions executed, `tools/jsjit/lab/RESULTS.md`):
+int-loop 10.3x fewer than the interpreter, properties 2.7x, double-loop 2.1x,
+calls 1.8x. Next: function entry (not only loops), property access and calls
+as fast paths, then 32-bit values (`docs/JS_32BIT_VALUES.md`).
 
 The original plan, for reference:
 
