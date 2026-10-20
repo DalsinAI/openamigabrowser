@@ -87,9 +87,23 @@ made into a template (`offlineasm-py/m68k_templates.py`); a hot CodeBlock is
 compiled by copying one template per instruction and writing the
 instruction's operands into it. The code uses the interpreter's frames,
 registers and register file, so the two hand over at any instruction. Patch
-0024 is the first stage, off unless `JSC_useM68KTemplateJIT=1` is set; the
-tools and a qemu test are in `tools/jsjit/`. Next: lab runs, then dropping
-the remaining dispatch checks and operand shuffles, then inline caches.
+0024 is the first stage (on by default since patch 0029; `JSC_useM68KTemplateJIT=0` turns it off); the
+tools and a qemu test are in `tools/jsjit/`. A peephole pass over the
+templates (T4) came with it.
+
+Patch 0027 (J3) adds 32-bit integer fast paths: for the commonest integer
+operations the JIT writes its own code, with the template out of line as the
+slow path. Lab counts (68k instructions executed, `tools/jsjit/lab/RESULTS.md`):
+int-loop 10.3x fewer than the interpreter, properties 2.7x, double-loop 2.1x,
+calls 1.8x.
+
+Patch 0031 (J4) compiles whole functions (entered from the function
+prologues, not only from loops), gives op_enter, op_ret, op_call,
+op_construct, get_by_id and put_by_id their own code, runs double arithmetic and compares on the FPU, and
+stops the interpreter filling profiles only optimizing JITs read. Against the
+interpreter before it: int-loop 10.3x fewer instructions, properties 8.0x,
+double-loop 7.9x, calls 6.2x, closures 1.8x. Next: hot values kept in data registers, a run on a real 68040, then 32-bit values
+(`docs/JS_32BIT_VALUES.md`).
 
 The original plan, for reference:
 
