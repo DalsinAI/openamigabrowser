@@ -647,7 +647,7 @@ index 0000000..b974778
 +using OXPParserBridge = OXPBridge::Bridge<XMLDocumentParser, XMLDocumentParserProtector>;
 +
 +XMLParserContext::XMLParserContext(XMLDocumentParser& parser, unsigned options, oxp_encoding encoding)
-+    : m_bridge(makeUnique<OXPParserBridge>(parser))
++    : m_bridge(std::make_unique<OXPParserBridge>(parser))
 +{
 +    m_parser = oxp_new(&OXPParserBridge::handler(), m_bridge.get(), nullptr);
 +    RELEASE_ASSERT(m_parser);
