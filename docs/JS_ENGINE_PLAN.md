@@ -43,7 +43,9 @@ Two facts shape the work:
 ## Step 1: the 68k interpreter (done, 6 October 2026)
 
 Built as WebKit patch 0015 (`webkit/patches/0015-jsc-m68k-interpreter.patch`),
-on by default in `scripts/build-webcore.sh` (CMake `JSC_M68K_LLINT`). It took
+on by default in `scripts/build-webcore.sh` (since patch 0019 the only
+interpreter the 68k build has; its back end is now
+`offlineasm-py/offlineasm/m68k.py`, Ruby no longer needed). It took
 a shorter route than the plan below: the C loop's plumbing stays (its own
 JavaScript stack, slow paths as plain C calls, no assembler), and offlineasm's
 new M68K back end (`offlineasm/m68k.rb`) emits the C loop's version of the
@@ -68,8 +70,33 @@ Wikipedia's Amiga article loads completely in 40 s (97 s before), BBC and the
 Microsoft sign-in page render as before. The slow opcodes were not the
 emulator after all: they were GCC's code for the C loop, a 384 KB function.
 
-Still to do: keep the hottest registers (PC, PB, t0-t3) in 68k registers
-instead of the register file, and measure on a real 68040.
+PB, PC and metadataTable moved to a3, a2 and a4 in patch 0017. J1 (patch
+0020, 19 October 2026) keeps t0-t3's low words in d4-d7; their high words
+stay in the register file. On the AC090 (lab, jsbench with each test run 10
+times, median of 3): int-loop 520 -> 380 ms, properties 600 -> 440 ms, array
+sort 860 -> 800 ms, calls 540 -> 460 ms, double loop 380 -> 320 ms; the same
+results, and the same semantics checks. Still to do: measure on a real 68040.
+
+## J2: the 68k template JIT (started 20 October 2026)
+
+Upstream JavaScriptCore has no JIT for any CPU with 32-bit pointers
+(`PlatformEnable.h` turns `ENABLE_JIT` off without `CPU(ADDRESS64)`), and its
+JIT keeps whole 64-bit values in single registers. So J2 does not port it: it
+builds a template JIT from our own 68k interpreter. Each bytecode handler is
+made into a template (`offlineasm-py/m68k_templates.py`); a hot CodeBlock is
+compiled by copying one template per instruction and writing the
+instruction's operands into it. The code uses the interpreter's frames,
+registers and register file, so the two hand over at any instruction. Patch
+0024 is the first stage (on by default since patch 0029; `JSC_useM68KTemplateJIT=0` turns it off); the
+tools and a qemu test are in `tools/jsjit/`. A peephole pass over the
+templates (T4) came with it.
+
+Patch 0027 (J3) adds 32-bit integer fast paths: for the commonest integer
+operations the JIT writes its own code, with the template out of line as the
+slow path. Lab counts (68k instructions executed, `tools/jsjit/lab/RESULTS.md`):
+int-loop 10.3x fewer than the interpreter, properties 2.7x, double-loop 2.1x,
+calls 1.8x. Next: function entry (not only loops), property access and calls
+as fast paths, then 32-bit values (`docs/JS_32BIT_VALUES.md`).
 
 The original plan, for reference:
 

@@ -19,7 +19,7 @@ layer, the way MorphOS's and Haiku's browsers did it:
 | Drawing | cairo image surfaces with pixman | Proven on big-endian CPUs; Skia refuses to build for them |
 | Text | FreeType, HarfBuzz and fontconfig | WebCore's Cairo backend uses all three |
 | Fonts | Liberation and DejaVu, in `PROGDIR:Fonts` | Free licences; Liberation has the metrics of Arial, Times and Courier |
-| Network | libcurl with AmiSSL 5 | WebCore's curl backend handles cookies, redirects and TLS |
+| Network | libcurl on OpenTLS (opentls.library), HTTP/2 through nghttp2 | WebCore's curl backend handles cookies and redirects; curl does TLS (AmiSSL 5 until 19 October 2026) |
 | Images | the system's datatypes | Our rule: the formats are the ones the user has datatypes for |
 | JavaScript | JavaScriptCore's C-loop interpreter | No JIT on 68k |
 
@@ -38,8 +38,8 @@ thread; the datatypes decoder does it after each call.
 
 **NDK macros.** The NDK's `exec/types.h` defines `IMPORT`, `STATIC`,
 `GLOBAL` and `REGISTER` as macros, which break WebCore and JavaScriptCore
-names (the parser's `IMPORT` token, for one). AmiSSL's and curl's headers
-include it, so WebCore's prefix header includes it first and removes those
+names (the parser's `IMPORT` token, for one). curl's headers (and AmiSSL's,
+before 19 October 2026) include it, so WebCore's prefix header includes it first and removes those
 macros; `VOID` and `CONST` stay because later NDK headers use them.
 
 **libpthread's macros.** Szilard Biro's `pthread.h` turns `read()`,
@@ -55,11 +55,29 @@ before `unistd.h` keeps them off.
 WebCore's "this struct must stay this size" checks see a smaller struct. They
 accept smaller-or-equal on 68k.
 
-**AmiSSL from C++.** AmiSSL's headers turn every OpenSSL function into an
-inline library call, which C++ such as `::BIO_new()` cannot use. WebCore is
-built with `PROTO_AMISSL_H` defined, so the plain prototypes stay and calls go
-through AmiSSL's stub library. Each task that uses AmiSSL opens it
-(`OpenAmiSSLTags`, or `InitAmiSSL` in a subprocess).
+**TLS without OpenSSL.** Since 19 October 2026 (WebKit patch 0022) curl does
+TLS through OpenTLS (openamigacurl's OpenTLS backend opens opentls.library
+itself) and WebCore links no OpenSSL: `USE(OPENSSL)` is off, curl's
+OpenSSL-only files are left out, and no cipher list, curve list or CA file is
+set (OpenTLS picks its own suites and reads `S:OpenTLS/ca-bundle.pem`).
+Responses carry no certificate details, and WebCrypto offers the SHA digests
+only. Before that the engine called AmiSSL from C++, built with
+`PROTO_AMISSL_H` so calls went through AmiSSL's stub library, and each task
+that used it had to open it.
+
+**HTTP/2.** Since 20 October 2026 (WebKit patch 0023) the engine asks curl
+for HTTP/2 to https:// servers (`CURL_HTTP_VERSION_2TLS`, falling back to
+HTTP/1.1 when the server does not offer h2 in ALPN) and multiplexes requests
+to one server as streams on one connection (`CURLPIPE_MULTIPLEX`), so a page
+costs one TLS handshake per server. curl needs nghttp2 for it: openamigacurl
+pins nghttp2 (1.70.0) and builds it as `libnghttp2.a` beside `libcurl.a`;
+copy both into the deps prefix (`OAB_DEPS/m68k-amigaos/lib`). The programs
+link nghttp2 after curl when `libnghttp2.a` is there, so a curl built before
+openamigacurl had HTTP/2 still links; `build-webcore.sh` stops with a message
+when `libcurl.a` uses nghttp2 and `libnghttp2.a` is missing. The loader hands
+curl six requests per host at once (four before): over HTTP/2 they are
+streams, over HTTP/1.1 the ones beyond curl's two connections per host wait
+in curl.
 
 **Sockets are not file descriptors.** libcurl's configure finds libnix's
 `fcntl()` and `pipe()`; on bsdsocket sockets they fail. curl is built to use
@@ -150,8 +168,9 @@ client that takes too long (Cloudflare accepted 10 seconds and refused 20),
 and curl then reports "Failed sending data to the peer" when it sends the
 request. So the network thread runs one priority above the browser's, the
 key exchange offers X25519 and P-256 only (login.live.com picks P-384 when it
-is offered), curl keeps one connection per host, reused for the next request,
-and four in all, so few handshakes run side by side, and the connect timeout,
+is offered), curl keeps two connections per host (one, before patch 0007),
+reused for the next requests, and four in all, so few handshakes run side by
+side (with HTTP/2, one connection per server is enough), and the connect timeout,
 which includes the handshake, is two minutes.
 
 **UTF-16 in the CPU's byte order.** WebKit keeps 16-bit strings in the
@@ -200,6 +219,20 @@ What is done about it:
   rendering update (style and layout of the whole page) after each piece of a
   page arrives. Until the page has loaded, OpenBrowser lets one through at
   most every second, or every twice as long as the last one took.
+- **The window paints what is laid out, no faster than WebCore renders**
+  (20 October 2026; the gain is still to be measured). Painting no longer
+  lays the page out first: the window paints right after each rendering
+  update, and between them only areas whose layout is not due, while a page
+  loads at most once a second. Changed areas are kept as up to eight
+  rectangles (beyond that, one around them all), each painted and copied by
+  itself. Of the mouse moves waiting, only the last is handled; while a
+  page loads the status line changes at most four times a second, and the
+  gadgets change only when what they show does. After each load the window
+  prints `OBVIEW_BENCH gui_legacy= gui_load_ms= gui_settled_ms= gui_paints=
+  gui_rounds= paint_ms= paint_max_ms= blit_ms= blit_max_ms=` once the page
+  has settled; with the environment variable `OB_PAINT_LEGACY=1` it paints
+  as before (one area around all the changes, laid out first, after every
+  run-loop turn), to compare both in one build.
 - **Cookies stay off the disk until needed.** The cookie database keeps its
   journal in memory and does not sync, instead of writing, syncing and
   deleting a journal file for every cookie.

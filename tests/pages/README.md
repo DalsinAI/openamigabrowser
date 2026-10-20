@@ -17,7 +17,7 @@ for OpenBrowser itself.
 | `forin.html` | `obcore-view forin.html` | `for (k in o)` over a small object, an array and a 1000-key object | `OBVIEW_TITLE forin names=abcd sum=10 array=012 big=1000/499500` (before WebKit patch 0008 the loops never ended, and the program crashed) |
 
 The XML pages (`xml.html`, `xml-xhtml.xhtml`, `xml-svg.svg`) test WebKit
-patch 0018, XML through OXP. Their commands and expected results are in
+patch 0030, XML through OXP. Their commands and expected results are in
 `../xml-oxp/README.md`.
 
 `obcore-view -input` clicks at (30, 35), types `someone@example.com` with
@@ -27,5 +27,8 @@ default), and `-url` loads an address from the network instead of a file.
 `-dl` also paints through WebKit's display list and prints `OBVIEW_DL`
 lines: the drawing commands, their size and how long painting, recording and
 replaying took (see docs/WEBCORE_PORT.md).
+`-text` prints the page's text after the load (`OBVIEW_TEXT`, up to 2000
+bytes). Every run ends with an `OBVIEW_BENCH` line of timings and memory,
+which the benchmark reads (docs/BENCHMARKS.md, tools/bench).
 
 MIT, Copyright (c) 2026 AmigaChrome Team.

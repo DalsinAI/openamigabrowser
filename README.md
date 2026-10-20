@@ -6,7 +6,8 @@ A WebKit-based web browser for AmigaOS 3.2. Needs a 68040 with FPU.
 AmigaOS 3.2.3. It lays out HTML and CSS, runs the page's JavaScript
 (JavaScriptCore) and paints with cairo, FreeType and HarfBuzz into a 32-bit
 bitmap; pictures are decoded by the system's datatypes. The browser window,
-**OpenBrowser** (GadTools), and its network layer (libcurl with AmiSSL 5) are
+**OpenBrowser** (GadTools), and its network layer (libcurl on OpenTLS; AmiSSL 5
+until 19 October 2026) are
 built and being brought up on the test instance. See
 [docs/WEBCORE_PORT.md](docs/WEBCORE_PORT.md).
 
@@ -18,10 +19,15 @@ JavaScriptCore on its own runs in a Shell:
 2
 ```
 
-**OpenBrowser Lite**, the first browser, is a GadTools window that opens
-http:// and https:// pages (bsdsocket.library and AmiSSL 5) and shows them as
-text, with numbered links, Back and Reload. Other programs open pages in it
-through its ARexx port, `AMIGACHROME.BROWSER`:
+**OpenBrowser Lite 0.4.1**, the small browser, is a GadTools window that
+opens http:// and https:// pages (bsdsocket.library and OpenTLS) and lays
+them out: headings, paragraphs, lists, links you click, pictures through
+the system's datatypes and a practical CSS cascade (the page's `<style>`,
+`style=` and up to eight linked stylesheets). No JavaScript, no WebKit: it is
+about 100 KB. Its page engine, weblayout (`src/weblayout`, on OpenLayout), is
+kept behind one header as the bones of a future weblayout.library
+([docs/WEBLAYOUT_LIBRARY.md](docs/WEBLAYOUT_LIBRARY.md)). Other programs open
+pages in it through its ARexx port, `AMIGACHROME.BROWSER`:
 
 ```
 1> rx "address AMIGACHROME.BROWSER 'OPENURL http://info.cern.ch/'"
@@ -34,6 +40,7 @@ See [docs/PHASE_PLAN.md](docs/PHASE_PLAN.md) for what comes next.
 | Folder | What |
 | --- | --- |
 | `src/` | OpenBrowser Lite: the GadTools window (`ob_main.c`) and HTTP fetching (`ob_http.c`) |
+| `src/weblayout/` | weblayout, OpenBrowser Lite's page engine: HTML Lite, CSS Lite, painting, datatype pictures (`weblayout.h` is its whole interface) |
 | `src/webcore/` | OpenBrowser on WebCore: the window (`ob_browser.c`), the page layer (WebCore's clients, `ob_webview.h`), cookies and the network loader, and the test programs `obcore-dump` and `obcore-view` |
 | `third_party/openmail/` | Network, HTML-to-text and stack code shared with OpenMail (MIT, AmigaChrome Team) |
 | `webkit/` | The pinned upstream revision and the AmigaOS/m68k patches for WebKit (JavaScriptCore and WebCore) |
@@ -49,15 +56,29 @@ No binaries are kept here, and no WebKit, ICU or AmigaOS files.
 
 ## Building
 
-OpenBrowser Lite needs bebbo's amiga-gcc (GCC 6.5, NDK 3.2) and the AmiSSL 5
-SDK's headers. It is built for the 68040, soft float (`toolchain/m68k-soft-m68040.specs`),
-so one build runs on a full 68040 and on an LC or EC040:
+OpenBrowser Lite is built with the OpenAmigaGCC 16.2.0-open3 release and
+OpenNDK (DalsinAI/openamigasdk), for the 68040 with its FPU (`-m68040
+-m68881`; not an LC or EC040), with OpenLayout from DalsinAI/openamigalayout.
+Its TLS is OpenTLS: opentls.library's API headers are in `third_party/opentls`,
+and no AmiSSL SDK is needed:
 
 ```
-STOVE=/path/to/amiga-gcc scripts/build-openbrowser.sh /path/to/AmiSSL/Developer/include
+TOOLCHAIN_DIR=.../openamigagcc-16.2.0-open3-x86_64-linux \
+NDK_INCLUDE=.../openamigasdk/OpenNDK/Include_H \
+OPENLAYOUT_SRC=.../openamigalayout scripts/build-openbrowser.sh
+OPENLAYOUT_SRC=.../openamigalayout tests/run-host-tests.sh
 ```
 
-It needs a TCP/IP stack (bsdsocket.library) and, for https://, AmiSSL 5.
+(`STOVE=` an os32-gcc16 stove works in place of the first two; `TESTS=1`
+adds the Amiga test programs; `OPENLAYOUT=library` uses the resident
+openlayout.library 2 instead of building OpenLayout in.) The cloud CI,
+`.github/workflows/lite.yml`, does both on every change.
+
+It needs AmigaOS 3.2, a 68040 with its FPU, a TCP/IP stack
+(bsdsocket.library) and, for https://, OpenTLS (opentls.library with
+opencrypto.library, and the CA list in `S:OpenTLS/ca-bundle.pem`: OpenUp's
+OpenTLS part). Pictures need datatypes for their formats (OpenUp's
+OpenImage adds PNG and WebP).
 
 The JavaScript engine:
 
@@ -73,9 +94,14 @@ The JavaScript engine:
 OpenBrowser on WebCore needs, besides the compiler and ICU above, the
 libraries from the OpenAmiga ports (cairo and pixman, FreeType, HarfBuzz,
 fontconfig, Expat, libxml2, SQLite, curl, libpsl, zlib and libpng; see
-https://github.com/DalsinAI/openamiga) built into one prefix, and the AmiSSL 5
-SDK. Then apply the patches in `webkit/` and run
-`WEBKIT_SOURCE=... OAB_DEPS=... AMISSL_SDK=... scripts/build-webcore.sh`.
+https://github.com/DalsinAI/openamiga) built into one prefix, with curl from
+openamigacurl's main branch, which does TLS through OpenTLS, and with
+nghttp2 (`libnghttp2.a`, pinned and built by openamigacurl) for curl's
+HTTP/2. No AmiSSL SDK is needed (until 19 October 2026 the engine used
+AmiSSL 5). Then apply the patches in `webkit/` and run
+`WEBKIT_SOURCE=... OAB_DEPS=... scripts/build-webcore.sh`.
+For https:// the Amiga needs opentls.library 1.2 or newer and its CA bundle
+in `S:OpenTLS/ca-bundle.pem`.
 The programs are large (about 100 MB each, stripped) and need a 68040 with
 FPU (hard float, `-m68881`) and plenty of Fast RAM.
 
@@ -101,4 +127,4 @@ work is based on.
 
 ## Contributors
 
-OpenBrowser is created and maintained by [SacredTrees](https://github.com/SacredTrees) with the AmigaChrome agent team, copyright AmigaChrome Team. Everyone whose work it includes is credited in [`CONTRIBUTORS.md`](CONTRIBUTORS.md).
+OpenBrowser is created and maintained by [SacredTrees](https://github.com/SacredTrees) with The AmigaChrome Team, copyright AmigaChrome Team. Everyone whose work it includes is credited in [`CONTRIBUTORS.md`](CONTRIBUTORS.md).

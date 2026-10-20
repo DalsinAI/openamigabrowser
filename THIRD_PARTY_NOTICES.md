@@ -9,11 +9,33 @@ their own licences:
 | `icu/patches/` | Changes to ICU 78.3 source files | Unicode License v3 (ICU) |
 | `stove/gcc-patches/` | Changes to GCC 16 (bebbo amiga-gcc, branch amiga16.2) and its newlib headers | GPL-3.0-or-later with the GCC Runtime Library Exception (GCC); newlib's own licence for `sys-include` |
 
+Patch 0019 (`webkit/patches/0019-jsc-generators-in-python.patch`) adds Python
+ports of WebKit's Ruby build scripts so that JavaScriptCore builds without
+Ruby: `Source/JavaScriptCore/offlineasm-py/` (offlineasm's front end, from
+`offlineasm/*.rb`), `Source/JavaScriptCore/generator-py/` (the bytecode
+generator, from `generator/*.rb`) and `Source/WTF/Scripts/GeneratePreferences.py`
+(from `GeneratePreferences.rb`). They are derived works of Apple Inc.'s
+BSD-licensed originals (Copyright (C) 2011-2023 Apple Inc.): each file keeps
+Apple's copyright notice and licence text, with a line for the AmigaChrome
+Team's port, and stays under that BSD licence. The M68K back end
+(`offlineasm-py/offlineasm/m68k.py`, a port of our own `m68k.rb`), the
+BytecodeList reader (`generator-py/RubyListReader.py`) and `Source/cmake/no-ruby.py`
+are ours (MIT, AmigaChrome Team).
+
+Patch 0021 (`webkit/patches/0021-webcore-generators-in-python.patch`) does the
+same for WebCore: `Source/WebCore/domjit/generate-abstract-heap.py`,
+`Source/WebCore/Scripts/GenerateSettings.py` and
+`Source/WebCore/Scripts/GenerateQuirkBehaviors.py`, ports of Apple Inc.'s
+BSD-licensed Ruby scripts (Copyright (C) 2016-2023 Apple Inc.), and the
+Python forms of their templates (`*.pyerb`, from Apple's `*.erb`). They keep
+Apple's notices and licence, with a line for the AmigaChrome Team's port.
+
 `third_party/openmail/` comes from OpenMail (AmigaChrome Team's mail client,
 MIT, same copyright); see its `FROM` and `LICENSE`.
 
 OpenBrowser Lite links, at build time, libnix and libamiga from bebbo's
-amiga-gcc and uses AmiSSL 5 (OpenSSL 3, Apache-2.0) when it runs.
+amiga-gcc and uses OpenTLS (opentls.library) when it runs; until 19 October
+2026 it used AmiSSL 5 (OpenSSL 3, Apache-2.0).
 
 Built programs also link, at build time on your machine (none of it is in this
 repository):

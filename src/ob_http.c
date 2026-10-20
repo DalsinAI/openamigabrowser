@@ -3,13 +3,14 @@
  * OpenBrowser. MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include "ob_http.h"
 #include "oam_net.h"
+#include "weblayout/wl_url.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define USER_AGENT "OpenBrowser/0.1 (AmigaOS 3.2; m68k)"
+#define USER_AGENT "OpenBrowser/0.4.1 (AmigaOS 3.2; m68k)"
 #define MAX_REDIRECTS 5
 #define MAX_BODY (8L * 1024 * 1024)
 
@@ -69,60 +70,7 @@ int ob_url_parse(const char *url, ob_url *out, char *err, size_t errlen)
 
 void ob_url_resolve(const char *base, const char *href, char *out, size_t outlen)
 {
-    ob_url b;
-    char err[8];
-    while (*href == ' ') href++;
-    if (strstr(href, "://") || !strncmp(href, "mailto:", 7) || !ob_url_parse(base, &b, err, sizeof err)) {
-        snprintf(out, outlen, "%s", href);
-        return;
-    }
-    {
-        char origin[300];
-        if ((b.tls && b.port == 443) || (!b.tls && b.port == 80))
-            snprintf(origin, sizeof origin, "%s://%s", b.tls ? "https" : "http", b.host);
-        else
-            snprintf(origin, sizeof origin, "%s://%s:%d", b.tls ? "https" : "http", b.host, b.port);
-        if (href[0] == '/' && href[1] == '/')
-            snprintf(out, outlen, "%s:%s", b.tls ? "https" : "http", href);
-        else if (href[0] == '/')
-            snprintf(out, outlen, "%s%s", origin, href);
-        else if (href[0] == '#' || !href[0])
-            snprintf(out, outlen, "%s%s", origin, b.path);
-        else if (href[0] == '?') {
-            char path[1024];
-            char *q;
-            snprintf(path, sizeof path, "%s", b.path);
-            if ((q = strchr(path, '?'))) *q = 0;
-            snprintf(out, outlen, "%s%s%s", origin, path, href);
-        } else {
-            /* relative to the base's folder, with ./ and ../ folded */
-            char path[1400];
-            char *q, *seg, *w;
-            snprintf(path, sizeof path, "%s", b.path);
-            if ((q = strchr(path, '?'))) *q = 0;
-            if ((q = strrchr(path, '/'))) q[1] = 0;
-            strncat(path, href, sizeof path - strlen(path) - 1);
-            /* fold the segments in place */
-            w = path;
-            seg = path;
-            while (*seg) {
-                if (!strncmp(seg, "./", 2)) { seg += 2; continue; }
-                if (!strncmp(seg, "../", 3)) {
-                    seg += 3;
-                    if (w > path + 1) {
-                        w--;                                    /* back over the '/' */
-                        while (w > path && w[-1] != '/') w--;
-                    }
-                    continue;
-                }
-                while (*seg && *seg != '/' && *seg != '?') *w++ = *seg++;
-                if (*seg == '?') { while (*seg) *w++ = *seg++; break; }
-                if (*seg == '/') *w++ = *seg++;
-            }
-            *w = 0;
-            snprintf(out, outlen, "%s%s", origin, path);
-        }
-    }
+    wl_url_resolve(base, href, out, outlen);
 }
 
 /* Read everything until the server closes, up to MAX_BODY. */
@@ -257,12 +205,19 @@ int ob_http_get(const char *url, ob_response *resp, char *err, size_t errlen)
     for (hops = 0; hops <= MAX_REDIRECTS; hops++) {
         ob_url u;
         char *location = NULL;
+        int n;
         if (!ob_url_parse(current, &u, err, errlen)) return 0;
-        snprintf(resp->final_url, sizeof resp->final_url, "%s%s%s%s",
-                 u.tls ? "https://" : "http://", u.host, "", u.path);
         if ((u.tls && u.port != 443) || (!u.tls && u.port != 80))
-            snprintf(resp->final_url, sizeof resp->final_url, "%s%s:%d%s",
-                     u.tls ? "https://" : "http://", u.host, u.port, u.path);
+            n = snprintf(resp->final_url, sizeof resp->final_url, "%s%s:%d%s",
+                         u.tls ? "https://" : "http://", u.host, u.port, u.path);
+        else
+            n = snprintf(resp->final_url, sizeof resp->final_url, "%s%s%s",
+                         u.tls ? "https://" : "http://", u.host, u.path);
+        if (n < 0 || n >= (int)sizeof resp->final_url) {
+            /* refused, not cut: a cut address is another address */
+            set_err(err, errlen, "The address is too long.");
+            return 0;
+        }
         resp->status = 0;
         resp->content_type[0] = resp->charset[0] = 0;
         if (!fetch_once(&u, resp, &location, err, errlen)) return 0;
