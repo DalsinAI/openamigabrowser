@@ -253,7 +253,7 @@ bool WebView::paint(unsigned char* argb, int stride, const IntRect& rect, bool l
     if (area.isEmpty())
         return true;
     resetFPCR();
-    if (view && layOut)
+    if (view && (layOut || m_layOutForPaint))
         view->updateLayoutAndStyleIfNeededRecursive();
     else if (view && view->needsLayout()) {
         // WebCore paints nothing where layout is due; the rendering update
@@ -371,15 +371,23 @@ IntRect WebView::takeDirtyRect()
 // Layout is the rendering update's (renderingUpdateTimerFired()), which is
 // spaced out while a page loads; until it has run the areas wait, and while
 // loading they are given out once per rendering update, or after a second
-// when only pictures arrived. Once loaded, at once.
+// when only pictures arrived. Once loaded, at once. Should rendering updates
+// leave the layout due (two have run while the areas waited), the areas are
+// given out to be painted laid out first, as before, rather than wait for ever.
 unsigned WebView::takeDirtyRects(IntRect* rects, unsigned max)
 {
+    m_layOutForPaint = false;
     if (m_dirtyRects.isEmpty() || !max)
         return 0;
     if (RefPtr view = mainFrameView(); view && view->needsLayout()) {
-        if (!m_renderingUpdateTimer.isActive())
-            scheduleRenderingUpdate();
-        return 0;
+        if (!m_layoutHeldSince)
+            m_layoutHeldSince = m_renderingUpdates;
+        if (m_renderingUpdates - *m_layoutHeldSince < 2) {
+            if (!m_renderingUpdateTimer.isActive())
+                scheduleRenderingUpdate();
+            return 0;
+        }
+        m_layOutForPaint = true;
     }
     if (m_loading) {
         auto now = MonotonicTime::now();
@@ -387,6 +395,7 @@ unsigned WebView::takeDirtyRects(IntRect* rects, unsigned max)
             return 0;
         m_nextLoadingPaint = now + 1_s;
     }
+    m_layoutHeldSince = std::nullopt;
     m_paintedRenderingUpdate = m_renderingUpdates;
     unsigned count = 0;
     if (m_dirtyRects.size() > max)

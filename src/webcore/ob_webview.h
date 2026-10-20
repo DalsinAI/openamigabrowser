@@ -103,9 +103,10 @@ void ob_webview_report_display_list(OBWebView *view, unsigned char *direct, unsi
 /* The area changed since the last call (width 0 when none). */
 void ob_webview_dirty(OBWebView *view, int *x, int *y, int *width, int *height);
 /* The areas changed, up to max of them (x, y, width, height each in rects),
- * once they are laid out: none while the page's layout is still due, and
- * while a page loads at most once per rendering update or second. Returns
- * how many. Paint them with ob_webview_paint_laid_out(). */
+ * once they are laid out: none while the page's layout is still due (for
+ * at most two rendering updates; after that they come to be painted laid out
+ * first), and while a page loads at most once per rendering update or
+ * second. Returns how many. Paint them with ob_webview_paint_laid_out(). */
 int ob_webview_dirty_rects(OBWebView *view, int *rects, int max);
 /* As ob_webview_paint(), without laying the page out first: where layout is
  * still due it paints nothing, keeps the area changed and returns 0. */
