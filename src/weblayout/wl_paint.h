@@ -4,6 +4,7 @@
 #include <exec/types.h>
 #include <graphics/rastport.h>
 #include <graphics/text.h>
+#include "wl_mem.h"
 #include "wl_openlayout.h"
 
 typedef int (*wl_image_draw_fn)(void *userdata, LONG image_id,
@@ -22,6 +23,7 @@ typedef struct {
     UWORD fill_pen;
     wl_image_draw_fn image_draw;
     void *image_userdata;
+    wl_pool *pool;                  /* the document's, for the text it converts */
 } wl_view;
 
 void wl_view_init(wl_view *view, struct RastPort *rp,

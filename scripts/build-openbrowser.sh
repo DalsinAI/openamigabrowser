@@ -18,6 +18,9 @@
 #   OPENLAYOUT_SRC  an openamigalayout checkout (default ../openamigalayout)
 #   OPENLAYOUT      static (default: OpenLayout built in) or library (the
 #                   resident openlayout.library 2, from LIBS:)
+#   WEBLAYOUT       linked (default: the engine built into the program) or
+#                   library (the program opens LIBS:weblayout.library 1; build
+#                   that with scripts/build-weblayout-library.sh)
 #   TESTS           1: the Amiga test programs as well (OUT_DIR/tests)
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -46,19 +49,31 @@ case "${OPENLAYOUT:-static}" in
     library) LAYOUT=""; LDEF="-DWL_USE_OPENLAYOUT_LIBRARY=1" ;;
     *) echo "build-openbrowser.sh: OPENLAYOUT is static or library" >&2; exit 2 ;;
 esac
+# the engine's allocator and its own C library calls
+RT="$WL/wl_mem.c $WL/wl_libc.c"
 mkdir -p "$OUT"
 
 # OpenBrowserLite: the window (src/ob_main.c), HTTP (src/ob_http.c), weblayout,
 # OpenLayout and OpenMail's network layer
-"$CC" $CFLAGS $LDEF $INC \
-    "$HERE"/src/ob_main.c "$HERE"/src/ob_http.c "$WL"/*.c $LAYOUT "$OM"/*.c \
-    -lamiga -o "$OUT/OpenBrowserLite"
+case "${WEBLAYOUT:-linked}" in
+    linked)
+        "$CC" $CFLAGS $LDEF $INC \
+            "$HERE"/src/ob_main.c "$HERE"/src/ob_http.c "$WL"/*.c $LAYOUT "$OM"/*.c \
+            -lamiga -o "$OUT/OpenBrowserLite" ;;
+    library)
+        # weblayout and OpenLayout are in LIBS:; the program keeps only the
+        # address resolver its HTTP layer follows redirects with
+        "$CC" $CFLAGS -DOB_WEBLAYOUT_LIBRARY $INC -I"$WL/library/sdk/Include_H" \
+            "$HERE"/src/ob_main.c "$HERE"/src/ob_http.c "$WL/wl_url.c" $RT "$OM"/*.c \
+            -lamiga -o "$OUT/OpenBrowserLite" ;;
+    *) echo "build-openbrowser.sh: WEBLAYOUT is linked or library" >&2; exit 2 ;;
+esac
 echo "$OUT/OpenBrowserLite ($(wc -c < "$OUT/OpenBrowserLite") bytes)"
 
 # obfetch: the same HTTP/HTTPS engine from a Shell, without the window or
 # the layout, so network faults can be told from layout faults
 "$CC" $CFLAGS $INC \
-    "$HERE/src/ob_http.c" "$WL/wl_url.c" "$OM"/*.c "$HERE/tools/obfetch.c" \
+    "$HERE/src/ob_http.c" "$WL/wl_url.c" $RT "$OM"/*.c "$HERE/tools/obfetch.c" \
     -o "$OUT/obfetch"
 echo "$OUT/obfetch ($(wc -c < "$OUT/obfetch") bytes)"
 
@@ -66,15 +81,15 @@ if [ "${TESTS:-0}" = 1 ]; then
     T="$OUT/tests"
     mkdir -p "$T"
     # HTML Lite and CSS Lite on the Amiga (the same tests as tests/run-host-tests.sh)
-    "$CC" $CFLAGS $INC "$WL/wl_html.c" "$WL/wl_css.c" "$OL/src/openlayout.c" \
+    "$CC" $CFLAGS $INC "$WL/wl_html.c" "$WL/wl_css.c" $RT "$OL/src/openlayout.c" \
         "$HERE/tests/test_wl_html.c" -o "$T/HTMLLiteTest"
-    "$CC" $CFLAGS $INC "$WL/wl_css.c" "$OL/src/openlayout.c" \
+    "$CC" $CFLAGS $INC "$WL/wl_css.c" $RT "$OL/src/openlayout.c" \
         "$HERE/tests/test_wl_css.c" -o "$T/CSSLiteTest"
     # a picture through picture.datatype: DTImageTest <picture>
     "$CC" $CFLAGS $INC "$WL/wl_image_dt.c" "$HERE/tests/test_wl_image_dt.c" \
         -lamiga -o "$T/DTImageTest"
     # a picture over HTTPS, then through picture.datatype: ImageFetchTest [address]
-    "$CC" $CFLAGS $INC "$HERE/src/ob_http.c" "$WL/wl_url.c" "$WL/wl_image_dt.c" "$OM"/*.c \
+    "$CC" $CFLAGS $INC "$HERE/src/ob_http.c" "$WL/wl_url.c" $RT "$WL/wl_image_dt.c" "$OM"/*.c \
         "$HERE/tests/test_image_fetch.c" -lamiga -o "$T/ImageFetchTest"
     for f in "$T"/*; do echo "$f ($(wc -c < "$f") bytes)"; done
 fi

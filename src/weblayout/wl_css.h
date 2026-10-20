@@ -2,6 +2,7 @@
 #define WL_CSS_H
 
 #include <stddef.h>
+#include "wl_mem.h"
 #include "wl_openlayout.h"
 
 typedef struct wl_css_rule wl_css_rule;
@@ -11,8 +12,11 @@ typedef struct {
     size_t count;
     size_t capacity;
     unsigned order;
+    wl_pool *pool;      /* where its rules come from; NULL is allowed */
 } wl_css_sheet;
 
+/* An empty sheet, its memory from no pool; set sheet->pool after this to
+ * use one. */
 void wl_css_init(wl_css_sheet *sheet);
 void wl_css_free(wl_css_sheet *sheet);
 int wl_css_add(wl_css_sheet *sheet, const char *css, size_t length);

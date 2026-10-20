@@ -1,0 +1,27 @@
+==id $Id: weblayout_lib.sfd 1.0 (20.10.2026) $
+* "weblayout.library": a web page laid out and drawn into a RastPort.
+* Copyright (c) 2026 AmigaChrome Team. MIT licence (see LICENSE).
+* The calls are weblayout.h's, in this order; new calls go at the end.
+==base _WebLayoutBase
+==basetype struct Library *
+==libname weblayout.library
+==bias 30
+==public
+==include <exec/types.h>
+==include <weblayout.h>
+==version 1
+WLDocument *WL_NewDocument(CONST_STRPTR data, ULONG length, ULONG kind, CONST_STRPTR base_url) (a0,d0,d1,a1)
+VOID WL_DisposeDocument(WLDocument *doc) (a0)
+CONST_STRPTR WL_GetTitle(const WLDocument *doc) (a0)
+BOOL WL_AddStyleSheet(WLDocument *doc, CONST_STRPTR css, ULONG length) (a0,a1,d0)
+ULONG WL_CountResources(const WLDocument *doc, ULONG kind) (a0,d0)
+BOOL WL_GetResource(const WLDocument *doc, ULONG kind, ULONG index, struct WLResource *res) (a0,d0,d1,a1)
+BOOL WL_Layout(WLDocument *doc, const struct WLView *view) (a0,a1)
+LONG WL_ContentHeight(const WLDocument *doc) (a0)
+BOOL WL_SetImageFile(WLDocument *doc, LONG id, CONST_STRPTR path, struct Screen *screen) (a0,d0,a1,a2)
+VOID WL_Draw(const WLDocument *doc, const struct WLView *view) (a0,a1)
+CONST_STRPTR WL_HitLink(WLDocument *doc, const struct WLView *view, WORD x, WORD y) (a0,a1,d0,d1)
+BOOL WL_ResolveURL(CONST_STRPTR base, CONST_STRPTR href, STRPTR out, ULONG outlen) (a0,a1,a2,d0)
+BOOL WL_Open() ()
+VOID WL_Close() ()
+==end
