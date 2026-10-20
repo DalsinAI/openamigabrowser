@@ -1,0 +1,821 @@
+From 2848f03f94b8605cdbebfe4de28e759103f7a76b Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 19:58:05 +0000
+Subject: [PATCH] JavaScriptCore: whole functions, property access and doubles
+ in the 68k template JIT (J4)
+
+- Whole functions: op_enter runs a CodeBlock's code from its next
+  instruction when it has some, and counts calls towards compiling it; the
+  replace slow path (reached from calls and returns) compiles it instead of
+  giving up on the CodeBlock. Before, only loops reached the JIT, and a
+  function that returned often stopped its own loops from being compiled.
+- Property access: get_by_id and put_by_id get their own code for sites
+  whose interpreter cache holds an own property (a replace, for puts). The
+  code reads the cache as it runs, so the garbage collector clearing it or
+  the slow path changing it stays safe; storing a cell takes the slow path
+  unless the object needs no write barrier.
+- Doubles: add, sub, mul and the compare-and-jumps work on the FPU when an
+  operand is not an int32 or an int32 result overflows, out of line, before
+  the slow path; a double constant operand gets the FPU code inline.
+  fdadd/fdsub/fdmul round once to double, as JavaScript asks; the
+  interpreter's double arithmetic now uses the same instructions
+  (fdadd/fdsub/fdmul/fddiv/fdsqrt), so both give the same results. 68040
+  and up.
+
+useM68KPropertyFastPaths (default true) turns the property code off.
+---
+ .../JavaScriptCore/llint/LLIntSlowPaths.cpp   |   5 +
+ .../llint/LowLevelInterpreter64.asm           |  16 +
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 454 ++++++++++++++++--
+ Source/JavaScriptCore/llint/M68KTemplateJIT.h |   7 +-
+ .../offlineasm-py/offlineasm/m68k.py          |  12 +-
+ Source/JavaScriptCore/offlineasm/m68k.rb      |   8 +-
+ Source/JavaScriptCore/runtime/OptionsList.h   |   3 +-
+ 7 files changed, 452 insertions(+), 53 deletions(-)
+
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+index feef09ae4e7..9333b282198 100644
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+@@ -544,6 +544,11 @@ LLINT_SLOW_PATH_DECL(replace)
+         codeBlock->dontJITAnytimeSoon();
+     LLINT_END_IMPL();
+ #else // ENABLE(JIT)
++#if CPU(M68K) && ENABLE(C_LOOP)
++    // The 68k template JIT: a function called (or returning) often gets its
++    // code now; op_enter runs it from the next call on.
++    M68KTemplateJIT::compileIfNeeded(codeBlock);
++#endif
+     codeBlock->dontJITAnytimeSoon();
+     LLINT_END_IMPL();
+ #endif // ENABLE(JIT)
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+index 059ff5bacb5..c186873a669 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+@@ -868,6 +868,22 @@ _llint_op_enter:
+ 
+ .opEnterDispatch:
+     checkTraps(macro()
++        if M68K
++            # The 68k template JIT (llint/M68KTemplateJIT.cpp): run this
++            # CodeBlock's code from the instruction after op_enter if it has
++            # any, else count towards compiling it.
++            loadp CodeBlock + LowWordOffset[cfr], t1
++            loadp CodeBlock::m_m68kTemplateMap[t1], t0
++            btpz t0, .opEnterNotCompiled
++            loadp PtrSize[t0], t0
++            jmp t0
++        .opEnterNotCompiled:
++            checkSwitchToJIT(
++                5,
++                macro ()
++                    callSlowPath(_llint_replace)
++                end)
++        end
+         dispatchOp(narrow, op_enter)
+     end)
+ 
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index bfda2d5b99b..a0551a8fdfa 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -26,10 +26,13 @@
+ #if CPU(M68K) && ENABLE(C_LOOP)
+ 
+ #include "BytecodeStructs.h"
++#include "CellState.h"
+ #include "CodeBlock.h"
++#include "GetByIdMetadata.h"
+ #include "JSCJSValueInlines.h"
+ #include "M68KTemplateStitch.h"
+ #include "Options.h"
++#include "PureNaN.h"
+ #include <wtf/DataLog.h>
+ #include <wtf/FastMalloc.h>
+ 
+@@ -184,7 +187,84 @@ public:
+     void addq1(unsigned dn) { word(0x5280 | dn); }
+     void subq1(unsigned dn) { word(0x5380 | dn); }
+ 
+-    enum Condition { Always = 0, NotEqual = 6, Equal = 7, OverflowSet = 9, GreaterEqual = 12, Less = 13, Greater = 14, LessEqual = 15 };
++    // Property access (stage J4): a0 holds the object, a1 the metadata.
++    void tstFrame(int disp) { word(0x4aad); word(disp); } // tst.l d16(a5)
++    void btst1(unsigned dn) { word(0x0800 | dn); word(1); } // btst #1,dn
++    void moveaFromData(unsigned dn, unsigned an) { word(0x2040 | (an << 9) | dn); } // movea.l dn,an
++    void moveaImm(uint32_t imm, unsigned an) { word(0x207c | (an << 9)); longWord(imm); } // movea.l #imm,an
++    void moveaDisp(unsigned an, int disp, unsigned to) { word(0x2068 | (to << 9) | an); word(disp); } // movea.l d16(an),to
++    void loadDisp(unsigned an, int disp, unsigned dn) { word(0x2028 | (dn << 9) | an); word(disp); } // move.l d16(an),dn
++    void cmpDisp(unsigned an, int disp, unsigned dn) { word(0xb0a8 | (dn << 9) | an); word(disp); } // cmp.l d16(an),dn
++    void cmpByteImmDisp(uint8_t imm, unsigned an, int disp) { word(0x0c28 | an); word(imm); word(disp); } // cmpi.b #imm,d16(an)
++    void tstLongDisp(unsigned an, int disp) { word(0x4aa8 | an); word(disp); } // tst.l d16(an)
++    void tstByteDisp(unsigned an, int disp) { word(0x4a28 | an); word(disp); } // tst.b d16(an)
++    void lsl3(unsigned dn) { word(0xe788 | dn); } // lsl.l #3,dn
++    void neg(unsigned dn) { word(0x4480 | dn); } // neg.l dn
++    void tst(unsigned dn) { word(0x4a80 | dn); } // tst.l dn
++    // An index byte for d8(an,dn.l).
++    static uint16_t index(unsigned dn, int d8)
++    {
++        ASSERT(d8 >= -128 && d8 <= 127);
++        return (dn << 12) | 0x0800 | (d8 & 0xff);
++    }
++    void copyIndexedToFrame(unsigned an, unsigned dn, int d8, int disp) { word(0x2b70 | an); word(index(dn, d8)); word(disp); } // move.l d8(an,dn.l),d16(a5)
++    void copyFrameToIndexed(int disp, unsigned an, unsigned dn, int d8) { word(0x21ad | (an << 9)); word(disp); word(index(dn, d8)); } // move.l d16(a5),d8(an,dn.l)
++    void storeImmIndexed(uint32_t imm, unsigned an, unsigned dn, int d8) { word(0x21bc | (an << 9)); longWord(imm); word(index(dn, d8)); } // move.l #imm,d8(an,dn.l)
++
++    // Doubles (stage J4), on the 68040's FPU. fp0 and fp1 are scratch, as in
++    // the interpreter's handlers; C keeps fp2-fp7.
++    void pushFrame(int disp) { word(0x2f2d); word(disp); } // move.l d16(a5),-(sp)
++    void push(unsigned dn) { word(0x2f00 | dn); } // move.l dn,-(sp)
++    void popToFrame(int disp) { word(0x2b5f); word(disp); } // move.l (sp)+,d16(a5)
++    void pop(unsigned dn) { word(0x201f | (dn << 9)); } // move.l (sp)+,dn
++    void fmoveLongFrame(int disp, unsigned fpn) { word(0xf22d); word(0x4000 | (fpn << 7)); word(disp); } // fmove.l d16(a5),fpn
++    void fmoveLongImm(uint32_t imm, unsigned fpn) { word(0xf23c); word(0x4000 | (fpn << 7)); longWord(imm); } // fmove.l #imm,fpn
++    void fmoveDoubleImm(uint64_t bits, unsigned fpn) { word(0xf23c); word(0x5400 | (fpn << 7)); longWord(bits >> 32); longWord(static_cast<uint32_t>(bits)); } // fmove.d #imm,fpn
++    void fmoveDoublePop(unsigned fpn) { word(0xf21f); word(0x5400 | (fpn << 7)); } // fmove.d (sp)+,fpn
++    void fmoveDoublePush(unsigned fpn) { word(0xf227); word(0x7400 | (fpn << 7)); } // fmove.d fpn,-(sp)
++    // fdadd, fdsub, fdmul (68040): one rounding, to double, as JavaScript asks.
++    enum FPOperation { FPAdd = 0x66, FPSub = 0x6c, FPMul = 0x67, FPCompare = 0x38, FPTest = 0x3a };
++    void fop(FPOperation op, unsigned src, unsigned dst) { word(0xf200); word((src << 10) | (dst << 7) | op); }
++
++    enum Condition { Always = 0, Higher = 2, LowerSame = 3, CarrySet = 5, NotEqual = 6, Equal = 7, OverflowSet = 9, GreaterEqual = 12, Less = 13, Greater = 14, LessEqual = 15 };
++    // b<cc>.b within a fast path: branchShort, then bindShort at the target.
++    size_t branchShort(Condition cc)
++    {
++        word(0x6000 | (cc << 8));
++        return size() - 2;
++    }
++    void bindShort(size_t at)
++    {
++        int disp = static_cast<int>(size()) - static_cast<int>(at + 2);
++        RELEASE_ASSERT(disp > 0 && disp < 128);
++        bytes[at + 1] = disp;
++    }
++    // FPU conditions, the non-signalling ones: "ordered" ones are false for
++    // NaN, "unordered" ones true.
++    enum FPCondition { FPOrdered = 0x07, FPOrderedGreater = 0x02, FPOrderedGreaterEqual = 0x03, FPOrderedLess = 0x04, FPOrderedLessEqual = 0x05,
++        FPUnorderedGreater = 0x0a, FPUnorderedGreaterEqual = 0x0b, FPUnorderedLess = 0x0c, FPUnorderedLessEqual = 0x0d };
++    size_t fbranchShort(FPCondition cc)
++    {
++        word(0xf280 | cc);
++        word(0);
++        return size() - 4;
++    }
++    void bindFShort(size_t at)
++    {
++        int disp = static_cast<int>(size()) - static_cast<int>(at + 2);
++        bytes[at + 2] = (disp >> 8) & 0xff;
++        bytes[at + 3] = disp & 0xff;
++    }
++    // fb<cc>.l to a bytecode's hot code.
++    void fbranchToBytecode(FPCondition cc, unsigned offset)
++    {
++        size_t from = size() + 2;
++        word(0xf2c0 | cc);
++        size_t at = size();
++        longWord(0);
++        fixups.append({ at, from, true, 0, offset, true });
++    }
++
+     // b<cc>.l (68020+): a 32-bit displacement from the opcode word + 2.
+     size_t branch(Condition cc)
+     {
+@@ -217,20 +297,26 @@ struct Operand {
+     bool valid { false };
+     bool isConstant { false };
+     int32_t constant { 0 };
++    bool isDoubleConstant { false }; // only where the caller allows doubles
++    double doubleConstant { 0 };
+     int hi { 0 }; // displacements from cfr (a5); the high word is first
+     int lo { 0 };
+ };
+ 
+-Operand operandFor(CodeBlock* codeBlock, VirtualRegister reg)
++Operand operandFor(CodeBlock* codeBlock, VirtualRegister reg, bool allowDouble = false)
+ {
+     Operand op;
+     if (reg.isConstant()) {
+         JSValue value = codeBlock->getConstant(reg);
+-        if (!value.isInt32())
+-            return op;
+-        op.valid = true;
+-        op.isConstant = true;
+-        op.constant = value.asInt32();
++        if (value.isInt32()) {
++            op.valid = true;
++            op.isConstant = true;
++            op.constant = value.asInt32();
++        } else if (allowDouble && value.isDouble()) {
++            op.valid = true;
++            op.isDoubleConstant = true;
++            op.doubleConstant = value.asDouble();
++        }
+         return op;
+     }
+     int disp = reg.offset() * static_cast<int>(sizeof(Register));
+@@ -242,6 +328,19 @@ Operand operandFor(CodeBlock* codeBlock, VirtualRegister reg)
+     return op;
+ }
+ 
++// Where a fast path's int32 code gives up on a number that is not an int32
++// (a double, or an int32 result that overflowed): code that does the
++// operation on the FPU, out of line, before the slow path.
++struct FloatPath {
++    bool needed { false };
++    OpcodeID opcode { op_add };
++    Operand dst;
++    Operand lhs;
++    Operand rhs;
++    unsigned target { 0 }; // a compare's jump target, as a bytecode offset
++    Vector<size_t> branches; // to the float code
++};
++
+ class FastPaths {
+ public:
+     FastPaths(CodeBlock* codeBlock, Builder& hot)
+@@ -251,29 +350,57 @@ public:
+     }
+ 
+     // Writes fast code for the instruction, or returns false (nothing written)
+-    // when there is none. slowBranches collects the branches to its slow path.
+-    bool emit(const JSInstruction* instruction, unsigned offset, Vector<size_t>& slowBranches)
++    // when there is none. slowBranches collects the branches to its slow path;
++    // floatPath says whether it needs float code, and the branches to it.
++    bool emit(const JSInstruction* instruction, unsigned offset, Vector<size_t>& slowBranches, FloatPath& floatPath)
+     {
+         size_t start = m_hot.size();
+         size_t fixups = m_hot.fixups.size();
+         m_slow = &slowBranches;
++        m_float = &floatPath;
++        m_bail = m_slow;
+         bool ok = emitImpl(instruction, offset);
+         if (!ok) {
+             m_hot.bytes.shrink(start);
+             m_hot.fixups.shrink(fixups);
+             slowBranches.clear();
++            floatPath = FloatPath();
+         }
+         return ok;
+     }
+ 
++    // The float code for floatPath, then back to the next instruction's hot
++    // code. Numbers it cannot take branch to slowBranches.
++    void emitFloatPath(const FloatPath& floatPath, unsigned nextOffset, Vector<size_t>& slowBranches)
++    {
++        m_slow = &slowBranches;
++        if (isCompare(floatPath.opcode))
++            floatCompare(floatPath.opcode, floatPath.lhs, floatPath.rhs, floatPath.target);
++        else
++            floatArith(floatPath.opcode, floatPath.dst, floatPath.lhs, floatPath.rhs);
++        m_hot.jumpToBytecode(nextOffset);
++    }
++
+ private:
+     void slowUnless(Builder::Condition cc) { m_slow->append(m_hot.branch(cc)); }
++    // Leaves the int32 code: for the float path when there is one.
++    void bailUnless(Builder::Condition cc) { m_bail->append(m_hot.branch(cc)); }
++    void useFloatPath(OpcodeID opcode, const Operand& dst, const Operand& lhs, const Operand& rhs, unsigned target = 0)
++    {
++        m_float->needed = true;
++        m_float->opcode = opcode;
++        m_float->dst = dst;
++        m_float->lhs = lhs;
++        m_float->rhs = rhs;
++        m_float->target = target;
++        m_bail = &m_float->branches;
++    }
+     void checkInt32(const Operand& op)
+     {
+         if (op.isConstant)
+             return;
+         m_hot.cmpFrameImm(int32Tag, op.hi);
+-        slowUnless(Builder::NotEqual);
++        bailUnless(Builder::NotEqual);
+     }
+     void load(const Operand& op, unsigned dn)
+     {
+@@ -288,17 +415,105 @@ private:
+         if (!tagAlreadyInt32)
+             m_hot.storeFrameImm(int32Tag, dst.hi);
+     }
+-    static bool same(const Operand& a, const Operand& b) { return !a.isConstant && !b.isConstant && a.hi == b.hi; }
++    static bool same(const Operand& a, const Operand& b) { return !a.isConstant && !a.isDoubleConstant && !b.isConstant && !b.isDoubleConstant && a.hi == b.hi; }
++    static bool isConstant(const Operand& op) { return op.isConstant || op.isDoubleConstant; }
++
++    // A number into fpn: an int32 converts, a double unboxes (its high word
++    // less JSValue::DoubleEncodeOffset's). Anything else takes the slow path.
++    static constexpr uint32_t doubleEncodeOffsetHigh = static_cast<uint32_t>(JSValue::DoubleEncodeOffset >> 32);
++    void loadFloat(const Operand& op, unsigned fpn)
++    {
++        if (op.isConstant) {
++            m_hot.fmoveLongImm(op.constant, fpn);
++            return;
++        }
++        if (op.isDoubleConstant) {
++            m_hot.fmoveDoubleImm(std::bit_cast<uint64_t>(op.doubleConstant), fpn);
++            return;
++        }
++        m_hot.cmpFrameImm(int32Tag, op.hi);
++        size_t notInt32 = m_hot.branchShort(Builder::NotEqual);
++        m_hot.fmoveLongFrame(op.lo, fpn);
++        size_t done = m_hot.branchShort(Builder::Always);
++        m_hot.bindShort(notInt32);
++        m_hot.loadFrame(op.hi, 0);
++        m_hot.cmpImm(doubleEncodeOffsetHigh, 0);
++        slowUnless(Builder::CarrySet); // below every encoded double: a cell or other
++        m_hot.subImm(doubleEncodeOffsetHigh, 0);
++        m_hot.pushFrame(op.lo);
++        m_hot.push(0);
++        m_hot.fmoveDoublePop(fpn);
++        m_hot.bindShort(done);
++    }
++    // fpn into dst as a double JSValue, NaN made pure as JSValue asks.
++    void boxDouble(unsigned fpn, const Operand& dst)
++    {
++        m_hot.fop(Builder::FPTest, fpn, 0);
++        size_t ordered = m_hot.fbranchShort(Builder::FPOrdered);
++        m_hot.fmoveDoubleImm(std::bit_cast<uint64_t>(PNaN), fpn);
++        m_hot.bindFShort(ordered);
++        m_hot.fmoveDoublePush(fpn);
++        m_hot.pop(0);
++        m_hot.addImm(doubleEncodeOffsetHigh, 0);
++        m_hot.storeFrame(0, dst.hi);
++        m_hot.popToFrame(dst.lo);
++    }
++    void floatArith(OpcodeID opcode, const Operand& dst, const Operand& lhs, const Operand& rhs)
++    {
++        Builder::FPOperation operation = opcode == op_add ? Builder::FPAdd : opcode == op_sub ? Builder::FPSub : Builder::FPMul;
++        loadFloat(lhs, 0);
++        loadFloat(rhs, 1);
++        m_hot.fop(operation, 1, 0);
++        boxDouble(0, dst);
++    }
++    static bool isCompare(OpcodeID opcode)
++    {
++        switch (opcode) {
++        case op_jless: case op_jlesseq: case op_jgreater: case op_jgreatereq:
++        case op_jnless: case op_jnlesseq: case op_jngreater: case op_jngreatereq:
++            return true;
++        default:
++            return false;
++        }
++    }
++    static Builder::FPCondition floatCondition(OpcodeID opcode)
++    {
++        switch (opcode) {
++        case op_jless: return Builder::FPOrderedLess;
++        case op_jlesseq: return Builder::FPOrderedLessEqual;
++        case op_jgreater: return Builder::FPOrderedGreater;
++        case op_jgreatereq: return Builder::FPOrderedGreaterEqual;
++        // "not less" is true for NaN.
++        case op_jnless: return Builder::FPUnorderedGreaterEqual;
++        case op_jnlesseq: return Builder::FPUnorderedGreater;
++        case op_jngreater: return Builder::FPUnorderedLessEqual;
++        default: return Builder::FPUnorderedLess;
++        }
++    }
++    void floatCompare(OpcodeID opcode, const Operand& lhs, const Operand& rhs, unsigned target)
++    {
++        loadFloat(lhs, 0);
++        loadFloat(rhs, 1);
++        m_hot.fop(Builder::FPCompare, 1, 0); // fp0 - fp1
++        m_hot.fbranchToBytecode(floatCondition(opcode), target);
++    }
+ 
+     template<typename Op>
+-    bool binary(const JSInstruction* instruction, void (Builder::*withFrame)(int, unsigned), void (Builder::*withImm)(uint32_t, unsigned), bool checkOverflow)
++    bool binary(const JSInstruction* instruction, void (Builder::*withFrame)(int, unsigned), void (Builder::*withImm)(uint32_t, unsigned), bool checkOverflow, bool hasFloatPath)
+     {
+         auto bytecode = instruction->as<Op>();
+         Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
+-        Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs);
+-        Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs);
+-        if (!dst.valid || dst.isConstant || !lhs.valid || !rhs.valid || (lhs.isConstant && rhs.isConstant))
++        Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs, hasFloatPath);
++        Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs, hasFloatPath);
++        if (!dst.valid || dst.isConstant || !lhs.valid || !rhs.valid || (isConstant(lhs) && isConstant(rhs)))
+             return false;
++        if (lhs.isDoubleConstant || rhs.isDoubleConstant) {
++            // A double constant: only the float code makes sense.
++            floatArith(instruction->opcodeID(), dst, lhs, rhs);
++            return true;
++        }
++        if (hasFloatPath)
++            useFloatPath(instruction->opcodeID(), dst, lhs, rhs);
+         checkInt32(lhs);
+         checkInt32(rhs);
+         load(lhs, 0);
+@@ -307,7 +522,7 @@ private:
+         else
+             (m_hot.*withFrame)(rhs.lo, 0);
+         if (checkOverflow)
+-            slowUnless(Builder::OverflowSet);
++            bailUnless(Builder::OverflowSet);
+         storeInt32(0, dst, same(dst, lhs) || same(dst, rhs));
+         return true;
+     }
+@@ -316,13 +531,18 @@ private:
+     bool compareAndJump(const JSInstruction* instruction, unsigned offset, Builder::Condition cc)
+     {
+         auto bytecode = instruction->as<Op>();
+-        Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs);
+-        Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs);
+-        if (!lhs.valid || !rhs.valid || (lhs.isConstant && rhs.isConstant))
++        Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs, true);
++        Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs, true);
++        if (!lhs.valid || !rhs.valid || (isConstant(lhs) && isConstant(rhs)))
+             return false;
+         int target = bytecode.m_targetLabel;
+         if (!target)
+             target = m_codeBlock->outOfLineJumpOffset(instruction);
++        if (lhs.isDoubleConstant || rhs.isDoubleConstant) {
++            floatCompare(instruction->opcodeID(), lhs, rhs, offset + target);
++            return true;
++        }
++        useFloatPath(instruction->opcodeID(), { }, lhs, rhs, offset + target);
+         checkInt32(lhs);
+         checkInt32(rhs);
+         load(lhs, 0);
+@@ -334,6 +554,133 @@ private:
+         return true;
+     }
+ 
++    // Property access (stage J4), for the shape the interpreter's inline
++    // cache already holds: the object's structure is the cached one, the
++    // property is at the cached offset. The cache is read as the code runs,
++    // so it may change (or be cleared by the garbage collector) under the
++    // code; a miss takes the slow path, which updates it.
++
++    // The base cell into a0, or the slow path for anything else.
++    void loadCell(const Operand& base)
++    {
++        m_hot.tstFrame(base.hi);
++        slowUnless(Builder::NotEqual);
++        m_hot.loadFrame(base.lo, 0);
++        m_hot.btst1(0);
++        slowUnless(Builder::NotEqual);
++        m_hot.moveaFromData(0, 0);
++    }
++    // a0's property storage into a0 and the property's displacement from
++    // there into d1, given the property offset in d1. Calls access for the
++    // inline case and then for the out-of-line one, with the d8 to use.
++    template<typename Access>
++    void withProperty(const Access& access)
++    {
++        m_hot.cmpImm(firstOutOfLineOffset, 1);
++        size_t outOfLine = m_hot.branchShort(Builder::GreaterEqual);
++        m_hot.lsl3(1);
++        access(static_cast<int>(JSObject::offsetOfInlineStorage()));
++        size_t done = m_hot.branchShort(Builder::Always);
++        m_hot.bindShort(outOfLine);
++        // As the interpreter: the butterfly, less (offset - (first - 2)) values.
++        m_hot.moveaDisp(0, JSObject::butterflyOffset(), 0);
++        m_hot.neg(1);
++        m_hot.addImm(firstOutOfLineOffset - 2, 1);
++        m_hot.lsl3(1);
++        access(0);
++        m_hot.bindShort(done);
++    }
++
++    bool getById(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpGetById>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        Operand base = operandFor(m_codeBlock, bytecode.m_base);
++        if (!dst.valid || dst.isConstant || !base.valid || base.isConstant)
++            return false;
++        auto& metadata = bytecode.metadata(m_codeBlock);
++        // Only sites whose cache has settled on an own property.
++        if (metadata.m_modeMetadata.mode != GetByIdMode::Default || !metadata.m_modeMetadata.defaultMode.structureID)
++            return false;
++        loadCell(base);
++        m_hot.moveaImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&metadata.m_modeMetadata)), 1);
++        m_hot.cmpByteImmDisp(static_cast<uint8_t>(GetByIdMode::Default), 1, GetByIdModeMetadata::offsetOfMode());
++        slowUnless(Builder::NotEqual);
++        m_hot.loadDisp(0, JSCell::structureIDOffset(), 1);
++        m_hot.cmpDisp(1, OBJECT_OFFSETOF(GetByIdModeMetadata, defaultMode) + OBJECT_OFFSETOF(GetByIdModeMetadataDefault, structureID), 1);
++        slowUnless(Builder::NotEqual);
++        m_hot.loadDisp(1, OBJECT_OFFSETOF(GetByIdModeMetadata, defaultMode) + OBJECT_OFFSETOF(GetByIdModeMetadataDefault, cachedOffset), 1);
++        withProperty([&](int d8) {
++            m_hot.copyIndexedToFrame(0, 1, d8, dst.hi);
++            m_hot.copyIndexedToFrame(0, 1, d8 + 4, dst.lo);
++        });
++        return true;
++    }
++
++    bool putById(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpPutById>();
++        Operand base = operandFor(m_codeBlock, bytecode.m_base);
++        if (!base.valid || base.isConstant)
++            return false;
++        bool valueIsConstant = bytecode.m_value.isConstant();
++        JSValue constant;
++        Operand value;
++        if (valueIsConstant)
++            constant = m_codeBlock->getConstant(bytecode.m_value);
++        else {
++            value = operandFor(m_codeBlock, bytecode.m_value);
++            if (!value.valid)
++                return false;
++        }
++        auto& metadata = bytecode.metadata(m_codeBlock);
++        // Only sites whose cache holds a replace: no structure transition.
++        if (!metadata.m_oldStructureID || metadata.m_newStructureID)
++            return false;
++        loadCell(base);
++        m_hot.moveaImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&metadata)), 1);
++        m_hot.loadDisp(0, JSCell::structureIDOffset(), 1);
++        m_hot.cmpDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_oldStructureID), 1);
++        slowUnless(Builder::NotEqual);
++        m_hot.tstLongDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_newStructureID));
++        slowUnless(Builder::NotEqual);
++        // Storing a cell may need the write barrier: the slow path does it,
++        // unless the object is already remembered or new (the interpreter's
++        // skipIfIsRememberedOrInEden).
++        static_assert(!blackThreshold);
++        if (valueIsConstant) {
++            if (constant.isCell()) {
++                m_hot.tstByteDisp(0, JSCell::cellStateOffset());
++                slowUnless(Builder::Equal);
++            }
++        } else {
++            m_hot.tstFrame(value.hi);
++            size_t notCell1 = m_hot.branchShort(Builder::NotEqual);
++            m_hot.loadFrame(value.lo, 2);
++            m_hot.btst1(2);
++            size_t notCell2 = m_hot.branchShort(Builder::NotEqual);
++            m_hot.tst(2);
++            size_t notCell3 = m_hot.branchShort(Builder::Equal);
++            m_hot.tstByteDisp(0, JSCell::cellStateOffset());
++            slowUnless(Builder::Equal);
++            m_hot.bindShort(notCell1);
++            m_hot.bindShort(notCell2);
++            m_hot.bindShort(notCell3);
++        }
++        m_hot.loadDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_offset), 1);
++        uint64_t bits = JSValue::encode(constant);
++        withProperty([&](int d8) {
++            if (valueIsConstant) {
++                m_hot.storeImmIndexed(static_cast<uint32_t>(bits >> 32), 0, 1, d8);
++                m_hot.storeImmIndexed(static_cast<uint32_t>(bits), 0, 1, d8 + 4);
++            } else {
++                m_hot.copyFrameToIndexed(value.hi, 0, 1, d8);
++                m_hot.copyFrameToIndexed(value.lo, 0, 1, d8 + 4);
++            }
++        });
++        return true;
++    }
++
+     bool emitImpl(const JSInstruction* instruction, unsigned offset)
+     {
+         switch (instruction->opcodeID()) {
+@@ -384,13 +731,13 @@ private:
+             return true;
+         }
+         case op_add:
+-            return binary<OpAdd>(instruction, &Builder::addFrame, &Builder::addImm, true);
++            return binary<OpAdd>(instruction, &Builder::addFrame, &Builder::addImm, true, true);
+         case op_sub:
+-            return binary<OpSub>(instruction, &Builder::subFrame, &Builder::subImm, true);
++            return binary<OpSub>(instruction, &Builder::subFrame, &Builder::subImm, true, true);
+         case op_bitand:
+-            return binary<OpBitand>(instruction, &Builder::andFrame, &Builder::andImm, false);
++            return binary<OpBitand>(instruction, &Builder::andFrame, &Builder::andImm, false, false);
+         case op_bitor:
+-            return binary<OpBitor>(instruction, &Builder::orFrame, &Builder::orImm, false);
++            return binary<OpBitor>(instruction, &Builder::orFrame, &Builder::orImm, false, false);
+         case op_bitxor: {
+             auto bytecode = instruction->as<OpBitxor>();
+             Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
+@@ -413,10 +760,15 @@ private:
+         case op_mul: {
+             auto bytecode = instruction->as<OpMul>();
+             Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
+-            Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs);
+-            Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs);
+-            if (!dst.valid || dst.isConstant || !lhs.valid || !rhs.valid || (lhs.isConstant && rhs.isConstant))
++            Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs, true);
++            Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs, true);
++            if (!dst.valid || dst.isConstant || !lhs.valid || !rhs.valid || (isConstant(lhs) && isConstant(rhs)))
+                 return false;
++            if (lhs.isDoubleConstant || rhs.isDoubleConstant) {
++                floatArith(op_mul, dst, lhs, rhs);
++                return true;
++            }
++            useFloatPath(op_mul, dst, lhs, rhs);
+             checkInt32(lhs);
+             checkInt32(rhs);
+             load(lhs, 0);
+@@ -424,9 +776,9 @@ private:
+                 m_hot.mulsImm(rhs.constant, 0);
+             else
+                 m_hot.mulsFrame(rhs.lo, 0);
+-            slowUnless(Builder::OverflowSet);
+-            // A zero product may be -0, a double: the slow path decides.
+-            slowUnless(Builder::Equal);
++            bailUnless(Builder::OverflowSet);
++            // A zero product may be -0, a double: the float path decides.
++            bailUnless(Builder::Equal);
+             storeInt32(0, dst, same(dst, lhs) || same(dst, rhs));
+             return true;
+         }
+@@ -439,6 +791,10 @@ private:
+         case op_jnlesseq: return compareAndJump<OpJnlesseq>(instruction, offset, Builder::Greater);
+         case op_jngreater: return compareAndJump<OpJngreater>(instruction, offset, Builder::LessEqual);
+         case op_jngreatereq: return compareAndJump<OpJngreatereq>(instruction, offset, Builder::Less);
++        case op_get_by_id:
++            return Options::useM68KPropertyFastPaths() && getById(instruction);
++        case op_put_by_id:
++            return Options::useM68KPropertyFastPaths() && putById(instruction);
+         default:
+             return false;
+         }
+@@ -447,6 +803,8 @@ private:
+     CodeBlock* m_codeBlock;
+     Builder& m_hot;
+     Vector<size_t>* m_slow { nullptr };
++    Vector<size_t>* m_bail { nullptr };
++    FloatPath* m_float { nullptr };
+ };
+ 
+ bool compile(CodeBlock* codeBlock)
+@@ -461,7 +819,8 @@ bool compile(CodeBlock* codeBlock)
+     }
+ 
+     // Hot code in bytecode order: each instruction's fast code, or a copy of
+-    // its template where it has none; then the slow paths, out of line.
++    // its template where it has none; then, out of line, the float paths and
++    // the slow paths.
+     Builder code;
+     FastPaths fastPaths(codeBlock, code);
+     Vector<unsigned> hotStart(bytecodeSize);
+@@ -469,6 +828,7 @@ bool compile(CodeBlock* codeBlock)
+         const JSInstruction* instruction;
+         unsigned offset;
+         Vector<size_t> branches;
++        FloatPath floatPath;
+     };
+     Vector<Slow> slows;
+     auto copyTemplate = [&](const JSInstruction* ptr, unsigned offset) {
+@@ -484,21 +844,30 @@ bool compile(CodeBlock* codeBlock)
+         unsigned offset = instruction.offset();
+         hotStart[offset] = code.size();
+         Vector<size_t> branches;
+-        if (fast && fastPaths.emit(ptr, offset, branches)) {
+-            if (!branches.isEmpty())
+-                slows.append({ ptr, offset, std::exchange(branches, { }) });
++        FloatPath floatPath;
++        if (fast && fastPaths.emit(ptr, offset, branches, floatPath)) {
++            if (!branches.isEmpty() || floatPath.needed)
++                slows.append({ ptr, offset, std::exchange(branches, { }), std::exchange(floatPath, FloatPath()) });
+             continue;
+         }
+         copyTemplate(ptr, offset);
+     }
+     size_t hotSize = code.size();
+     for (auto& slow : slows) {
++        unsigned next = slow.offset + slow.instruction->size();
++        if (slow.floatPath.needed) {
++            for (size_t i : slow.floatPath.branches)
++                code.fixups[i].targetBuffer = code.size();
++            fastPaths.emitFloatPath(slow.floatPath, next, slow.branches);
++        }
++        if (slow.branches.isEmpty())
++            continue;
+         size_t start = code.size();
+         for (size_t i : slow.branches)
+             code.fixups[i].targetBuffer = start;
+         copyTemplate(slow.instruction, slow.offset);
+         // Back to the fast code of the next instruction.
+-        code.jumpToBytecode(slow.offset + slow.instruction->size());
++        code.jumpToBytecode(next);
+     }
+ 
+     size_t codeSize = code.size();
+@@ -535,16 +904,19 @@ bool compile(CodeBlock* codeBlock)
+ 
+ } // anonymous namespace
+ 
++void compileIfNeeded(CodeBlock* codeBlock)
++{
++    if (!Options::useM68KTemplateJIT() || codeBlock->m_m68kTemplateMap || codeBlock->m_m68kTemplateFailed)
++        return;
++    if (!compile(codeBlock))
++        codeBlock->m_m68kTemplateFailed = true;
++}
++
+ void* entryFor(CodeBlock* codeBlock, const JSInstruction* pc)
+ {
+-    if (!Options::useM68KTemplateJIT())
++    compileIfNeeded(codeBlock);
++    if (!codeBlock->m_m68kTemplateMap)
+         return nullptr;
+-    if (!codeBlock->m_m68kTemplateMap) {
+-        if (codeBlock->m_m68kTemplateFailed || !compile(codeBlock)) {
+-            codeBlock->m_m68kTemplateFailed = true;
+-            return nullptr;
+-        }
+-    }
+     unsigned bytecodeOffset = codeBlock->bytecodeOffset(pc);
+     return codeBlock->m_m68kTemplateMap[bytecodeOffset];
+ }
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.h b/Source/JavaScriptCore/llint/M68KTemplateJIT.h
+index 6acb565f0ac..d9df759b72c 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.h
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.h
+@@ -29,7 +29,8 @@
+ // own frames and registers, so it and the interpreter hand over at any
+ // bytecode instruction: the code leaves through jsc_m68k_tjit_redispatch
+ // (LowLevelInterpreter64.asm) whenever PC moves other than to the next
+-// instruction, and the interpreter enters it from op_loop_hint.
++// instruction, and the interpreter enters it from op_loop_hint and, once a
++// function has been called or has returned often enough, from op_enter.
+ 
+ #if CPU(M68K) && ENABLE(C_LOOP)
+ 
+@@ -46,6 +47,10 @@ namespace M68KTemplateJIT {
+ // out of memory, an opcode without a template): the interpreter carries on.
+ void* entryFor(CodeBlock*, const JSInstruction* pc);
+ 
++// Compiles the CodeBlock if it has no code yet and can have some. op_enter
++// then runs the code from the function's next call on.
++void compileIfNeeded(CodeBlock*);
++
+ // Frees a CodeBlock's code and map (from ~CodeBlock).
+ void release(CodeBlock*);
+ 
+diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py
+index bfb47099eb4..ecc77c09eef 100644
+--- a/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py
++++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py
+@@ -1317,10 +1317,10 @@ def _fp2(opcode, kind):
+ 
+ 
+ _M68K_HANDLERS.update({
+-    "addd": _fp2("fadd.x", "double"),
+-    "subd": _fp2("fsub.x", "double"),
+-    "muld": _fp2("fmul.x", "double"),
+-    "divd": _fp2("fdiv.x", "double"),
++    "addd": _fp2("fdadd.x", "double"),
++    "subd": _fp2("fdsub.x", "double"),
++    "muld": _fp2("fdmul.x", "double"),
++    "divd": _fp2("fddiv.x", "double"),
+     "addf": _fp2("fadd.x", "float"),
+     "subf": _fp2("fsub.x", "float"),
+     "mulf": _fp2("fmul.x", "float"),
+@@ -1330,12 +1330,12 @@ _M68K_HANDLERS.update({
+ 
+ @handles("sqrtd")
+ def _(self):
+-    emit("fsqrt.x %s,%s" % (self.operands[0].m68kOperand(), self.operands[1].m68kOperand()))
++    emit("fdsqrt.x %s,%s" % (self.operands[0].m68kOperand(), self.operands[1].m68kOperand()))
+ 
+ 
+ @handles("sqrtf")
+ def _(self):
+-    emit("fsqrt.x %s,%s" % (self.operands[0].m68kOperand(), self.operands[1].m68kOperand()))
++    emit("fdsqrt.x %s,%s" % (self.operands[0].m68kOperand(), self.operands[1].m68kOperand()))
+     self.m68kRoundToFloat(self.operands[1].m68kOperand())
+ 
+ 
+diff --git a/Source/JavaScriptCore/offlineasm/m68k.rb b/Source/JavaScriptCore/offlineasm/m68k.rb
+index 477428edbd5..5b6116b1fb8 100644
+--- a/Source/JavaScriptCore/offlineasm/m68k.rb
++++ b/Source/JavaScriptCore/offlineasm/m68k.rb
+@@ -1154,13 +1154,13 @@ class Instruction
+         when "moved"
+             $asm.puts "fmove.x #{operands[0].m68kOperand},#{operands[1].m68kOperand}"
+         when "addd"
+-            m68kFP2("fadd.x", :double)
++            m68kFP2("fdadd.x", :double)
+         when "subd"
+-            m68kFP2("fsub.x", :double)
++            m68kFP2("fdsub.x", :double)
+         when "muld"
+-            m68kFP2("fmul.x", :double)
++            m68kFP2("fdmul.x", :double)
+         when "divd"
+-            m68kFP2("fdiv.x", :double)
++            m68kFP2("fddiv.x", :double)
+         when "addf"
+             m68kFP2("fadd.x", :float)
+         when "subf"
+diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
+index b843da3e712..d975553da0a 100644
+--- a/Source/JavaScriptCore/runtime/OptionsList.h
++++ b/Source/JavaScriptCore/runtime/OptionsList.h
+@@ -654,8 +654,9 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, verboseExecutablePoolAllocation, false, Normal, nullptr) \
+     v(Bool, useHandlerICInFTL, false, Normal, nullptr) \
+     v(Bool, useLLIntICs, true, Normal, "Use property and call ICs in LLInt code."_s) \
+-    v(Bool, useM68KTemplateJIT, true, Normal, "68k only: compile hot loops' CodeBlocks by stitching the interpreter's handlers (J2). JSC_useM68KTemplateJIT=0 turns it off."_s) \
++    v(Bool, useM68KTemplateJIT, true, Normal, "68k only: compile hot functions and loops by stitching the interpreter's handlers (J2). JSC_useM68KTemplateJIT=0 turns it off."_s) \
+     v(Bool, useM68KFastPaths, true, Normal, "68k only: the template JIT writes its own 32-bit code for common integer operations (J3)."_s) \
++    v(Bool, useM68KPropertyFastPaths, true, Normal, "68k only: the template JIT writes its own code for property reads and writes its inline cache has settled (J4)."_s) \
+     v(Unsigned, m68kTemplateJITMaximumBytecodeSize, 4096, Normal, "68k only: largest CodeBlock, in bytecode bytes, the template JIT compiles."_s) \
+     v(Bool, useBaselineJITCodeSharing, jitEnabledByDefault(), Normal, nullptr) \
+     v(Bool, libpasScavengeContinuously, false, Normal, nullptr) \
+-- 
+2.43.0
+
