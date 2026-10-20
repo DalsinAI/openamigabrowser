@@ -1,0 +1,29 @@
+From a92183ced564c35bf5509b89d638b52b588eda4c Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 19:06:05 +0000
+Subject: [PATCH] JavaScriptCore: the 68k template JIT on by default
+
+useM68KTemplateJIT now defaults to true, so engine builds run JavaScript
+through the template JIT and its 32-bit fast paths (patches 0024, 0027)
+everywhere, for full test runs. JSC_useM68KTemplateJIT=0 turns it off and
+runs the interpreter alone.
+---
+ Source/JavaScriptCore/runtime/OptionsList.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
+index 2be0092ef24..b843da3e712 100644
+--- a/Source/JavaScriptCore/runtime/OptionsList.h
++++ b/Source/JavaScriptCore/runtime/OptionsList.h
+@@ -654,7 +654,7 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, verboseExecutablePoolAllocation, false, Normal, nullptr) \
+     v(Bool, useHandlerICInFTL, false, Normal, nullptr) \
+     v(Bool, useLLIntICs, true, Normal, "Use property and call ICs in LLInt code."_s) \
+-    v(Bool, useM68KTemplateJIT, false, Normal, "68k only: compile hot loops' CodeBlocks by stitching the interpreter's handlers (J2)."_s) \
++    v(Bool, useM68KTemplateJIT, true, Normal, "68k only: compile hot loops' CodeBlocks by stitching the interpreter's handlers (J2). JSC_useM68KTemplateJIT=0 turns it off."_s) \
+     v(Bool, useM68KFastPaths, true, Normal, "68k only: the template JIT writes its own 32-bit code for common integer operations (J3)."_s) \
+     v(Unsigned, m68kTemplateJITMaximumBytecodeSize, 4096, Normal, "68k only: largest CodeBlock, in bytecode bytes, the template JIT compiles."_s) \
+     v(Bool, useBaselineJITCodeSharing, jitEnabledByDefault(), Normal, nullptr) \
+-- 
+2.43.0
+
