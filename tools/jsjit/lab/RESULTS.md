@@ -6,6 +6,27 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 20 Oct 2026, stage T4 (peephole pass)
+
+| jsbench test | JIT off (M) | JIT on (M) | change | speed-up |
+|---|---:|---:|---:|---:|
+| int-loop    | 101.8 |  69.7 | -31.5% | 1.46x |
+| double-loop |  51.7 |  36.6 | -29.2% | 1.41x |
+| calls       |  99.4 |  77.5 | -22.1% | 1.28x |
+| properties  | 105.1 |  69.3 | -34.0% | 1.52x |
+| closures    |  18.8 |  15.8 | -15.9% | 1.19x |
+| strings     |   9.2 |   7.6 | -17.8% | 1.22x |
+| regexp      |   8.9 |   8.4 |  -5.7% | 1.06x |
+| array (sort)| 143.9 | 139.5 |  -3.1% | 1.03x |
+| json        |   3.6 |   3.6 |  +1.0% | 0.99x |
+
+`lab/correct.js` (15 loops: int overflow, doubles, exceptions, getters,
+closures, for-in, switch) prints the same with the JIT on and off.
+
+Wall time under qemu is not a measure: qemu retranslates code whose page is
+written, so before JIT code had pages of its own (test hosts only) sort ran
+25x slower in the emulator while executing fewer instructions.
+
 ## 20 Oct 2026, stage T1 (plain templates)
 
 | jsbench test | JIT off (M) | JIT on (M) | change |

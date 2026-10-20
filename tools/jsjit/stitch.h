@@ -25,6 +25,10 @@ enum {
     M68K_TPL_HOLE_S16 = 4,
     M68K_TPL_HOLE_32 = 5,
     M68K_TPL_HOLE_NEXT_PC = 6,
+    /* The high word (0 or -1) of a signed operand of the given size. */
+    M68K_TPL_HOLE_HI_S8 = 7,
+    M68K_TPL_HOLE_HI_S16 = 8,
+    M68K_TPL_HOLE_HI_32 = 9,
 };
 
 /* Laid out as m68k_templates.py writes it (.long, .long, .long, then
@@ -51,6 +55,9 @@ static inline uint32_t m68k_tpl_operand(const uint8_t* instruction, const struct
     case M68K_TPL_HOLE_U16: return (uint32_t)((p[0] << 8) | p[1]);
     case M68K_TPL_HOLE_S16: return (uint32_t)(int32_t)(int16_t)((p[0] << 8) | p[1]);
     case M68K_TPL_HOLE_32: return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+    case M68K_TPL_HOLE_HI_S8:
+    case M68K_TPL_HOLE_HI_S16:
+    case M68K_TPL_HOLE_HI_32: return (p[0] & 0x80) ? 0xffffffffu : 0;
     }
     return 0;
 }
