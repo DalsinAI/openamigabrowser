@@ -23,5 +23,8 @@ default), and `-url` loads an address from the network instead of a file.
 `-dl` also paints through WebKit's display list and prints `OBVIEW_DL`
 lines: the drawing commands, their size and how long painting, recording and
 replaying took (see docs/WEBCORE_PORT.md).
+`-text` prints the page's text after the load (`OBVIEW_TEXT`, up to 2000
+bytes). Every run ends with an `OBVIEW_BENCH` line of timings and memory,
+which the benchmark reads (docs/BENCHMARKS.md, tools/bench).
 
 MIT, Copyright (c) 2026 AmigaChrome Team.
