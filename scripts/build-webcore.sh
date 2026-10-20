@@ -8,7 +8,7 @@
 #   the engine   WebKit's WebCore, JavaScriptCore, WTF, PAL and bmalloc.
 #                Built only when an input in its fingerprint changes: the
 #                WebKit tree and its patches, the compiler, the headers of
-#                ICU, the OpenAmiga libraries and AmiSSL, the build options.
+#                ICU, the OpenAmiga libraries and OpenTLS, the build options.
 #   the browser  OpenBrowser's own code (src/webcore): the page layer library
 #                OBCore and the programs
 #                  OpenBrowser   the launcher: a title window, then it loads
@@ -28,8 +28,12 @@
 #   OAB_DEPS        folder holding icu78-m68k-amigaos/ (scripts/build-icu.sh)
 #                   and m68k-amigaos/, the libraries from the OpenAmiga ports
 #                   (cairo and pixman, FreeType, HarfBuzz, fontconfig, Expat,
-#                   libxml2, SQLite, curl, libpsl, zlib, libpng) in one prefix
-#   AMISSL_SDK      the AmiSSL 5 SDK's Developer folder           (required)
+#                   libxml2, SQLite, curl, libpsl, zlib, libpng) in one prefix.
+#                   Its curl must be openamigacurl's main branch, built on
+#                   OpenTLS (opentls.library): WebCore links no OpenSSL and no
+#                   AmiSSL SDK is used (WebKit patch 0022). At run time the
+#                   Amiga needs opentls.library 1.2 or newer in LIBS: and its
+#                   CA bundle in S:OpenTLS/ca-bundle.pem for https://.
 #
 # No Ruby: WebKit's Ruby generators run as Python ports (patches 0019 and
 # 0021), with the python3 CMake finds.
@@ -51,6 +55,10 @@
 #                   JOBS then defaults to their sum. Needs ccache and distcc.
 #   OB_TEST_DIR     folder to stage the test programs and pages in
 #                   (test-browser)
+#   OB_FONTS        folder holding the TrueType fonts the engine draws with
+#                   (the Liberation and DejaVu .ttf files); test-browser copies
+#                   them to Fonts/, which fontconfig reads as PROGDIR:Fonts.
+#                   The engine stops at its first page without them.
 #
 # usage: build-webcore.sh [COMMAND]
 #   configure-engine     make the build folder; for an existing folder, only
@@ -90,7 +98,6 @@ ENGINE_LIBRARIES="libWebCore.a libJavaScriptCore.a libWTF.a libPAL.a libbmalloc.
 
 need_sources() {
     : "${WEBKIT_SOURCE:?set WEBKIT_SOURCE to the patched WebKit tree}"
-    : "${AMISSL_SDK:?set AMISSL_SDK to the AmiSSL 5 SDK Developer folder}"
     : "${OAB_DEPS:?set OAB_DEPS to the folder with icu78-m68k-amigaos and m68k-amigaos}"
     [ -d "$WEBKIT_SOURCE/Source/WebCore" ] || die "WebKit source with Source/WebCore missing: $WEBKIT_SOURCE"
     export OAB_DEPS
@@ -141,7 +148,7 @@ generator() {
 # The engine's options from the build folder's cache: what the compiler is
 # told, and which WebKit features are built.
 engine_options() {
-    grep -E '^(CMAKE_BUILD_TYPE|CMAKE_TOOLCHAIN_FILE|PORT|DEVELOPER_MODE|ENABLE_[A-Z0-9_]+|USE_[A-Z0-9_]+|CMAKE_(C|CXX)_FLAGS[A-Z_]*|CMAKE_(C|CXX)_STANDARD_LIBRARIES|OPENSSL_[A-Z_]+|Ruby_EXECUTABLE)(:[A-Z]+)?=' \
+    grep -E '^(CMAKE_BUILD_TYPE|CMAKE_TOOLCHAIN_FILE|PORT|DEVELOPER_MODE|ENABLE_[A-Z0-9_]+|USE_[A-Z0-9_]+|CMAKE_(C|CXX)_FLAGS[A-Z_]*|CMAKE_(C|CXX)_STANDARD_LIBRARIES|Ruby_EXECUTABLE)(:[A-Z]+)?=' \
         "$BUILD/CMakeCache.txt" | LC_ALL=C sort
 }
 
@@ -157,7 +164,9 @@ engine_inputs() {
     echo "toolchain-file $(sha256 < "$ROOT/toolchain/amigaos3-gcc16.cmake")"
     echo "icu-headers $(tree_hash "$OAB_DEPS/icu78-m68k-amigaos/include")"
     echo "openamiga-headers $(tree_hash "$OAB_DEPS/m68k-amigaos/include")"
-    echo "amissl-headers $(tree_hash "$AMISSL_SDK/include")"
+    # opentls.library's API, as curl's OpenTLS backend was built against it
+    # (curl's own headers are in openamiga-headers).
+    echo "opentls-headers $(tree_hash "$ROOT/third_party/opentls/include")"
     echo "options $(engine_options | sha256)"
 }
 
@@ -256,10 +265,7 @@ configure_engine() {
       -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain/amigaos3-gcc16.cmake" \
       -DCMAKE_BUILD_TYPE=MinSizeRel \
       -DENABLE_WEBCORE=ON \
-      -DOPENBROWSER_WEBCORE_DIR="$ROOT/src/webcore" \
-      -DOPENSSL_INCLUDE_DIR="$AMISSL_SDK/include" \
-      -DOPENSSL_SSL_LIBRARY="$AMISSL_SDK/lib/AmigaOS3/libamisslstubs.a" \
-      -DOPENSSL_CRYPTO_LIBRARY="$AMISSL_SDK/lib/AmigaOS3/libamisslstubs.a"
+      -DOPENBROWSER_WEBCORE_DIR="$ROOT/src/webcore"
 }
 
 ccache_counts() {
@@ -371,8 +377,12 @@ build_tests() {
 
 test_browser() {
     : "${OB_TEST_DIR:?set OB_TEST_DIR to the folder to stage the tests in}"
+    : "${OB_FONTS:?set OB_FONTS to the folder of the Liberation and DejaVu .ttf files}"
+    set -- "$OB_FONTS"/*.ttf
+    [ -f "$1" ] || { echo "no .ttf files in $OB_FONTS" >&2; exit 1; }
     strip="$GCC16/prefix/bin/m68k-amigaos-strip"
-    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig"
+    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig" "$OB_TEST_DIR/Fonts"
+    cp "$@" "$OB_TEST_DIR/Fonts/"
     for program in OpenBrowser OpenBrowser.engine obcore-view obcore-dump; do
         "$strip" -o "$OB_TEST_DIR/$program" "$BUILD/bin/$program"
     done
@@ -381,8 +391,8 @@ test_browser() {
     cp "$ROOT/src/webcore/blocklist" "$OB_TEST_DIR/"
     {
         echo "; OpenBrowser's test pages through obcore-view, staged by"
-        echo "; scripts/build-webcore.sh test-browser. From this drawer, with the"
-        echo "; fonts in Fonts: \"Execute OBTests\"; the results go to OBTests.log"
+        echo "; scripts/build-webcore.sh test-browser. From this drawer:"
+        echo "; \"Execute OBTests\"; the results go to OBTests.log"
         echo "; (expected results: tests/pages/README.md)."
         echo "FailAt 1000"
         echo "Stack 400000"

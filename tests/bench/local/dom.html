@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<!-- OpenBrowser benchmark page (tests/bench). MIT, Copyright (c) 2026 The AmigaChrome Team. Our own content. -->
+<html lang="en"><head><meta charset="utf-8"><title>Bench: DOM</title>
+<style>
+body { font-family: sans-serif; font-size: 12px; }
+#list li { display: inline-block; width: 60px; margin: 1px; background: #def; }
+#list li.odd { background: #fed; }
+table { border-collapse: collapse; } td { border: 1px solid #aaa; padding: 1px 3px; }
+</style></head>
+<body>
+<h1>DOM work in JavaScript</h1>
+<p id="state">running</p>
+<ul id="list"></ul>
+<table id="t"><tbody></tbody></table>
+<script>
+// Each step prints "OBBENCH_JS step ms" on the console; the end prints
+// "OBBENCH_JS_DONE total=ms checksum=n" and sets the title, so a run that
+// stopped part way shows where.
+var steps = {}, total = 0, checksum = 0;
+function step(name, f) {
+    var t = Date.now(), r = f(), ms = Date.now() - t;
+    steps[name] = ms; total += ms; checksum = (checksum * 31 + (r | 0)) | 0;
+    console.log("OBBENCH_JS " + name + " " + ms);
+}
+step("create-1000", function () {
+    var ul = document.getElementById("list"), frag = document.createDocumentFragment();
+    for (var i = 0; i < 1000; i++) {
+        var li = document.createElement("li");
+        li.textContent = "item " + i;
+        if (i & 1) li.className = "odd";
+        frag.appendChild(li);
+    }
+    ul.appendChild(frag);
+    return ul.childNodes.length;
+});
+step("query-classes", function () {
+    var n = 0;
+    for (var k = 0; k < 20; k++) n += document.querySelectorAll("#list li.odd").length;
+    return n;
+});
+step("layout-reads", function () {
+    var items = document.querySelectorAll("#list li"), s = 0;
+    for (var i = 0; i < items.length; i += 10) { items[i].style.width = (50 + i % 30) + "px"; s += items[i].offsetWidth; }
+    return s;
+});
+step("table-200", function () {
+    var body = document.querySelector("#t tbody"), html = [];
+    for (var i = 0; i < 200; i++) html.push("<tr><td>" + i + "</td><td>" + ((i * 7919) % 1000) + "</td><td>row " + i + "</td></tr>");
+    body.innerHTML = html.join("");
+    return body.rows.length;
+});
+step("table-sort", function () {
+    var body = document.querySelector("#t tbody"), rows = Array.prototype.slice.call(body.rows);
+    rows.sort(function (a, b) { return a.cells[1].textContent - b.cells[1].textContent; });
+    for (var i = 0; i < rows.length; i++) body.appendChild(rows[i]);
+    return parseInt(body.rows[0].cells[1].textContent, 10);
+});
+step("text-edit", function () {
+    var items = document.querySelectorAll("#list li"), n = 0;
+    for (var i = 0; i < items.length; i++) { items[i].textContent = items[i].textContent.toUpperCase(); n += items[i].textContent.length; }
+    return n;
+});
+step("remove-half", function () {
+    var ul = document.getElementById("list");
+    for (var i = ul.childNodes.length - 1; i >= 0; i -= 2) ul.removeChild(ul.childNodes[i]);
+    return ul.childNodes.length;
+});
+step("json-roundtrip", function () {
+    var o = { rows: [] };
+    for (var i = 0; i < 2000; i++) o.rows.push({ id: i, name: "n" + i, tags: ["a", "b", i % 7] });
+    return JSON.parse(JSON.stringify(o)).rows.length;
+});
+document.getElementById("state").textContent = "done in " + total + " ms";
+console.log("OBBENCH_JS_DONE total=" + total + " checksum=" + checksum);
+document.title = "Bench: DOM done " + total + " ms";
+</script>
+</body></html>
