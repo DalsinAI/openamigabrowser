@@ -97,7 +97,7 @@ slow path. Lab counts (68k instructions executed, `tools/jsjit/lab/RESULTS.md`):
 int-loop 10.3x fewer than the interpreter, properties 2.7x, double-loop 2.1x,
 calls 1.8x.
 
-Patch 0030 (J4) compiles whole functions (entered from op_enter, not only
+Patch 0031 (J4) compiles whole functions (entered from op_enter, not only
 from loops), gives get_by_id and put_by_id their own code for cached own
 properties, and runs double arithmetic and compares on the FPU. Against the
 interpreter: properties 8.0x fewer instructions, double-loop 7.9x, calls

@@ -6,7 +6,7 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
-## 20 Oct 2026, stage J4 (whole functions, property access, doubles; patch 0030)
+## 20 Oct 2026, stage J4 (whole functions, property access, doubles; patch 0031)
 
 Interpreter column re-run on this build (its double arithmetic now uses
 fdadd and friends, and op_enter counts calls). `lab/correct.js` and

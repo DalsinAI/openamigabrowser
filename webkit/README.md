@@ -120,7 +120,7 @@ The patches, in order:
   defaults to true, so engine builds run the template JIT and its fast
   paths everywhere. `JSC_useM68KTemplateJIT=0` runs the interpreter alone.
 
-- `0030-jsc-m68k-jit-functions-properties-doubles.patch`: J4. Whole
+- `0031-jsc-m68k-jit-functions-properties-doubles.patch`: J4. Whole
   functions: op_enter runs a function's code once it has been called often
   enough, not only its loops. Property access: get_by_id and put_by_id get
   their own code for sites whose interpreter cache holds an own property
