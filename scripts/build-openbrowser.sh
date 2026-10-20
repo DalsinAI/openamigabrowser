@@ -91,5 +91,11 @@ if [ "${TESTS:-0}" = 1 ]; then
     # a picture over HTTPS, then through picture.datatype: ImageFetchTest [address]
     "$CC" $CFLAGS $INC "$HERE/src/ob_http.c" "$WL/wl_url.c" $RT "$WL/wl_image_dt.c" "$OM"/*.c \
         "$HERE/tests/test_image_fetch.c" -lamiga -o "$T/ImageFetchTest"
+    # the engine's malloc (the stove's os32compat_malloc.c) against libnix's,
+    # linked with malloc and free wrapped as the engine is: MallocBench [pairs] [live]
+    "$CC" $CFLAGS $INC "$HERE/tools/mallocbench.c" "$HERE/stove/compat/os32compat_malloc.c" \
+        -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free \
+        -Wl,-u,___wrap_malloc -Wl,-u,___wrap_free -Wl,-u,___wrap_calloc -Wl,-u,___wrap_realloc \
+        -o "$T/MallocBench"
     for f in "$T"/*; do echo "$f ($(wc -c < "$f") bytes)"; done
 fi
