@@ -5,7 +5,8 @@
 # OpenMail's HTML-to-text converter, with the host's C compiler, on
 # OpenLayout's portable C. Also the engine's malloc (the stove's
 # os32compat_malloc.c) on threads, with tests/host's stand-in exec calls, and
-# MallocBench, its timings against libnix's malloc (here the host's).
+# MallocBench, its timings against libnix's malloc (here the host's). And the
+# engine's HTTP disk cache (src/webcore/ob_httpcache.c) in a scratch folder.
 #
 #   OPENLAYOUT_SRC  an openamigalayout checkout (default ../openamigalayout)
 #   HOST_CC         the compiler (default cc)
@@ -44,6 +45,9 @@ OS32M="-D_DEFAULT_SOURCE -Daligned_alloc=os32_aligned_alloc -Dmemalign=os32_mema
     "$HERE/tests/host/exec_tasks.c" -pthread -o "$OUT/test_os32_malloc_debug"
 "$CC" $FLAGS $OS32M "$HERE/tools/mallocbench.c" "$HERE/stove/compat/os32compat_malloc.c" \
     "$HERE/tests/host/exec_tasks.c" -pthread -o "$OUT/mallocbench"
+# opendir(), stat() and setenv(): POSIX
+"$CC" $FLAGS -D_DEFAULT_SOURCE -I"$HERE/src/webcore" "$HERE/src/webcore/ob_httpcache.c" \
+    "$HERE/tests/test_ob_httpcache.c" -o "$OUT/test_ob_httpcache"
 "$OUT/test_wl_html" > "$OUT/test_wl_html.log" || { cat "$OUT/test_wl_html.log"; exit 1; }
 tail -1 "$OUT/test_wl_html.log"
 "$OUT/test_wl_css"
@@ -51,6 +55,8 @@ tail -1 "$OUT/test_wl_html.log"
 "$OUT/test_wl_libc"
 "$OUT/test_wl_document"
 "$OUT/test_oam_html"
+rm -rf "$OUT/httpcache"
+"$OUT/test_ob_httpcache" "$OUT/httpcache"
 # fewer operations under the sanitizers, which are slower
 R=200000
 [ "${SANITIZE:-0}" = 1 ] && R=50000

@@ -108,6 +108,23 @@ The patches, in order:
   0029; `JSC_useM68KTemplateJIT=0` turns it off. Tools and the qemu test are in
   `../tools/jsjit/`.
 
+- `0025-amiga-eclock-monotonic-time.patch`: `MonotonicTime::now()` on
+  AmigaOS 3 reads timer.device's E-clock (`ReadEClock`) instead of libnix's
+  `clock_gettime()`, which is `DateStamp()` (the wall clock in 50ths of a
+  second) followed by a floating-point division and a comparison on every
+  call. `amigaMonotonicMicroseconds()` gives the same clock in whole
+  microseconds, and `RunLoop::cycle()` keeps the next timer on it as a
+  plain integer (`amigaRunLoopNextFireMicroseconds()`), so the programs
+  work out their waits without floating point or libatomic.
+
+- `0026-amiga-webcore-http-disk-cache.patch`: a hook for the browser's HTTP
+  disk cache (`setAmigaHttpCache()` in `AmigaNetwork.h`). Before a request
+  goes out the browser may answer it from a fresh stored copy, or add
+  `If-None-Match`/`If-Modified-Since`; a 304 is then answered with the
+  stored copy, and other responses are handed to the cache as they arrive.
+  The cache itself is `src/webcore/ob_httpcache.c` (see
+  `../docs/WEBCORE_PORT.md`).
+
 - `0027-jsc-m68k-jit-int32-fast-paths.patch`: J3, 32-bit integer fast
   paths in the template JIT. For mov, add, sub, mul, inc, dec, the bit ops,
   jmp, loop_hint and the compare-and-jump ops the JIT writes its own 68k
@@ -115,6 +132,14 @@ The patches, in order:
   stores the result; anything else runs the instruction's template, kept
   out of line. Branches between instructions are direct. JSValues stay
   64-bit in memory. `JSC_useM68KFastPaths=0` turns it off for comparison.
+
+- `0028-amiga-webcore-worker-indexeddb-identifier.patch`: a worker's global
+  scope builds an IndexedDB connection proxy even though this single-process
+  port has no IndexedDB server, and `IDBConnectionToServer::identifier()`
+  dereferenced the empty identifier of `EmptyDatabaseProvider`'s delegate,
+  which aborted the engine (reddit's reCAPTCHA worker). On AmigaOS the
+  delegate now answers with `Process::identifier()`; requests still go
+  nowhere.
 
 - `0029-jsc-m68k-template-jit-on-by-default.patch`: `useM68KTemplateJIT`
   defaults to true, so engine builds run the template JIT and its fast
@@ -128,8 +153,20 @@ The patches, in order:
   libxml2's shapes, and is tested on the host against libxml2
   (`../tests/xml-oxp/`). No external entity or DTD is loaded; XSLT and EME
   stay off.
-  It applies after every other patch, including 0025, 0026 and 0028 when
-  those are in.
+
+- `0031-jsc-m68k-jit-functions-properties-doubles.patch`: J4. Whole
+  functions: the function prologues enter a function's code once it has
+  been called often enough, not only its loops. Calls: op_enter, op_ret,
+  op_call and op_construct get their own code (a call to the callee its
+  call link holds goes straight in and returns into compiled code). The 68k interpreter stops filling value, arithmetic
+  and argument profiles, which only the optimizing JITs read. Property
+  access: get_by_id and put_by_id get their own code for sites whose
+  interpreter cache holds an own property (`JSC_useM68KPropertyFastPaths=0`
+  turns it off). Doubles: add, sub, mul and the compare-and-jumps run on the
+  FPU when an operand is a double or an int32 result overflows. Double
+  arithmetic, in the JIT and the interpreter, uses the 68040's
+  fdadd/fdsub/fdmul/fddiv/fdsqrt, which round once to double as
+  JavaScript asks.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
