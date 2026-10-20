@@ -95,9 +95,10 @@ OpenBrowser on WebCore needs, besides the compiler and ICU above, the
 libraries from the OpenAmiga ports (cairo and pixman, FreeType, HarfBuzz,
 fontconfig, Expat, libxml2, SQLite, curl, libpsl, zlib and libpng; see
 https://github.com/DalsinAI/openamiga) built into one prefix, with curl from
-openamigacurl's main branch, which does TLS through OpenTLS. No AmiSSL SDK is
-needed (until 19 October 2026 the engine used AmiSSL 5). Then apply the
-patches in `webkit/` and run
+openamigacurl's main branch, which does TLS through OpenTLS, and with
+nghttp2 (`libnghttp2.a`, pinned and built by openamigacurl) for curl's
+HTTP/2. No AmiSSL SDK is needed (until 19 October 2026 the engine used
+AmiSSL 5). Then apply the patches in `webkit/` and run
 `WEBKIT_SOURCE=... OAB_DEPS=... scripts/build-webcore.sh`.
 For https:// the Amiga needs opentls.library 1.2 or newer and its CA bundle
 in `S:OpenTLS/ca-bundle.pem`.

@@ -19,7 +19,7 @@ layer, the way MorphOS's and Haiku's browsers did it:
 | Drawing | cairo image surfaces with pixman | Proven on big-endian CPUs; Skia refuses to build for them |
 | Text | FreeType, HarfBuzz and fontconfig | WebCore's Cairo backend uses all three |
 | Fonts | Liberation and DejaVu, in `PROGDIR:Fonts` | Free licences; Liberation has the metrics of Arial, Times and Courier |
-| Network | libcurl on OpenTLS (opentls.library) | WebCore's curl backend handles cookies and redirects; curl does TLS (AmiSSL 5 until 19 October 2026) |
+| Network | libcurl on OpenTLS (opentls.library), HTTP/2 through nghttp2 | WebCore's curl backend handles cookies and redirects; curl does TLS (AmiSSL 5 until 19 October 2026) |
 | Images | the system's datatypes | Our rule: the formats are the ones the user has datatypes for |
 | JavaScript | JavaScriptCore's C-loop interpreter | No JIT on 68k |
 
@@ -64,6 +64,20 @@ Responses carry no certificate details, and WebCrypto offers the SHA digests
 only. Before that the engine called AmiSSL from C++, built with
 `PROTO_AMISSL_H` so calls went through AmiSSL's stub library, and each task
 that used it had to open it.
+
+**HTTP/2.** Since 20 October 2026 (WebKit patch 0023) the engine asks curl
+for HTTP/2 to https:// servers (`CURL_HTTP_VERSION_2TLS`, falling back to
+HTTP/1.1 when the server does not offer h2 in ALPN) and multiplexes requests
+to one server as streams on one connection (`CURLPIPE_MULTIPLEX`), so a page
+costs one TLS handshake per server. curl needs nghttp2 for it: openamigacurl
+pins nghttp2 (1.70.0) and builds it as `libnghttp2.a` beside `libcurl.a`;
+copy both into the deps prefix (`OAB_DEPS/m68k-amigaos/lib`). The programs
+link nghttp2 after curl when `libnghttp2.a` is there, so a curl built before
+openamigacurl had HTTP/2 still links; `build-webcore.sh` stops with a message
+when `libcurl.a` uses nghttp2 and `libnghttp2.a` is missing. The loader hands
+curl six requests per host at once (four before): over HTTP/2 they are
+streams, over HTTP/1.1 the ones beyond curl's two connections per host wait
+in curl.
 
 **Sockets are not file descriptors.** libcurl's configure finds libnix's
 `fcntl()` and `pipe()`; on bsdsocket sockets they fail. curl is built to use
@@ -154,8 +168,9 @@ client that takes too long (Cloudflare accepted 10 seconds and refused 20),
 and curl then reports "Failed sending data to the peer" when it sends the
 request. So the network thread runs one priority above the browser's, the
 key exchange offers X25519 and P-256 only (login.live.com picks P-384 when it
-is offered), curl keeps one connection per host, reused for the next request,
-and four in all, so few handshakes run side by side, and the connect timeout,
+is offered), curl keeps two connections per host (one, before patch 0007),
+reused for the next requests, and four in all, so few handshakes run side by
+side (with HTTP/2, one connection per server is enough), and the connect timeout,
 which includes the handshake, is two minutes.
 
 **UTF-16 in the CPU's byte order.** WebKit keeps 16-bit strings in the
