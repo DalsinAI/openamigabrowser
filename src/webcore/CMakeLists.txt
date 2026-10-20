@@ -14,10 +14,12 @@ set(OB_CORE_SOURCES
     AmigaCookieJar.cpp
     AmigaEditorClient.cpp
     AmigaFrameLoaderClient.cpp
+    AmigaHttpCache.cpp
     AmigaLoaderStrategy.cpp
     AmigaNetworkSetup.c
     AmigaPlatformStrategies.cpp
     AmigaWebView.cpp
+    ob_httpcache.c
     ob_webview.cpp
 )
 # Each program compiles these itself: they define symbols (library bases,
