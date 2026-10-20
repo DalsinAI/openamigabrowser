@@ -28,7 +28,9 @@
 #   OAB_DEPS        folder holding icu78-m68k-amigaos/ (scripts/build-icu.sh)
 #                   and m68k-amigaos/, the libraries from the OpenAmiga ports
 #                   (cairo and pixman, FreeType, HarfBuzz, fontconfig, Expat,
-#                   libxml2, SQLite, curl, libpsl, zlib, libpng) in one prefix.
+#                   SQLite, curl, libpsl, zlib, libpng) in one prefix, with
+#                   OXP, the XML parser (openamigaxml's oxp/build-amiga.sh with
+#                   OUT set to that prefix; WebKit patch 0030).
 #                   Its curl must be openamigacurl's main branch, built on
 #                   OpenTLS (opentls.library): WebCore links no OpenSSL and no
 #                   AmiSSL SDK is used (WebKit patch 0022). openamigacurl

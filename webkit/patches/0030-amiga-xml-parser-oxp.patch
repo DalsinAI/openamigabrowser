@@ -1,0 +1,1729 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 22:31:24 +0100
+Subject: [PATCH] Amiga port: XML through OXP, the Open XML Parser, in place of
+ libxml2
+
+USE(OXP) (on for the Amiga port) builds XMLDocumentParserOXP.cpp in place of
+XMLDocumentParserLibxml2.cpp and links OXP (DalsinAI/openamigaxml, oxp/)
+instead of libxml2. The new file is the libxml2 one with the parser's
+creation, feeding, stopping, position, entities and errors moved onto OXP.
+XMLDocumentParserOXPBridge.h passes OXP's events to XMLDocumentParser in
+libxml2's shapes, so its tree building is unchanged. The bridge is tested
+on its own against libxml2's events.
+
+- Entities: XHTML documents get the HTML named character references through
+  OXP's resolve_entity. maximumXMLParserEntityExpansionCount becomes OXP's
+  max_entity_refs.
+- No external entity or DTD is loaded; libxml2 loaded same-origin ones.
+- XSLT and EME (both need libxml2) stop the configure with USE(OXP).
+---
+ Source/WebCore/CMakeLists.txt                 |    6 +-
+ Source/WebCore/PlatformAmiga.cmake            |    3 +
+ Source/WebCore/xml/XMLErrors.h                |    2 +
+ Source/WebCore/xml/parser/XMLDocumentParser.h |   57 +
+ .../xml/parser/XMLDocumentParserLibxml2.cpp   |    6 +
+ .../xml/parser/XMLDocumentParserOXP.cpp       | 1117 +++++++++++++++++
+ .../xml/parser/XMLDocumentParserOXPBridge.h   |  213 ++++
+ .../xml/parser/XMLDocumentParserScope.cpp     |    5 +
+ Source/cmake/FindOXP.cmake                    |   84 ++
+ Source/cmake/OptionsAmiga.cmake               |   10 +-
+ 10 files changed, 1501 insertions(+), 2 deletions(-)
+ create mode 100644 Source/WebCore/xml/parser/XMLDocumentParserOXP.cpp
+ create mode 100644 Source/WebCore/xml/parser/XMLDocumentParserOXPBridge.h
+ create mode 100644 Source/cmake/FindOXP.cmake
+
+diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
+index 7437ec8..39590d3 100644
+--- a/Source/WebCore/CMakeLists.txt
++++ b/Source/WebCore/CMakeLists.txt
+@@ -2248,10 +2248,14 @@ set(WebCore_USER_AGENT_STYLE_SHEETS
+ 
+ set(WebCore_LIBRARIES
+     ICU::uc
+-    LibXml2::LibXml2
+     SQLite3::SQLite3
+     ZLIB::ZLIB
+ )
++if (USE_OXP)
++    list(APPEND WebCore_LIBRARIES OXP::OXP)
++else ()
++    list(APPEND WebCore_LIBRARIES LibXml2::LibXml2)
++endif ()
+ set(WebCore_FRAMEWORKS
+     JavaScriptCore
+     PAL
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index be2f0fc..935faac 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -81,6 +81,9 @@ list(APPEND WebCore_SOURCES
+     platform/text/LocaleICU.cpp
+ 
+     platform/unix/LoggingUnix.cpp
++
++    # XML through OXP (USE_OXP) in place of libxml2.
++    xml/parser/XMLDocumentParserOXP.cpp
+ )
+ 
+ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+diff --git a/Source/WebCore/xml/XMLErrors.h b/Source/WebCore/xml/XMLErrors.h
+index 5a1cd9f..7890bd4 100644
+--- a/Source/WebCore/xml/XMLErrors.h
++++ b/Source/WebCore/xml/XMLErrors.h
+@@ -28,7 +28,9 @@
+ 
+ #pragma once
+ 
++#if !USE(OXP)
+ #include <libxml/parser.h>
++#endif
+ #include <wtf/CheckedRef.h>
+ #include <wtf/TZoneMalloc.h>
+ #include <wtf/text/StringBuilder.h>
+diff --git a/Source/WebCore/xml/parser/XMLDocumentParser.h b/Source/WebCore/xml/parser/XMLDocumentParser.h
+index 6283421..6c9a182 100644
+--- a/Source/WebCore/xml/parser/XMLDocumentParser.h
++++ b/Source/WebCore/xml/parser/XMLDocumentParser.h
+@@ -29,8 +29,13 @@
+ #include "ScriptableDocumentParser.h"
+ #include "SegmentedString.h"
+ #include "XMLErrors.h"
++#if USE(OXP)
++#include "XMLDocumentParserOXPBridge.h"
++#include <array>
++#else
+ #include <libxml/tree.h>
+ #include <libxml/xmlstring.h>
++#endif
+ #include <wtf/CheckedRef.h>
+ #include <wtf/HashMap.h>
+ #include <wtf/TZoneMalloc.h>
+@@ -45,7 +50,31 @@ class DocumentFragment;
+ class Element;
+ class PendingCallbacks;
+ class Text;
++class XMLDocumentParser;
++#if USE(OXP)
++struct XMLDocumentParserProtector; // keeps the parser alive during each OXP callback
++#endif
++
++#if USE(OXP)
++// OXP passes the parser libxml2's shapes (OXPBridge), so the SAX methods
++// below keep their libxml2 types under this name.
++using xmlChar = OXPBridge::Char;
++
++class XMLParserContext : public RefCounted<XMLParserContext> {
++public:
++    // A fragment (createMemoryParser) or a document fed in pieces of UTF-16 (createStringParser).
++    static Ref<XMLParserContext> createMemoryParser(XMLDocumentParser&);
++    static Ref<XMLParserContext> createStringParser(XMLDocumentParser&);
++    XMLParserContext() = delete;
++    ~XMLParserContext();
++    oxp_parser* context() const LIFETIME_BOUND { return m_parser; }
+ 
++private:
++    XMLParserContext(XMLDocumentParser&, unsigned options, oxp_encoding);
++    std::unique_ptr<OXPBridge::Bridge<XMLDocumentParser, XMLDocumentParserProtector>> m_bridge;
++    oxp_parser* m_parser { nullptr };
++};
++#else
+ class XMLParserContext : public RefCounted<XMLParserContext> {
+ public:
+     static RefPtr<XMLParserContext> createMemoryParser(xmlSAXHandlerPtr, void* userData, const UTF8CString& chunk);
+@@ -61,6 +90,7 @@ private:
+     }
+     xmlParserCtxtPtr m_context;
+ };
++#endif
+ 
+ class XMLDocumentParser final : public ScriptableDocumentParser, public PendingScriptClient, public CanMakeCheckedPtr<XMLDocumentParser> {
+     WTF_MAKE_TZONE_ALLOCATED(XMLDocumentParser);
+@@ -128,7 +158,12 @@ public:
+     // Callbacks from parser SAX, and other functions needed inside
+     // the parser implementation, but outside this class.
+ 
++#if USE(OXP)
++    void reportError(OXPBridge::ErrorType, const char* message, unsigned long line, unsigned long column);
++    const char* resolveEntity(const char* name);
++#else
+     void error(XMLErrors::Type, const char* message, va_list args) WTF_ATTRIBUTE_PRINTF(3, 0);
++#endif
+     void startElementNs(const xmlChar* xmlLocalName, const xmlChar* xmlPrefix, const xmlChar* xmlURI,
+         int numNamespaces, const xmlChar** namespaces,
+         int numAttributes, int numDefaulted, const xmlChar** libxmlAttributes);
+@@ -140,13 +175,22 @@ public:
+     void startDocument(const xmlChar* version, const xmlChar* encoding, int standalone);
+     void internalSubset(const xmlChar* name, const xmlChar* externalID, const xmlChar* systemID);
+     void endDocument();
++#if !USE(OXP)
+     xmlEntityPtr getEntity(const xmlChar* name);
+     void entityDecl(const xmlChar* name, int type, const xmlChar* publicId, const xmlChar* systemId, xmlChar* content);
++#endif
++
++#if USE(OXP)
++    uint64_t maxEntityExpansionCount() const { return m_maxEntityExpansionCount; }
++    bool isParsingFragment() const { return m_parsingFragment; }
++#endif
+ 
+ private:
+     void initializeParserContext(const UTF8CString& chunk = UTF8CString());
++#if !USE(OXP)
+     void flushDeferredEntityDeclarations();
+     uint64_t computeTransitiveEntityReferenceCount(const AtomString& name, const HashMap<AtomString, String>& entityContents, HashSet<AtomString>& visiting);
++#endif
+ 
+     void pushCurrentNode(ContainerNode*);
+     void popCurrentNode();
+@@ -160,7 +204,11 @@ private:
+     void doWrite(String&&);
+     void doEnd();
+ 
++#if USE(OXP)
++    oxp_parser* context() const { return m_context ? m_context->context() : nullptr; };
++#else
+     xmlParserCtxtPtr context() const { return m_context ? m_context->context() : nullptr; };
++#endif
+ 
+     IsInFrameView m_isInFrameView { IsInFrameView::No };
+ 
+@@ -186,6 +234,12 @@ private:
+ 
+     const uint64_t m_maxEntityExpansionCount;
+ 
++#if USE(OXP)
++    // An XHTML named character reference's replacement text, for OXP (resolveEntity).
++    std::array<char, 16> m_xhtmlEntityText { };
++    // The fragment being parsed (appendFragmentSource), kept while OXP reads it.
++    UTF8CString m_fragmentSource;
++#else
+     struct DeferredEntityDeclaration {
+         String name;
+         int type;
+@@ -196,6 +250,7 @@ private:
+     Vector<DeferredEntityDeclaration> m_deferredEntityDeclarations;
+     bool m_deferredEntityDeclarationsFlushed { false };
+     HashMap<AtomString, uint64_t> m_entityTransitiveReferenceCounts;
++#endif
+ 
+     const std::unique_ptr<XMLErrors> m_xmlErrors;
+ 
+@@ -215,8 +270,10 @@ private:
+ xmlDocPtr xmlDocPtrForString(CachedResourceLoader&, const String& source, const String& url);
+ #endif
+ 
++#if !USE(OXP)
+ xmlParserInputPtr externalEntityLoader(const char* url, const char* id, xmlParserCtxtPtr);
+ void initializeXMLParser();
++#endif
+ 
+ std::optional<HashMap<String, String>> parseAttributes(CachedResourceLoader&, const String&);
+ 
+diff --git a/Source/WebCore/xml/parser/XMLDocumentParserLibxml2.cpp b/Source/WebCore/xml/parser/XMLDocumentParserLibxml2.cpp
+index 7c020ee..8fcb5a7 100644
+--- a/Source/WebCore/xml/parser/XMLDocumentParserLibxml2.cpp
++++ b/Source/WebCore/xml/parser/XMLDocumentParserLibxml2.cpp
+@@ -26,6 +26,10 @@
+  */
+ 
+ #include "config.h"
++
++// The libxml2 backend. With USE(OXP), XMLDocumentParserOXP.cpp takes its place.
++#if !USE(OXP)
++
+ #include "XMLDocumentParser.h"
+ 
+ #include "CDATASection.h"
+@@ -1743,3 +1747,5 @@ std::optional<HashMap<String, String>> parseAttributes(CachedResourceLoader& cac
+ }
+ 
+ }
++
++#endif // !USE(OXP)
+diff --git a/Source/WebCore/xml/parser/XMLDocumentParserOXP.cpp b/Source/WebCore/xml/parser/XMLDocumentParserOXP.cpp
+new file mode 100644
+index 0000000..b974778
+--- /dev/null
++++ b/Source/WebCore/xml/parser/XMLDocumentParserOXP.cpp
+@@ -0,0 +1,1117 @@
++/*
++ * Copyright (C) 2000 Peter Kelly <pmk@post.com>
++ * Copyright (C) 2005-2025 Apple Inc. All rights reserved.
++ * Copyright (C) 2006 Alexey Proskuryakov <ap@webkit.org>
++ * Copyright (C) 2007 Samuel Weinig <sam@webkit.org>
++ * Copyright (C) 2008 Nokia Corporation and/or its subsidiary(-ies)
++ * Copyright (C) 2008 Holger Hans Peter Freyther
++ * Copyright (C) 2008, 2009 Torch Mobile Inc. All rights reserved. (http://www.torchmobile.com/)
++ * Copyright (C) 2010 Patrick Gansterer <paroga@paroga.com>
++ * Copyright (C) 2013 Samsung Electronics. All rights reserved.
++ * Copyright (C) 2026 AmigaChrome Team (the OXP backend: XMLDocumentParserLibxml2.cpp
++ *               moved onto OXP, the Open XML Parser, DalsinAI/openamigaxml)
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Library General Public
++ * License as published by the Free Software Foundation; either
++ * version 2 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Library General Public License for more details.
++ *
++ * You should have received a copy of the GNU Library General Public License
++ * along with this library; see the file COPYING.LIB.  If not, write to
++ * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
++ * Boston, MA 02110-1301, USA.
++ */
++
++#include "config.h"
++
++// XMLDocumentParser over OXP, the Open XML Parser, in place of libxml2
++// (XMLDocumentParserLibxml2.cpp). OXP's events come through OXPBridge in
++// libxml2's shapes, so the tree building below is the libxml2 file's, as it
++// was; what changed is how the parser is made, fed, stopped and asked where
++// it is, and how entities and errors arrive. OXP never loads an external
++// entity or DTD (libxml2 loaded same-origin ones), and there is no XSLT.
++#if USE(OXP)
++
++#if ENABLE(XSLT)
++#error "XSLT needs libxml2 and libxslt: build without USE(OXP), or turn XSLT off"
++#endif
++
++#include "XMLDocumentParser.h"
++
++#include "CDATASection.h"
++#include "Comment.h"
++#include "CommonAtomStrings.h"
++#include "CustomElementReactionQueue.h"
++#include "CustomElementRegistry.h"
++#include "Document.h"
++#include "DocumentEventLoop.h"
++#include "DocumentFragment.h"
++#include "DocumentInlines.h"
++#include "DocumentResourceLoader.h"
++#include "DocumentSecurityOrigin.h"
++#include "DocumentType.h"
++#include "ElementInlines.h"
++#include "EventLoop.h"
++#include "FrameConsoleClient.h"
++#include "FrameDestructionObserverInlines.h"
++#include "FrameLoader.h"
++#include "HTMLEntityParser.h"
++#include "HTMLHtmlElement.h"
++#include "HTMLTemplateElement.h"
++#include "HTTPParsers.h"
++#include "InlineClassicScript.h"
++#include "LocalDOMWindow.h"
++#include "LocalFrame.h"
++#include "MIMETypeRegistry.h"
++#include "NameValidation.h"
++#include "NodeDocument.h"
++#include "NodeInlines.h"
++#include "OriginAccessPatterns.h"
++#include "Page.h"
++#include "PendingScript.h"
++#include "ProcessingInstruction.h"
++#include "ResourceError.h"
++#include "ResourceResponse.h"
++#include "ScriptElement.h"
++#include "ScriptSourceCode.h"
++#include "Settings.h"
++#include "SharedBuffer.h"
++#include "StyleScope.h"
++#include "TemplateContentDocumentFragment.h"
++#include "TextResourceDecoder.h"
++#include "ThrowOnDynamicMarkupInsertionCountIncrementer.h"
++#include "TransformSource.h"
++#include "UserScriptTypes.h"
++#include "XMLNSNames.h"
++#include <limits>
++#include <oxp.h>
++#include <wtf/MallocSpan.h>
++#include <wtf/StdLibExtras.h>
++#include <wtf/TZoneMallocInlines.h>
++#include <wtf/text/AtomString.h>
++#include <wtf/text/MakeString.h>
++#include <wtf/unicode/CharacterNames.h>
++#include <wtf/unicode/UTF8Conversion.h>
++
++namespace WebCore {
++
++// libxml2's xmlStrdup, xmlStrndup and xmlFree, for the queued callbacks' copies.
++static xmlChar* copyString(const xmlChar* string, size_t length)
++{
++    auto* copy = static_cast<xmlChar*>(fastMalloc(length + 1));
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
++    memcpy(copy, string, length);
++    copy[length] = 0;
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
++    return copy;
++}
++
++static xmlChar* xmlStrdup(const xmlChar* string)
++{
++    return string ? copyString(string, strlen(byteCast<char>(string))) : nullptr;
++}
++
++static xmlChar* xmlStrndup(const xmlChar* string, int length)
++{
++    return string ? copyString(string, static_cast<size_t>(length)) : nullptr;
++}
++
++static void xmlFree(void* p)
++{
++    fastFree(p);
++}
++
++static std::span<xmlChar> unsafeSpanIncludingNullTerminator(xmlChar* string)
++{
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
++    return unsafeMakeSpan(string, string ? strlen(byteCast<char>(string)) + 1 : 0);
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
++}
++
++class PendingCallbacks {
++    WTF_MAKE_TZONE_ALLOCATED_INLINE(PendingCallbacks);
++public:
++    void appendStartElementNSCallback(const xmlChar* xmlLocalName, const xmlChar* xmlPrefix, const xmlChar* xmlURI, int numNamespaces, const xmlChar** rawNamespaces, int numAttributes, int numDefaulted, const xmlChar** rawAttributes)
++    {
++        auto namespaces = unsafeMakeSpan(rawNamespaces, numNamespaces * 2);
++        auto attributes = unsafeMakeSpan(rawAttributes, numAttributes * 5);
++        auto callback = makeUnique<PendingStartElementNSCallback>();
++
++        callback->xmlLocalName = xmlStrdup(xmlLocalName);
++        callback->xmlPrefix = xmlStrdup(xmlPrefix);
++        callback->xmlURI = xmlStrdup(xmlURI);
++        callback->numNamespaces = numNamespaces;
++        callback->namespaces = MallocSpan<xmlChar*>::malloc(sizeof(xmlChar*) * numNamespaces * 2);
++        for (int i = 0; i < numNamespaces * 2 ; ++i)
++            callback->namespaces[i] = xmlStrdup(namespaces[i]);
++        callback->numAttributes = numAttributes;
++        callback->numDefaulted = numDefaulted;
++        callback->attributes = MallocSpan<xmlChar*>::malloc(sizeof(xmlChar*) * numAttributes * 5);
++        for (int i = 0; i < numAttributes; ++i) {
++            // Each attribute has 5 elements in the array:
++            // name, prefix, uri, value and an end pointer.
++
++            for (int j = 0; j < 3; ++j)
++                callback->attributes[i * 5 + j] = xmlStrdup(attributes[i * 5 + j]);
++
++            int len = attributes[i * 5 + 4] - attributes[i * 5 + 3];
++
++            callback->attributes[i * 5 + 3] = xmlStrndup(attributes[i * 5 + 3], len);
++            callback->attributes[i * 5 + 4] = unsafeSpanIncludingNullTerminator(callback->attributes[i * 5 + 3]).subspan(len).data();
++        }
++
++        m_callbacks.append(WTF::move(callback));
++    }
++
++    void appendEndElementNSCallback()
++    {
++        m_callbacks.append(makeUnique<PendingEndElementNSCallback>());
++    }
++
++    void appendCharactersCallback(std::span<const xmlChar> s)
++    {
++        auto callback = makeUnique<PendingCharactersCallback>();
++
++        callback->s = MallocSpan<xmlChar>::malloc(s.size());
++        memcpySpan(callback->s.mutableSpan(), s);
++
++        m_callbacks.append(WTF::move(callback));
++    }
++
++    void appendProcessingInstructionCallback(const xmlChar* target, const xmlChar* data)
++    {
++        auto callback = makeUnique<PendingProcessingInstructionCallback>();
++
++        callback->target = xmlStrdup(target);
++        callback->data = xmlStrdup(data);
++
++        m_callbacks.append(WTF::move(callback));
++    }
++
++    void appendCDATABlockCallback(std::span<const xmlChar> s)
++    {
++        auto callback = makeUnique<PendingCDATABlockCallback>();
++        callback->s = MallocSpan<xmlChar>::malloc(s.size());
++        memcpySpan(callback->s.mutableSpan(), s);
++
++        m_callbacks.append(WTF::move(callback));
++    }
++
++    void appendCommentCallback(const xmlChar* s)
++    {
++        auto callback = makeUnique<PendingCommentCallback>();
++
++        callback->s = xmlStrdup(s);
++
++        m_callbacks.append(WTF::move(callback));
++    }
++
++    void appendInternalSubsetCallback(const xmlChar* name, const xmlChar* externalID, const xmlChar* systemID)
++    {
++        auto callback = makeUnique<PendingInternalSubsetCallback>();
++
++        callback->name = xmlStrdup(name);
++        callback->externalID = xmlStrdup(externalID);
++        callback->systemID = xmlStrdup(systemID);
++
++        m_callbacks.append(WTF::move(callback));
++    }
++
++    void appendErrorCallback(XMLErrors::Type type, const xmlChar* message, OrdinalNumber lineNumber, OrdinalNumber columnNumber)
++    {
++        auto callback = makeUnique<PendingErrorCallback>();
++
++        callback->message = xmlStrdup(message);
++        callback->type = type;
++        callback->lineNumber = lineNumber;
++        callback->columnNumber = columnNumber;
++
++        m_callbacks.append(WTF::move(callback));
++    }
++
++    void callAndRemoveFirstCallback(XMLDocumentParser* parser)
++    {
++        std::unique_ptr<PendingCallback> callback = m_callbacks.takeFirst();
++        callback->call(parser);
++    }
++
++    bool NODELETE isEmpty() const { return m_callbacks.isEmpty(); }
++
++private:
++    struct PendingCallback {
++        WTF_DEPRECATED_MAKE_STRUCT_FAST_ALLOCATED(PendingCallback);
++        virtual ~PendingCallback() = default;
++        virtual void call(XMLDocumentParser* parser) = 0;
++    };
++
++    struct PendingStartElementNSCallback : public PendingCallback {
++        virtual ~PendingStartElementNSCallback()
++        {
++            xmlFree(xmlLocalName);
++            xmlFree(xmlPrefix);
++            xmlFree(xmlURI);
++            for (int i = 0; i < numNamespaces * 2; i++)
++                xmlFree(namespaces[i]);
++            for (int i = 0; i < numAttributes; i++) {
++                for (int j = 0; j < 4; j++)
++                    xmlFree(attributes[i * 5 + j]);
++            }
++        }
++
++        void call(XMLDocumentParser* parser) override
++        {
++            parser->startElementNs(xmlLocalName, xmlPrefix, xmlURI, numNamespaces, const_cast<const xmlChar**>(namespaces.span().data()), numAttributes, numDefaulted, const_cast<const xmlChar**>(attributes.span().data()));
++        }
++
++        xmlChar* xmlLocalName;
++        xmlChar* xmlPrefix;
++        xmlChar* xmlURI;
++        int numNamespaces;
++        MallocSpan<xmlChar*> namespaces;
++        int numAttributes;
++        int numDefaulted;
++        MallocSpan<xmlChar*> attributes;
++    };
++
++    struct PendingEndElementNSCallback : public PendingCallback {
++        void call(XMLDocumentParser* parser) override
++        {
++            parser->endElementNs();
++        }
++    };
++
++    struct PendingCharactersCallback : public PendingCallback {
++        void call(XMLDocumentParser* parser) override
++        {
++            parser->characters(s.span());
++        }
++
++        MallocSpan<xmlChar> s;
++    };
++
++    struct PendingProcessingInstructionCallback : public PendingCallback {
++        virtual ~PendingProcessingInstructionCallback()
++        {
++            xmlFree(target);
++            xmlFree(data);
++        }
++
++        void call(XMLDocumentParser* parser) override
++        {
++            parser->processingInstruction(target, data);
++        }
++
++        xmlChar* target;
++        xmlChar* data;
++    };
++
++    struct PendingCDATABlockCallback : public PendingCallback {
++        void call(XMLDocumentParser* parser) override
++        {
++            parser->cdataBlock(s.span());
++        }
++
++        MallocSpan<xmlChar> s;
++    };
++
++    struct PendingCommentCallback : public PendingCallback {
++        virtual ~PendingCommentCallback()
++        {
++            xmlFree(s);
++        }
++
++        void call(XMLDocumentParser* parser) override
++        {
++            parser->comment(s);
++        }
++
++        xmlChar* s;
++    };
++
++    struct PendingInternalSubsetCallback : public PendingCallback {
++        virtual ~PendingInternalSubsetCallback()
++        {
++            xmlFree(name);
++            xmlFree(externalID);
++            xmlFree(systemID);
++        }
++
++        void call(XMLDocumentParser* parser) override
++        {
++            parser->internalSubset(name, externalID, systemID);
++        }
++
++        xmlChar* name;
++        xmlChar* externalID;
++        xmlChar* systemID;
++    };
++
++    struct PendingErrorCallback: public PendingCallback {
++        virtual ~PendingErrorCallback()
++        {
++            xmlFree(message);
++        }
++
++        void call(XMLDocumentParser* parser) override
++        {
++            parser->handleError(type, reinterpret_cast<char*>(message), TextPosition(lineNumber, columnNumber));
++        }
++
++        XMLErrors::Type type;
++        xmlChar* message;
++        OrdinalNumber lineNumber;
++        OrdinalNumber columnNumber;
++    };
++
++    Deque<std::unique_ptr<PendingCallback>> m_callbacks;
++};
++// --------------------------------
++
++static inline void setAttributes(Element* element, Vector<Attribute>& attributeVector, OptionSet<ParserContentPolicy> parserContentPolicy)
++{
++    if (!scriptingContentIsAllowed(parserContentPolicy))
++        element->stripScriptingAttributes(attributeVector);
++    element->parserSetAttributes(attributeVector.span());
++}
++
++// The pieces WebKit feeds are UTF-16 in the CPU's byte order, whatever the
++// document's XML declaration says (the declaration has been read already, by
++// the text decoder).
++static oxp_encoding nativeUTF16()
++{
++    const unsigned char byteOrderMarkHighByte = *reinterpret_cast<const unsigned char*>(&byteOrderMark);
++    return byteOrderMarkHighByte == 0xFF ? OXP_ENC_UTF16LE : OXP_ENC_UTF16BE;
++}
++
++struct XMLDocumentParserProtector {
++    explicit XMLDocumentParserProtector(XMLDocumentParser& parser)
++        : protectedParser(parser)
++    {
++    }
++    Ref<XMLDocumentParser> protectedParser;
++};
++
++using OXPParserBridge = OXPBridge::Bridge<XMLDocumentParser, XMLDocumentParserProtector>;
++
++XMLParserContext::XMLParserContext(XMLDocumentParser& parser, unsigned options, oxp_encoding encoding)
++    : m_bridge(std::make_unique<OXPParserBridge>(parser))
++{
++    m_parser = oxp_new(&OXPParserBridge::handler(), m_bridge.get(), nullptr);
++    RELEASE_ASSERT(m_parser);
++    // An undeclared prefix is an error the parse goes on from, with no
++    // namespace, as with libxml2; startElementNs fills it in for a fragment.
++    oxp_set_options(m_parser, options | OXP_OPT_UNBOUND_PREFIX);
++    if (encoding != OXP_ENC_AUTO)
++        oxp_set_encoding(m_parser, encoding);
++    // WebKit's entity limit (maximumXMLParserEntityExpansionCount): the
++    // references expanded inside one entity reference's text.
++    oxp_limits limits { };
++    limits.max_entity_refs = static_cast<unsigned long>(std::clamp<uint64_t>(parser.maxEntityExpansionCount(), 1, std::numeric_limits<unsigned long>::max()));
++    oxp_set_limits(m_parser, &limits);
++}
++
++Ref<XMLParserContext> XMLParserContext::createStringParser(XMLDocumentParser& parser)
++{
++    return adoptRef(*new XMLParserContext(parser, OXP_OPT_IGNORE_DECL_ENCODING, nativeUTF16()));
++}
++
++// A fragment, fed whole in UTF-8 (appendFragmentSource).
++Ref<XMLParserContext> XMLParserContext::createMemoryParser(XMLDocumentParser& parser)
++{
++    return adoptRef(*new XMLParserContext(parser, OXP_OPT_FRAGMENT | OXP_OPT_IGNORE_DECL_ENCODING, OXP_ENC_UTF8));
++}
++
++XMLParserContext::~XMLParserContext()
++{
++    oxp_free(m_parser);
++}
++
++// --------------------------------
++
++bool XMLDocumentParser::supportsXMLVersion(const String& version)
++{
++    return version == "1.0"_s;
++}
++
++XMLDocumentParser::XMLDocumentParser(Document& document, IsInFrameView isInFrameView, OptionSet<ParserContentPolicy> policy)
++    : ScriptableDocumentParser(document, policy)
++    , m_isInFrameView(isInFrameView)
++    , m_pendingCallbacks(makeUniqueRef<PendingCallbacks>())
++    , m_currentNode(&document)
++    , m_maxEntityExpansionCount(document.settings().maximumXMLParserEntityExpansionCount())
++    , m_scriptStartPosition(TextPosition::belowRangePosition())
++{
++}
++
++XMLDocumentParser::XMLDocumentParser(DocumentFragment& fragment, HashMap<AtomString, AtomString>&& prefixToNamespaceMap, const AtomString& defaultNamespaceURI, OptionSet<ParserContentPolicy> parserContentPolicy)
++    : ScriptableDocumentParser(fragment.document(), parserContentPolicy)
++    , m_pendingCallbacks(makeUniqueRef<PendingCallbacks>())
++    , m_currentNode(&fragment)
++    , m_maxEntityExpansionCount(fragment.document().settings().maximumXMLParserEntityExpansionCount())
++    , m_scriptStartPosition(TextPosition::belowRangePosition())
++    , m_parsingFragment(true)
++    , m_prefixToNamespaceMap(WTF::move(prefixToNamespaceMap))
++    , m_defaultNamespaceURI(defaultNamespaceURI)
++{
++    fragment.ref();
++}
++
++XMLDocumentParser::~XMLDocumentParser()
++{
++    // The XMLDocumentParser will always be detached before being destroyed.
++    ASSERT(m_currentNodeStack.isEmpty());
++    ASSERT(!m_currentNode);
++
++    // FIXME: m_pendingScript handling should be moved into XMLDocumentParser.cpp!
++    if (RefPtr pendingScript = m_pendingScript)
++        pendingScript->clearClient();
++
++    m_scriptWaitingForStylesheets = nullptr;
++}
++
++void XMLDocumentParser::doWrite(String&& parseString)
++{
++    ASSERT(!isDetached());
++    if (!m_context)
++        initializeParserContext();
++
++    // Protect the parser context from deletion during a callback
++    RefPtr<XMLParserContext> context = m_context;
++
++    // Lone surrogates are not valid XML characters, so the parser would reject the
++    // whole document. Replace them with U+FFFD to do a best-effort parse instead
++    // (matching Firefox and Blink). See https://crbug.com/40814739.
++    String sanitizedString = replaceUnpairedSurrogatesWithReplacementCharacter(WTF::move(parseString));
++
++    if (sanitizedString.length()) {
++        // JavaScript may cause the parser to detach during oxp_parse
++        // keep this alive until this function is done.
++        Ref<XMLDocumentParser> protectedThis(*this);
++
++        // FIXME: Can we parse 8-bit strings directly as Latin-1 instead of upconverting to UTF-16?
++        oxp_parse(context->context(), reinterpret_cast<const char*>(StringView(sanitizedString).upconvertedCharacters().get()), sizeof(char16_t) * sanitizedString.length(), 0);
++
++        // JavaScript (which may be run under the oxp_parse callstack) may
++        // cause the parser to be stopped or detached.
++        if (isStopped())
++            return;
++    }
++
++    // FIXME: Why is this here?  And why is it after we process the passed source?
++    if (document()->decoder() && document()->decoder()->sawError()) {
++        // If the decoder saw an error, report it as fatal (stops parsing)
++        handleError(XMLErrors::Type::Fatal, "Encoding error", textPosition());
++    }
++}
++
++static inline String toString(std::span<const xmlChar> string)
++{
++    return String::fromUTF8(byteCast<char>(string));
++}
++
++static inline String toString(const xmlChar* string)
++{
++    return String::fromUTF8(byteCast<char>(string));
++}
++
++static inline AtomString toAtomString(std::span<const xmlChar> string)
++{
++    return AtomString::fromUTF8(byteCast<char>(string));
++}
++
++static inline AtomString toAtomString(const xmlChar* string)
++{
++    return AtomString::fromUTF8(byteCast<char>(string));
++}
++
++struct _xmlSAX2Namespace {
++    const xmlChar* prefix;
++    const xmlChar* uri;
++};
++typedef struct _xmlSAX2Namespace xmlSAX2Namespace;
++
++static inline bool handleNamespaceAttributes(Vector<Attribute>& prefixedAttributes, std::span<xmlSAX2Namespace> namespaces, bool& shouldUseNullCustomElementRegistry)
++{
++    for (auto& xmlNamespace : namespaces) {
++        AtomString namespaceQName = xmlnsAtom();
++        AtomString namespaceURI = toAtomString(xmlNamespace.uri);
++        if (xmlNamespace.prefix)
++            namespaceQName = makeAtomString("xmlns:"_s, toString(xmlNamespace.prefix));
++
++        auto parseResult = NameValidation::parseQualifiedAttributeName(XMLNSNames::xmlnsNamespaceURI, namespaceQName);
++        if (parseResult.hasException())
++            return false;
++        QualifiedName attributeName { parseResult.releaseReturnValue() };
++        if (!NameValidation::hasValidNamespaceForAttributes(attributeName))
++            return false;
++        if (attributeName == HTMLNames::customelementregistryAttr)
++            shouldUseNullCustomElementRegistry = true;
++
++        prefixedAttributes.append(Attribute(attributeName, namespaceURI));
++    }
++    return true;
++}
++
++struct _xmlSAX2Attributes {
++    const xmlChar* localname;
++    const xmlChar* prefix;
++    const xmlChar* uri;
++    const xmlChar* value;
++    const xmlChar* end;
++};
++typedef struct _xmlSAX2Attributes xmlSAX2Attributes;
++
++static inline bool handleElementAttributes(Vector<Attribute>& prefixedAttributes, const xmlChar** libxmlAttributes, int numAttributes, bool& shouldUseNullCustomElementRegistry)
++{
++    auto attributes = unsafeMakeSpan(reinterpret_cast<xmlSAX2Attributes*>(libxmlAttributes), numAttributes);
++    for (auto& attribute : attributes) {
++        size_t valueLength = static_cast<size_t>(attribute.end - attribute.value);
++        AtomString attrValue = toAtomString(unsafeMakeSpan(attribute.value, valueLength));
++        String attrPrefix = toString(attribute.prefix);
++        AtomString attrURI = attrPrefix.isEmpty() ? nullAtom() : toAtomString(attribute.uri);
++        AtomString attrQName = attrPrefix.isEmpty() ? toAtomString(attribute.localname) : makeAtomString(attrPrefix, ':', toString(attribute.localname));
++
++        auto parseResult = NameValidation::parseQualifiedAttributeName(attrURI, attrQName);
++        if (parseResult.hasException())
++            return false;
++        QualifiedName attributeName { parseResult.releaseReturnValue() };
++        if (!NameValidation::hasValidNamespaceForAttributes(attributeName))
++            return false;
++        if (attributeName == HTMLNames::customelementregistryAttr)
++            shouldUseNullCustomElementRegistry = true;
++
++        prefixedAttributes.append(Attribute(attributeName, attrValue));
++    }
++    return true;
++}
++
++void XMLDocumentParser::startElementNs(const xmlChar* xmlLocalName, const xmlChar* xmlPrefix, const xmlChar* xmlURI, int numNamespaces, const xmlChar** libxmlNamespaces, int numAttributes, int numDefaulted, const xmlChar** libxmlAttributes)
++{
++    if (isStopped())
++        return;
++
++    if (m_parserPaused) {
++        m_pendingCallbacks->appendStartElementNSCallback(xmlLocalName, xmlPrefix, xmlURI, numNamespaces, libxmlNamespaces, numAttributes, numDefaulted, libxmlAttributes);
++        return;
++    }
++
++    if (!updateLeafTextNode())
++        return;
++
++    AtomString localName = toAtomString(xmlLocalName);
++    AtomString uri = toAtomString(xmlURI);
++    AtomString prefix = toAtomString(xmlPrefix);
++    RefPtr currentNode = *m_currentNode;
++    RefPtr document = currentNode->document();
++    auto namespaces = unsafeMakeSpan(reinterpret_cast<xmlSAX2Namespace*>(libxmlNamespaces), numNamespaces);
++
++    if (m_parsingFragment && uri.isNull()) {
++        uri = [&] -> AtomString {
++            if (!prefix.isNull())
++                return m_prefixToNamespaceMap.get(prefix);
++
++            // libxml2 reports null URI both for "no namespace" and explicit xmlns=""; preserve the latter.
++            for (auto& xmlNamespace : namespaces) {
++                if (!xmlNamespace.prefix)
++                    return nullAtom();
++            }
++
++            RefPtr<const Node> ancestorNode = currentNode;
++            while (ancestorNode) {
++                if (RefPtr ancestor = dynamicDowncast<Element>(ancestorNode)) {
++                    if (!ancestor->namespaceURI().isNull() && ancestor->prefix().isNull())
++                        return ancestor->namespaceURI();
++                    auto& xmlnsValue = ancestor->attributeWithoutSynchronization(XMLNSNames::xmlnsAttr);
++                    if (!xmlnsValue.isNull())
++                        return xmlnsValue.isEmpty() ? nullAtom() : xmlnsValue;
++                    ancestorNode = ancestor->parentNode();
++                } else if (RefPtr templateContent = dynamicDowncast<TemplateContentDocumentFragment>(ancestorNode))
++                    ancestorNode = templateContent->host();
++                else
++                    break;
++            }
++            return m_defaultNamespaceURI;
++        }();
++    }
++
++    bool isFirstElement = !m_sawFirstElement;
++    m_sawFirstElement = true;
++
++    QualifiedName qName(prefix, localName, uri);
++
++    bool willConstructCustomElement = false;
++    if (!m_parsingFragment) {
++        if (RefPtr window = document->window()) {
++            if (RefPtr registry = window->customElementRegistry(); registry) [[unlikely]]
++                willConstructCustomElement = registry->findInterface(qName);
++        }
++    }
++
++    std::optional<ThrowOnDynamicMarkupInsertionCountIncrementer> markupInsertionCountIncrementer;
++    std::optional<CustomElementReactionStack> customElementReactionStack;
++
++    if (willConstructCustomElement) [[unlikely]] {
++        markupInsertionCountIncrementer.emplace(*document);
++        protect(document->eventLoop())->performMicrotaskCheckpoint(document->vm());
++        customElementReactionStack.emplace(document->globalObject());
++    }
++
++    Vector<Attribute> prefixedAttributes;
++    bool shouldUseNullCustomElementRegistry = false;
++    bool handledAttributes = handleNamespaceAttributes(prefixedAttributes, namespaces, shouldUseNullCustomElementRegistry);
++    bool success = handledAttributes ? handleElementAttributes(prefixedAttributes, libxmlAttributes, numAttributes, shouldUseNullCustomElementRegistry) : false;
++
++    RefPtr registry = shouldUseNullCustomElementRegistry ? nullptr : CustomElementRegistry::registryForNodeOrTreeScope(*currentNode, protect(currentNode->treeScope()));
++    auto newElement = document->createElement(qName, true, registry.get());
++
++    if (!handledAttributes) {
++        setAttributes(newElement.ptr(), prefixedAttributes, parserContentPolicy());
++        stopParsing();
++        return;
++    }
++
++    setAttributes(newElement.ptr(), prefixedAttributes, parserContentPolicy());
++    if (!success) {
++        stopParsing();
++        return;
++    }
++
++    if (willConstructCustomElement) [[unlikely]] {
++        customElementReactionStack.reset();
++        markupInsertionCountIncrementer.reset();
++        // Draining the reaction stack runs the custom element constructor, which may
++        // have re-parented newElement, adopted it into another document, or detached
++        // the current parser node. parserAppendChild requires its argument to have no
++        // parent and to share our document.
++        // FIXME: We are misusing the upgrade-an-element machinery here to emulate
++        // synchronous custom element construction. Per HTML's "create an element for
++        // a token" with willExecuteScript=true we should run the constructor inside
++        // Document::createElement (via constructElementWithFallback), which post-
++        // validates parent/children/attributes/document and falls back to
++        // HTMLUnknownElement on violation, like HTMLDocumentParser does in
++        // runScriptsForPausedTreeBuilder. Switching to that would also fix the
++        // spec-incorrect attribute-ordering above (we currently set attributes before
++        // the constructor runs).
++        if (!m_currentNode || newElement->parentNode() || &newElement->document() != &m_currentNode->document()) {
++            stopParsing();
++            return;
++        }
++    }
++
++    newElement->beginParsingChildren();
++
++    if (isScriptElement(newElement.get()))
++        m_scriptStartPosition = textPosition();
++
++    currentNode->parserAppendChild(newElement);
++    if (!m_currentNode) // Synchronous DOM events may have removed the current node.
++        return;
++
++    if (RefPtr templateElement = dynamicDowncast<HTMLTemplateElement>(newElement))
++        pushCurrentNode(&protect(templateElement->content()).get());
++    else
++        pushCurrentNode(newElement.ptr());
++
++    if (!m_parsingFragment && isFirstElement && document->frame())
++        protect(document->frame())->injectUserScripts(UserScriptInjectionTime::DocumentStart);
++}
++
++void XMLDocumentParser::endElementNs()
++{
++    if (isStopped())
++        return;
++
++    if (m_parserPaused) {
++        m_pendingCallbacks->appendEndElementNSCallback();
++        return;
++    }
++
++    // JavaScript can detach the parser.  Make sure this is not released
++    // before the end of this method.
++    Ref<XMLDocumentParser> protectedThis(*this);
++
++    if (!updateLeafTextNode())
++        return;
++
++    Ref node = *m_currentNode;
++    RefPtr element = dynamicDowncast<Element>(node);
++
++    if (element)
++        element->finishParsingChildren();
++
++    if (!scriptingContentIsAllowed(parserContentPolicy()) && element && isScriptElement(*element)) {
++        popCurrentNode();
++        node->remove();
++        return;
++    }
++
++    if (!element || m_isInFrameView == IsInFrameView::No) {
++        // We never prepare scripts in this case (e.g. when parsing a fragment or a document without
++        // a frame view, like a DOMParser document). Mark them as already started so that they stay
++        // inert when cloned or adopted into a document that does execute scripts, matching what
++        // HTMLConstructionSite does for the HTML fragment parser.
++        if (element && !parserContentPolicy().contains(ParserContentPolicy::DoNotMarkAlreadyStarted)) {
++            if (auto* scriptElement = dynamicDowncastScriptElement(*element))
++                scriptElement->markAlreadyStarted();
++        }
++        popCurrentNode();
++        return;
++    }
++
++    // The element's parent may have already been removed from document.
++    // Parsing continues in this case, but scripts aren't executed.
++    if (!element->isConnected()) {
++        popCurrentNode();
++        return;
++    }
++
++    RefPtr scriptElement = dynamicDowncastScriptElement(*element);
++    if (!scriptElement) {
++        popCurrentNode();
++        return;
++    }
++
++    // Don't load external scripts for standalone documents (for now).
++    ASSERT(!m_pendingScript);
++    m_requestingScript = true;
++
++    Ref document = *this->document();
++    protect(document->eventLoop())->performMicrotaskCheckpoint(document->vm());
++    if (scriptElement->prepareScript(m_scriptStartPosition)) {
++        if (scriptElement->readyToBeParserExecuted()) {
++            if (!document->haveStylesheetsLoaded()) {
++                m_scriptWaitingForStylesheets = PendingScript::create(*scriptElement, m_scriptStartPosition);
++                pauseParsing();
++            } else if (scriptElement->scriptType() == ScriptType::Classic)
++                scriptElement->executeClassicScript(ScriptSourceCode(scriptElement->scriptContent(), scriptElement->sourceTaintedOrigin(), URL(document->url()), m_scriptStartPosition, JSC::SourceProviderSourceType::Program, InlineClassicScript::create(*scriptElement)));
++            else
++                scriptElement->registerImportMap(ScriptSourceCode(scriptElement->scriptContent(), scriptElement->sourceTaintedOrigin(), URL(document->url()), m_scriptStartPosition, JSC::SourceProviderSourceType::ImportMap));
++        } else if (scriptElement->willBeParserExecuted() && scriptElement->loadableScript()) {
++            m_pendingScript = PendingScript::create(*scriptElement, *protect(scriptElement->loadableScript()));
++            protect(m_pendingScript)->setClient(*this);
++
++            // m_pendingScript will be nullptr if script was already loaded and setClient() executed it.
++            if (m_pendingScript)
++                pauseParsing();
++        }
++
++        // JavaScript may have detached the parser
++        if (isDetached())
++            return;
++    }
++    m_requestingScript = false;
++    popCurrentNode();
++}
++
++void XMLDocumentParser::characters(std::span<const xmlChar> characters)
++{
++    if (isStopped())
++        return;
++
++    if (m_parserPaused) {
++        m_pendingCallbacks->appendCharactersCallback(characters);
++        return;
++    }
++
++    if (!m_leafTextNode)
++        createLeafTextNode();
++    m_bufferedText.append(characters);
++}
++
++void XMLDocumentParser::reportError(OXPBridge::ErrorType oxpType, const char* message, unsigned long line, unsigned long column)
++{
++    if (isStopped())
++        return;
++
++    XMLErrors::Type type = oxpType == OXPBridge::ErrorType::Fatal ? XMLErrors::Type::Fatal
++        : oxpType == OXPBridge::ErrorType::NonFatal ? XMLErrors::Type::NonFatal : XMLErrors::Type::Warning;
++    TextPosition position(OrdinalNumber::fromOneBasedInt(static_cast<int>(line)), OrdinalNumber::fromOneBasedInt(static_cast<int>(column)));
++    if (m_parserPaused)
++        m_pendingCallbacks->appendErrorCallback(type, reinterpret_cast<const xmlChar*>(message), position.m_line, position.m_column);
++    else
++        handleError(type, message, position);
++}
++
++
++void XMLDocumentParser::processingInstruction(const xmlChar* target, const xmlChar* data)
++{
++    if (isStopped())
++        return;
++
++    if (m_parserPaused) {
++        m_pendingCallbacks->appendProcessingInstructionCallback(target, data);
++        return;
++    }
++
++    if (!updateLeafTextNode())
++        return;
++
++    auto result = protect(m_currentNode->document())->createProcessingInstruction(toString(target), toString(data));
++    if (result.hasException())
++        return;
++    auto pi = result.releaseReturnValue();
++
++    pi->setCreatedByParser(true);
++
++    protect(*m_currentNode)->parserAppendChild(pi);
++
++    pi->setCreatedByParser(false);
++
++    if (pi->isCSS())
++        m_sawCSS = true;
++
++#if ENABLE(XSLT)
++    m_sawXSLTransform = !m_sawFirstElement && pi->isXSL();
++    if (m_sawXSLTransform && !document()->transformSourceDocument())
++        stopParsing();
++#endif
++}
++
++void XMLDocumentParser::cdataBlock(std::span<const xmlChar> s)
++{
++    if (isStopped())
++        return;
++
++    if (m_parserPaused) {
++        m_pendingCallbacks->appendCDATABlockCallback(s);
++        return;
++    }
++
++    if (!updateLeafTextNode())
++        return;
++
++    protect(*m_currentNode)->parserAppendChild(CDATASection::create(protect(m_currentNode->document()), toString(s)));
++}
++
++void XMLDocumentParser::comment(const xmlChar* s)
++{
++    if (isStopped())
++        return;
++
++    if (m_parserPaused) {
++        m_pendingCallbacks->appendCommentCallback(s);
++        return;
++    }
++
++    if (!updateLeafTextNode())
++        return;
++
++    protect(*m_currentNode)->parserAppendChild(Comment::create(protect(m_currentNode->document()), toString(s)));
++}
++
++enum StandaloneInfo {
++    StandaloneUnspecified = -2,
++    NoXMlDeclaration,
++    StandaloneNo,
++    StandaloneYes
++};
++
++void XMLDocumentParser::startDocument(const xmlChar* version, const xmlChar* encoding, int standalone)
++{
++    StandaloneInfo standaloneInfo = (StandaloneInfo)standalone;
++    if (standaloneInfo == NoXMlDeclaration) {
++        document()->setHasXMLDeclaration(false);
++        return;
++    }
++
++    if (version)
++        protect(document())->setXMLVersion(toString(version));
++    if (standalone != StandaloneUnspecified)
++        document()->setXMLStandalone(standaloneInfo == StandaloneYes);
++    if (encoding)
++        protect(document())->setXMLEncoding(toString(encoding));
++    document()->setHasXMLDeclaration(true);
++}
++
++void XMLDocumentParser::endDocument()
++{
++    updateLeafTextNode();
++}
++
++void XMLDocumentParser::internalSubset(const xmlChar* name, const xmlChar* externalID, const xmlChar* systemID)
++{
++    if (isStopped())
++        return;
++
++    if (m_parserPaused) {
++        m_pendingCallbacks->appendInternalSubsetCallback(name, externalID, systemID);
++        return;
++    }
++
++    if (RefPtr document = this->document())
++        document->parserAppendChild(DocumentType::create(*document, toString(name), toString(externalID), toString(systemID)));
++}
++
++// An entity no declaration gives: in a document with one of the XHTML (or
++// MathML) DTDs, the HTML named character references. OXP parses the text it
++// is given as content, so '&' and '<' go back as character references.
++const char* XMLDocumentParser::resolveEntity(const char* name)
++{
++    if (!isXHTMLDocument())
++        return nullptr;
++
++    auto decodedEntity = decodeNamedHTMLEntityForXMLParser(name);
++    if (decodedEntity.failed())
++        return nullptr;
++
++    auto utf16DecodedEntity = decodedEntity.span();
++    auto& result = m_xhtmlEntityText;
++    auto set = [&](std::initializer_list<char> bytes) {
++        size_t i = 0;
++        for (char byte : bytes)
++            result[i++] = byte;
++        result[i] = 0;
++    };
++    // Unlike the HTML parser, the XML parser parses an entity's text, so '&'
++    // and '<' are given as character references.
++    if (utf16DecodedEntity.size() == 1 && utf16DecodedEntity[0] == '&')
++        set({ '&', '#', '3', '8', ';' });
++    else if (utf16DecodedEntity.size() == 1 && utf16DecodedEntity[0] == '<')
++        set({ '&', '#', 'x', '3', 'C', ';' });
++    else if (utf16DecodedEntity.size() == 2 && utf16DecodedEntity[0] == '<' && utf16DecodedEntity[1] == 0x20D2)
++        set({ '&', '#', '6', '0', ';', static_cast<char>(0xE2), static_cast<char>(0x83), static_cast<char>(0x92) });
++    else {
++        ASSERT(utf16DecodedEntity.size() <= 4);
++        auto converted = WTF::Unicode::convert(utf16DecodedEntity, byteCast<char8_t>(std::span { result }).first(result.size() - 1));
++        if (converted.code != WTF::Unicode::ConversionResultCode::Success)
++            return nullptr;
++        result[converted.buffer.size()] = 0;
++    }
++    return result.data();
++}
++
++void XMLDocumentParser::initializeParserContext(const UTF8CString&)
++{
++    DocumentParser::startParsing();
++    m_sawError = false;
++    m_sawCSS = false;
++    m_sawXSLTransform = false;
++    m_sawFirstElement = false;
++
++    if (m_parsingFragment)
++        m_context = XMLParserContext::createMemoryParser(*this);
++    else
++        m_context = XMLParserContext::createStringParser(*this);
++}
++
++void XMLDocumentParser::doEnd()
++{
++    if (!isStopped()) {
++        if (m_context) {
++            // Tell OXP we're done.
++            oxp_parse(context(), nullptr, 0, 1);
++            m_context = nullptr;
++        }
++    }
++}
++
++TextPosition XMLDocumentParser::textPosition() const
++{
++    oxp_parser* context = this->context();
++    if (!context)
++        return TextPosition();
++    return TextPosition(OrdinalNumber::fromOneBasedInt(static_cast<int>(oxp_line(context))),
++                        OrdinalNumber::fromOneBasedInt(static_cast<int>(oxp_column(context))));
++}
++
++bool XMLDocumentParser::shouldAssociateConsoleMessagesWithTextPosition() const
++{
++    return !m_parserPaused && !m_requestingScript;
++}
++
++void XMLDocumentParser::stopParsing()
++{
++    if (m_sawError)
++        insertErrorMessageBlock();
++
++    DocumentParser::stopParsing();
++    if (context())
++        oxp_stop(context());
++}
++
++void XMLDocumentParser::resumeParsing()
++{
++    ASSERT(!isDetached());
++    ASSERT(m_parserPaused);
++
++    m_parserPaused = false;
++
++    // First, execute any pending callbacks
++    while (!m_pendingCallbacks->isEmpty()) {
++        m_pendingCallbacks->callAndRemoveFirstCallback(this);
++
++        // A callback paused the parser
++        if (m_parserPaused)
++            return;
++    }
++
++    // There is normally only one string left, so toString() shouldn't copy.
++    // In any case, the XML parser runs on the main thread and it's OK if
++    // the passed string has more than one reference.
++    auto rest = m_pendingSrc.toString();
++    m_pendingSrc.clear();
++    append(rest.impl());
++
++    // Finally, if finish() has been called and write() didn't result
++    // in any further callbacks being queued, call end()
++    if (m_finishCalled && m_pendingCallbacks->isEmpty())
++        end();
++}
++
++bool XMLDocumentParser::appendFragmentSource(const String& chunk)
++{
++    ASSERT(!m_context);
++    ASSERT(m_parsingFragment);
++
++    m_fragmentSource = chunk.utf8();
++
++    initializeParserContext();
++    oxp_parse(context(), m_fragmentSource.legacyCStringPointer(), m_fragmentSource.length(), 1);
++    endDocument(); // Close any open text nodes.
++
++    // No error if the chunk is well formed, or if what is wrong is only an
++    // undeclared prefix (which libxml2 did not count against well-formedness).
++    return oxp_error(context(), nullptr, nullptr, nullptr) == OXP_OK;
++}
++
++// --------------------------------
++
++using AttributeParseState = std::optional<HashMap<String, String>>;
++
++static void attributesStartElement(void* closure, const char* localName, const char*, const char*, int, const oxp_ns*, int numAttributes, const oxp_attr* attributes)
++{
++    if (!equalSpans(unsafeSpan(localName), "attrs"_span))
++        return;
++
++    auto& state = *static_cast<AttributeParseState*>(closure);
++    state = HashMap<String, String> { };
++
++    for (auto& attribute : unsafeMakeSpan(attributes, numAttributes)) {
++        String attrLocalName = String::fromUTF8(attribute.local);
++        String attrValue = String::fromUTF8(unsafeMakeSpan(attribute.value, attribute.value_len));
++        String attrPrefix = String::fromUTF8(attribute.prefix);
++        String attrQName = attrPrefix.isEmpty() ? attrLocalName : makeString(attrPrefix, ':', attrLocalName);
++        state->set(attrQName, attrValue);
++    }
++}
++
++std::optional<HashMap<String, String>> parseAttributes(CachedResourceLoader&, const String& string)
++{
++    auto parseString = makeString("<attrs "_s, string, " />"_s).utf8();
++
++    AttributeParseState attributes;
++
++    oxp_handler handler { };
++    handler.start_element = attributesStartElement;
++    oxp_parse_memory(&handler, &attributes, parseString.legacyCStringPointer(), parseString.length(), OXP_OPT_UNBOUND_PREFIX);
++    return attributes;
++}
++
++} // namespace WebCore
++
++#endif // USE(OXP)
+diff --git a/Source/WebCore/xml/parser/XMLDocumentParserOXPBridge.h b/Source/WebCore/xml/parser/XMLDocumentParserOXPBridge.h
+new file mode 100644
+index 0000000..80ca93c
+--- /dev/null
++++ b/Source/WebCore/xml/parser/XMLDocumentParserOXPBridge.h
+@@ -0,0 +1,213 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// OXP's events, turned into the calls XMLDocumentParser has always taken
++// from libxml2's SAX2 interface: the same arguments, in the same shapes
++// (namespaces as prefix/URI pairs, attributes as localname/prefix/URI/value/
++// end quintuples, the defaulted attributes last, libxml2's standalone values).
++// So XMLDocumentParser's own logic stays as it is, and this file can be
++// tested on its own against libxml2 (it uses only the C++ standard library).
++
++#pragma once
++
++#include <cstddef>
++#include <cstring>
++#include <oxp.h>
++#include <span>
++#include <vector>
++
++namespace WebCore {
++namespace OXPBridge {
++
++using Char = unsigned char;
++
++// XMLErrors::Type's order: Warning, NonFatal, Fatal.
++enum class ErrorType { Warning, NonFatal, Fatal };
++
++// libxml2's values for the standalone argument of startDocument.
++constexpr int StandaloneUnspecified = -2;
++constexpr int NoXMLDeclaration = -1;
++
++// The public identifiers of the DTDs whose documents may use the HTML named
++// character references (the same list WebKit checked in libxml2's
++// externalSubset callback).
++inline bool isXHTMLPublicIdentifier(const char* id)
++{
++    if (!id)
++        return false;
++    static const char* const ids[] = {
++        "-//W3C//DTD XHTML 1.0 Transitional//EN",
++        "-//W3C//DTD XHTML 1.1//EN",
++        "-//W3C//DTD XHTML 1.0 Strict//EN",
++        "-//W3C//DTD XHTML 1.0 Frameset//EN",
++        "-//W3C//DTD XHTML Basic 1.0//EN",
++        "-//W3C//DTD XHTML 1.1 plus MathML 2.0//EN",
++        "-//W3C//DTD XHTML 1.1 plus MathML 2.0 plus SVG 1.1//EN",
++        "-//W3C//DTD MathML 2.0//EN",
++        "-//WAPFORUM//DTD XHTML Mobile 1.0//EN",
++        "-//WAPFORUM//DTD XHTML Mobile 1.1//EN",
++        "-//WAPFORUM//DTD XHTML Mobile 1.2//EN",
++    };
++    for (auto* candidate : ids) {
++        if (!std::strcmp(id, candidate))
++            return true;
++    }
++    return false;
++}
++
++// Receiver: anything with XMLDocumentParser's SAX methods:
++//   startElementNs(localName, prefix, uri, numNamespaces, namespaces, numAttributes, numDefaulted, attributes)
++//   endElementNs(), characters(span), cdataBlock(span), comment(text), processingInstruction(target, data)
++//   startDocument(version, encoding, standalone), endDocument()
++//   internalSubset(name, externalID, systemID), setIsXHTMLDocument(bool)
++//   const char* resolveEntity(const char* name)
++//   reportError(ErrorType, const char* message, unsigned long line, unsigned long column)
++// Guard: made from the receiver for the length of each call, so a receiver
++// that counts its references can keep itself alive while JavaScript run by a
++// callback detaches it (XMLDocumentParser's protect(), as with libxml2).
++struct NoGuard {
++    template<typename Receiver> explicit NoGuard(Receiver&) { }
++};
++
++template<typename Receiver, typename Guard = NoGuard>
++class Bridge {
++public:
++    explicit Bridge(Receiver& receiver)
++        : m_receiver(receiver)
++    {
++    }
++
++    static const oxp_handler& handler()
++    {
++        static const oxp_handler h = {
++            startDocument, endDocument, doctype, nullptr, nullptr, startElement, endElement,
++            characters, cdata, comment, processingInstruction, nullptr, resolveEntity, error
++        };
++        return h;
++    }
++
++private:
++    static Bridge& self(void* ud) { return *static_cast<Bridge*>(ud); }
++#define OXP_BRIDGE_GUARD(ud) Guard guard(self(ud).m_receiver)
++    static const Char* chars(const char* s) { return reinterpret_cast<const Char*>(s); }
++
++    static void startDocument(void* ud, const char* version, const char* encoding, int standalone)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        int libxmlStandalone = !version ? NoXMLDeclaration : standalone < 0 ? StandaloneUnspecified : standalone;
++        self(ud).m_receiver.startDocument(chars(version), chars(encoding), libxmlStandalone);
++    }
++
++    static void endDocument(void* ud)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        self(ud).m_receiver.endDocument();
++    }
++
++    static void doctype(void* ud, const char* name, const char* publicId, const char* systemId, int)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        auto& receiver = self(ud).m_receiver;
++        receiver.internalSubset(chars(name), chars(publicId), chars(systemId));
++        if (isXHTMLPublicIdentifier(publicId))
++            receiver.setIsXHTMLDocument(true);
++    }
++
++    static void startElement(void* ud, const char* local, const char* prefix, const char* uri, int numNamespaces, const oxp_ns* ns, int numAttributes, const oxp_attr* attrs)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        auto& bridge = self(ud);
++        bridge.m_namespaces.resize(static_cast<size_t>(numNamespaces) * 2);
++        for (int i = 0; i < numNamespaces; ++i) {
++            bridge.m_namespaces[2 * i] = chars(ns[i].prefix);
++            bridge.m_namespaces[2 * i + 1] = chars(ns[i].uri);
++        }
++        // libxml2 gives the attributes from the tag first and the defaulted ones last; so does OXP.
++        int numDefaulted = 0;
++        bridge.m_attributes.resize(static_cast<size_t>(numAttributes) * 5);
++        for (int i = 0; i < numAttributes; ++i) {
++            bridge.m_attributes[5 * i] = chars(attrs[i].local);
++            bridge.m_attributes[5 * i + 1] = chars(attrs[i].prefix);
++            bridge.m_attributes[5 * i + 2] = chars(attrs[i].uri);
++            bridge.m_attributes[5 * i + 3] = chars(attrs[i].value);
++            bridge.m_attributes[5 * i + 4] = chars(attrs[i].value) + attrs[i].value_len;
++            numDefaulted += attrs[i].defaulted ? 1 : 0;
++        }
++        bridge.m_receiver.startElementNs(chars(local), chars(prefix), chars(uri), numNamespaces, bridge.m_namespaces.data(),
++            numAttributes, numDefaulted, bridge.m_attributes.data());
++    }
++
++    static void endElement(void* ud, const char*, const char*, const char*)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        self(ud).m_receiver.endElementNs();
++    }
++
++    static void characters(void* ud, const char* text, size_t length)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        self(ud).m_receiver.characters(std::span<const Char>(chars(text), length));
++    }
++
++    static void cdata(void* ud, const char* text, size_t length)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        self(ud).m_receiver.cdataBlock(std::span<const Char>(chars(text), length));
++    }
++
++    static void comment(void* ud, const char* text)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        self(ud).m_receiver.comment(chars(text));
++    }
++
++    static void processingInstruction(void* ud, const char* target, const char* data)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        self(ud).m_receiver.processingInstruction(chars(target), chars(data));
++    }
++
++    static const char* resolveEntity(void* ud, const char* name)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        return self(ud).m_receiver.resolveEntity(name);
++    }
++
++    static void error(void* ud, oxp_level level, oxp_code, const char* message, unsigned long line, unsigned long column)
++    {
++        OXP_BRIDGE_GUARD(ud);
++        ErrorType type = level == OXP_FATAL ? ErrorType::Fatal : level == OXP_ERROR ? ErrorType::NonFatal : ErrorType::Warning;
++        self(ud).m_receiver.reportError(type, message, line, column);
++    }
++
++#undef OXP_BRIDGE_GUARD
++
++    Receiver& m_receiver;
++    std::vector<const Char*> m_namespaces;
++    std::vector<const Char*> m_attributes;
++};
++
++} // namespace OXPBridge
++} // namespace WebCore
+diff --git a/Source/WebCore/xml/parser/XMLDocumentParserScope.cpp b/Source/WebCore/xml/parser/XMLDocumentParserScope.cpp
+index 8b89757..9c9fa9a 100644
+--- a/Source/WebCore/xml/parser/XMLDocumentParserScope.cpp
++++ b/Source/WebCore/xml/parser/XMLDocumentParserScope.cpp
+@@ -24,6 +24,9 @@
+  */
+ 
+ #include "config.h"
++
++#if !USE(OXP)
++
+ #include "XMLDocumentParserScope.h"
+ 
+ #include "CachedResourceLoader.h"
+@@ -83,3 +86,5 @@ XMLDocumentParserScope::~XMLDocumentParserScope()
+ }
+ 
+ }
++
++#endif // !USE(OXP)
+diff --git a/Source/cmake/FindOXP.cmake b/Source/cmake/FindOXP.cmake
+new file mode 100644
+index 0000000..ae6074a
+--- /dev/null
++++ b/Source/cmake/FindOXP.cmake
+@@ -0,0 +1,84 @@
++# Copyright (C) 2026 AmigaChrome Team.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++# 1.  Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++# 2.  Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in the
++#     documentation and/or other materials provided with the distribution.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER AND ITS CONTRIBUTORS ``AS
++# IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR ITS
++# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++# OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++# WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++# OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++# ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++#[=======================================================================[.rst:
++FindOXP
++-------
++
++Find OXP, the Open XML Parser (DalsinAI/openamigaxml, ``oxp/``): ``oxp.h``
++and ``liboxp.a`` (its ``build-amiga.sh`` writes both).
++
++Imported Targets
++^^^^^^^^^^^^^^^^
++
++``OXP::OXP``
++  The OXP library, if found.
++
++Result Variables
++^^^^^^^^^^^^^^^^
++
++``OXP_FOUND``
++  true if (the requested version of) OXP is available.
++``OXP_VERSION``
++  the version of OXP (major.minor, from ``oxp.h``).
++``OXP_LIBRARIES``
++  the libraries to link against to use OXP.
++``OXP_INCLUDE_DIRS``
++  where to find ``oxp.h``.
++
++#]=======================================================================]
++
++find_path(OXP_INCLUDE_DIR NAMES oxp.h)
++find_library(OXP_LIBRARY NAMES oxp)
++
++if (OXP_INCLUDE_DIR AND EXISTS "${OXP_INCLUDE_DIR}/oxp.h")
++    file(READ "${OXP_INCLUDE_DIR}/oxp.h" _OXP_HEADER)
++    string(REGEX MATCH "#define +OXP_VERSION_MAJOR +([0-9]+)" _dummy "${_OXP_HEADER}")
++    set(_OXP_MAJOR "${CMAKE_MATCH_1}")
++    string(REGEX MATCH "#define +OXP_VERSION_MINOR +([0-9]+)" _dummy "${_OXP_HEADER}")
++    set(_OXP_MINOR "${CMAKE_MATCH_1}")
++    set(OXP_VERSION "${_OXP_MAJOR}.${_OXP_MINOR}")
++    unset(_OXP_HEADER)
++endif ()
++
++include(FindPackageHandleStandardArgs)
++find_package_handle_standard_args(OXP
++    FOUND_VAR OXP_FOUND
++    REQUIRED_VARS OXP_LIBRARY OXP_INCLUDE_DIR
++    VERSION_VAR OXP_VERSION
++)
++
++if (OXP_LIBRARY AND NOT TARGET OXP::OXP)
++    add_library(OXP::OXP UNKNOWN IMPORTED GLOBAL)
++    set_target_properties(OXP::OXP PROPERTIES
++        IMPORTED_LOCATION "${OXP_LIBRARY}"
++        INTERFACE_INCLUDE_DIRECTORIES "${OXP_INCLUDE_DIR}"
++    )
++endif ()
++
++mark_as_advanced(OXP_INCLUDE_DIR OXP_LIBRARY)
++
++if (OXP_FOUND)
++    set(OXP_LIBRARIES ${OXP_LIBRARY})
++    set(OXP_INCLUDE_DIRS ${OXP_INCLUDE_DIR})
++endif ()
+diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
+index 420b957..164ac82 100644
+--- a/Source/cmake/OptionsAmiga.cmake
++++ b/Source/cmake/OptionsAmiga.cmake
+@@ -35,7 +35,7 @@ if (ENABLE_WEBCORE)
+     find_package(Freetype 2.9.0 REQUIRED)
+     find_package(HarfBuzz 2.7.4 REQUIRED COMPONENTS ICU)
+     find_package(LibPSL 0.20.2 REQUIRED)
+-    find_package(LibXml2 2.9.7 REQUIRED)
++    find_package(OXP 0.1 REQUIRED)
+     find_package(PNG REQUIRED)
+     find_package(SQLite3 3.23.1 REQUIRED)
+     if (NOT TARGET SQLite3::SQLite3) # CMake < 4.3
+@@ -107,6 +107,8 @@ SET_AND_EXPOSE_TO_BUILD(USE_HARFBUZZ ON)
+ # does not see. WebCrypto has no backend (crypto/amiga/CryptoAmiga.cpp).
+ SET_AND_EXPOSE_TO_BUILD(USE_OPENSSL OFF)
+ SET_AND_EXPOSE_TO_BUILD(USE_THEME_ADWAITA ON)
++# XML through OXP (DalsinAI/openamigaxml), not libxml2: XMLDocumentParserOXP.cpp
++SET_AND_EXPOSE_TO_BUILD(USE_OXP ON)
+ 
+ SET_AND_EXPOSE_TO_BUILD(HAVE_PTHREAD_SETNAME_NP OFF)
+ SET_AND_EXPOSE_TO_BUILD(HAVE_MAP_ALIGNED OFF)
+@@ -114,3 +116,9 @@ SET_AND_EXPOSE_TO_BUILD(HAVE_MAP_ALIGNED OFF)
+ if (USE_LIBBACKTRACE)
+     message(FATAL_ERROR "USE_LIBBACKTRACE is not available on the Amiga port")
+ endif ()
++
++# OXP has no XSLT and does not read the XML parts of EME's init data; both
++# would need libxml2 again.
++if (ENABLE_XSLT OR ENABLE_ENCRYPTED_MEDIA)
++    message(FATAL_ERROR "The Amiga port parses XML with OXP: ENABLE_XSLT and ENABLE_ENCRYPTED_MEDIA need libxml2")
++endif ()
+-- 
+2.53.0
+

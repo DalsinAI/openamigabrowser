@@ -23,6 +23,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <cairo.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
@@ -326,6 +327,25 @@ static void reportDisplayList(OBWebView *view, int width, int height, const char
     free(replayed);
 }
 
+/* A local file as the type its name says, so .xhtml, .svg and .xml go
+ * through the XML parser as they would from a server. */
+static void loadFile(OBWebView *view, const char *path, const char *text)
+{
+    static const struct { const char *ext, *mime, *base; } types[] = {
+        { ".xhtml", "application/xhtml+xml", "file:///page.xhtml" },
+        { ".svg", "image/svg+xml", "file:///page.svg" },
+        { ".xml", "application/xml", "file:///page.xml" },
+    };
+    const char *dot = strrchr(path, '.');
+    for (unsigned i = 0; dot && i < sizeof types / sizeof types[0]; i++) {
+        if (!strcasecmp(dot, types[i].ext)) {
+            ob_webview_load_data(view, text, types[i].mime, types[i].base);
+            return;
+        }
+    }
+    ob_webview_load_html(view, text, "file:///page.html");
+}
+
 static int viewMain(int argc, char **argv)
 {
     OBWebViewCallbacks callbacks = { 0 };
@@ -409,7 +429,7 @@ static int viewMain(int argc, char **argv)
     if (isURL)
         ob_webview_load(view, source);
     else
-        ob_webview_load_html(view, html, "file:///page.html");
+        loadFile(view, source, html);
     run(seconds);
     run(1.0); /* rendering updates and timers the load left behind */
     if (inputTest) {

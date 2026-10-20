@@ -290,6 +290,11 @@ void ob_webview_load_html(OBWebView* handle, const char* html, const char* baseU
     handle->view->loadHTML(String::fromUTF8(html), String::fromUTF8(baseURL ? baseURL : ""));
 }
 
+void ob_webview_load_data(OBWebView* handle, const char* text, const char* mimeType, const char* baseURL)
+{
+    handle->view->loadData(String::fromUTF8(text), String::fromUTF8(mimeType ? mimeType : ""), String::fromUTF8(baseURL ? baseURL : ""));
+}
+
 void ob_webview_back(OBWebView* handle) { handle->view->goBack(); }
 void ob_webview_forward(OBWebView* handle) { handle->view->goForward(); }
 void ob_webview_reload(OBWebView* handle) { handle->view->reload(); }
