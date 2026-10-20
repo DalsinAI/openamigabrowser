@@ -98,12 +98,11 @@ int-loop 10.3x fewer than the interpreter, properties 2.7x, double-loop 2.1x,
 calls 1.8x.
 
 Patch 0031 (J4) compiles whole functions (entered from the function
-prologues, not only from loops), gives op_enter, op_ret, get_by_id and
-put_by_id their own code, runs double arithmetic and compares on the FPU, and
+prologues, not only from loops), gives op_enter, op_ret, op_call,
+op_construct, get_by_id and put_by_id their own code, runs double arithmetic and compares on the FPU, and
 stops the interpreter filling profiles only optimizing JITs read. Against the
 interpreter before it: int-loop 10.3x fewer instructions, properties 8.0x,
-double-loop 7.9x, calls 3.8x, closures 1.8x. Next: op_call as a fast path,
-hot values kept in data registers, a run on a real 68040, then 32-bit values
+double-loop 7.9x, calls 6.2x, closures 1.8x. Next: hot values kept in data registers, a run on a real 68040, then 32-bit values
 (`docs/JS_32BIT_VALUES.md`).
 
 The original plan, for reference:

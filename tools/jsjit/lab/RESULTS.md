@@ -20,16 +20,17 @@ templates, 0 problems.
 |---|---:|---:|---:|---:|---:|---:|
 | int-loop    | 101.8 |  91.0 |   9.9 |   9.9 | 10.33x | 1.00x |
 | properties  | 105.1 |  94.0 |  39.6 |  13.1 |  8.01x | 3.02x |
-| double-loop |  51.7 |  46.3 |  24.7 |   6.5 |  7.91x | 3.80x |
-| calls       | 101.9 |  95.9 |  54.4 |  26.6 |  3.83x | 2.05x |
-| closures    |  19.0 |  18.1 |  13.8 |  10.8 |  1.76x | 1.28x |
-| strings     |   9.2 |   8.8 |   6.6 |   6.2 |  1.49x | 1.06x |
+| double-loop |  51.7 |  46.3 |  24.7 |   6.5 |  7.90x | 3.77x |
+| calls       | 101.9 |  95.9 |  54.4 |  16.5 |  6.19x | 3.30x |
+| closures    |  19.0 |  18.1 |  13.8 |  10.8 |  1.75x | 1.28x |
+| strings     |   9.2 |   8.8 |   6.6 |   5.7 |  1.61x | 1.16x |
 | array (sort)| 146.6 | 143.4 | 135.7 | 107.9 |  1.36x | 1.26x |
-| regexp      |   8.9 |   8.7 |   8.0 |   7.9 |  1.12x | 1.01x |
-| json        |   3.6 |   3.6 |   3.7 |   3.7 |  0.98x | 0.99x |
+| regexp      |   8.9 |   8.7 |   8.0 |   7.8 |  1.14x | 1.03x |
+| json        |   3.6 |   3.6 |   3.7 |   3.7 |  0.98x | 1.00x |
 
-calls now spends most of its time in op_call's template and the prologue;
-op_call as a fast path is the next stage.
+`lab/correct2.js` also covers exceptions thrown through compiled calls,
+stack overflow (RangeError), native callees, polymorphic call sites,
+constructors, missing and extra arguments, and getters that call.
 
 ## 20 Oct 2026, stage J3 (32-bit integer fast paths, patch 0027)
 

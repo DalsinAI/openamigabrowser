@@ -122,8 +122,9 @@ The patches, in order:
 
 - `0031-jsc-m68k-jit-functions-properties-doubles.patch`: J4. Whole
   functions: the function prologues enter a function's code once it has
-  been called often enough, not only its loops. Calls: op_enter and op_ret
-  get their own code. The 68k interpreter stops filling value, arithmetic
+  been called often enough, not only its loops. Calls: op_enter, op_ret,
+  op_call and op_construct get their own code (a call to the callee its
+  call link holds goes straight in and returns into compiled code). The 68k interpreter stops filling value, arithmetic
   and argument profiles, which only the optimizing JITs read. Property
   access: get_by_id and put_by_id get their own code for sites whose
   interpreter cache holds an own property (`JSC_useM68KPropertyFastPaths=0`

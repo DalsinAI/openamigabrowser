@@ -31,6 +31,20 @@ function add(a, b) { return a + b; }
 function c1() { var s = 0; for (var i = 0; i < 2000; i++) s = add(s, i * 0.5); return s; }
 function fib(n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }
 function c2() { return fib(18); }
-var tests = [d1,d2,d3,d4,d5,d6,d7,d8,p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,c1,c2];
+function thrower(x) { if (x % 7 == 3) throw new Error("e" + x); return x * 2; }
+function c3() { var r = 0; for (var i = 0; i < 300; i++) { try { r += thrower(i); } catch (e) { r += e.message.length; } } return r; }
+function deep(n) { return deep(n + 1) + 1; }
+function c4() { var r = ""; for (var i = 0; i < 3; i++) { try { deep(0); } catch (e) { r += e.constructor.name; } } return r; }
+function c5() { var r = 0; for (var i = 0; i < 300; i++) r += Math.max(i, 150) + parseInt("1" + (i % 10)); return r; }
+function sq(x) { return x * x; } function cu(x) { return x * x * x; }
+function c6() { var fs = [sq, cu, sq, function (x) { return -x; }]; var r = 0; for (var i = 0; i < 400; i++) r += fs[i % 4](i % 13); return r; }
+function Pt(x, y) { this.x = x; this.y = y; }
+function c7() { var r = 0; for (var i = 0; i < 300; i++) { var p = new Pt(i, i + 1); r += p.x * p.y; } return r; }
+function argsf(a, b, c) { return arguments.length + (c === undefined ? 100 : c) + (b | 0); }
+function c8() { var r = 0; for (var i = 0; i < 300; i++) r += argsf(i) + argsf(i, 2) + argsf(i, 2, 3, 4); return r; }
+function c9() { var o = { get v() { return add(this.k, 1); }, k: 5 }; var r = 0; for (var i = 0; i < 300; i++) { o.k = i; r += o.v; } return r; }
+function rec(n, acc) { if (n == 0) return acc; return rec(n - 1, acc + n * 0.5); }
+function c10() { var r = 0; for (var i = 0; i < 50; i++) r += rec(40, i); return r; }
+var tests = [c3,c4,c5,c6,c7,c8,c9,c10,d1,d2,d3,d4,d5,d6,d7,d8,p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,c1,c2];
 for (var rep = 0; rep < 12; rep++) for (var k = 0; k < tests.length; k++) log(rep + " " + tests[k].name + "=" + tests[k]());
 print(out.join("\n"));
