@@ -98,6 +98,16 @@ The patches, in order:
   connection, one TLS handshake per server. The programs link
   `libnghttp2.a` after curl.
 
+- `0024-jsc-m68k-template-jit.patch`: J2's first stage, the 68k template
+  JIT. A hot loop's CodeBlock is compiled by copying, for each bytecode
+  instruction, the 68k interpreter's handler for it as a template
+  (`offlineasm-py/m68k_templates.py`) with the instruction's operands written
+  in (`llint/M68KTemplateJIT.cpp`). The copies run on the interpreter's own
+  frames and registers and fall through into each other; op_loop_hint enters
+  the code and `jsc_m68k_tjit_redispatch` leaves it. Off unless
+  `JSC_useM68KTemplateJIT=1` is set. Tools and the qemu test are in
+  `../tools/jsjit/`.
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;
