@@ -31,7 +31,10 @@
 #                   libxml2, SQLite, curl, libpsl, zlib, libpng) in one prefix.
 #                   Its curl must be openamigacurl's main branch, built on
 #                   OpenTLS (opentls.library): WebCore links no OpenSSL and no
-#                   AmiSSL SDK is used (WebKit patch 0022). At run time the
+#                   AmiSSL SDK is used (WebKit patch 0022). openamigacurl
+#                   builds curl's HTTP/2 with nghttp2: copy its libnghttp2.a
+#                   into m68k-amigaos/lib beside libcurl.a, and the programs
+#                   link it after curl (WebKit patch 0023). At run time the
 #                   Amiga needs opentls.library 1.2 or newer in LIBS: and its
 #                   CA bundle in S:OpenTLS/ca-bundle.pem for https://.
 #
@@ -350,6 +353,24 @@ check_engine() {
     fi
 }
 
+# curl built with HTTP/2 needs nghttp2, which the programs link only when
+# libnghttp2.a is in the prefix (a curl without HTTP/2 links without it):
+# say so here rather than with nghttp2_* undefined at the end of the link,
+# and let CMake look again when libnghttp2.a has come or gone since it last
+# did (src/webcore/CMakeLists.txt keeps what it found as OB_NGHTTP2).
+check_curl() {
+    lib="$OAB_DEPS/m68k-amigaos/lib"
+    [ -f "$lib/libcurl.a" ] || die "no libcurl.a in $lib (openamigacurl's out/lib)"
+    if grep -q nghttp2_session_ "$lib/libcurl.a" && [ ! -f "$lib/libnghttp2.a" ]; then
+        die "$lib/libcurl.a is built with HTTP/2: copy libnghttp2.a from openamigacurl's out/lib beside it"
+    fi
+    want=
+    [ -f "$lib/libnghttp2.a" ] && want=nghttp2
+    if [ "$(sed -n 's/^OB_NGHTTP2:INTERNAL=//p' "$BUILD/CMakeCache.txt")" != "$want" ]; then
+        cmake "$BUILD" > /dev/null
+    fi
+}
+
 # The browser's targets without WebKit's: Ninja knows the engine is up to
 # date; for Makefiles, CMake's "/fast" targets skip the walk through WebKit's
 # targets (after letting CMake regenerate if a CMakeLists.txt changed).
@@ -357,6 +378,7 @@ browser_build() {
     name=$1
     shift
     check_engine
+    check_curl
     if [ "$(generator)" = Ninja ]; then
         run_build "$name" "$JOBS" "$@"
     else

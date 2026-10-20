@@ -91,6 +91,13 @@ The patches, in order:
   certificate details, and WebCrypto (`crypto/amiga/CryptoAmiga.cpp`)
   offers the SHA-1 and SHA-2 digests only.
 
+- `0023-amiga-webcore-http2.patch`: HTTP/2. curl (openamigacurl, built with
+  nghttp2) is asked for `CURL_HTTP_VERSION_2TLS` on https://, HTTP/1.1
+  when the server does not offer h2, and the multi handle multiplexes
+  (`CURLPIPE_MULTIPLEX`): requests to one server are streams on one
+  connection, one TLS handshake per server. The programs link
+  `libnghttp2.a` after curl.
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;
