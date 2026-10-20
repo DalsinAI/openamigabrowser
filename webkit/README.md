@@ -108,7 +108,7 @@ The patches, in order:
   `JSC_useM68KTemplateJIT=1` is set. Tools and the qemu test are in
   `../tools/jsjit/`.
 
-- `0025-jsc-m68k-jit-int32-fast-paths.patch`: J3, 32-bit integer fast
+- `0027-jsc-m68k-jit-int32-fast-paths.patch`: J3, 32-bit integer fast
   paths in the template JIT. For mov, add, sub, mul, inc, dec, the bit ops,
   jmp, loop_hint and the compare-and-jump ops the JIT writes its own 68k
   code: it checks the operands are int32s, works in 32-bit registers and

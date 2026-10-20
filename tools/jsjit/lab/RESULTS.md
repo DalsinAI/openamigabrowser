@@ -6,7 +6,7 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
-## 20 Oct 2026, stage J3 (32-bit integer fast paths, patch 0025)
+## 20 Oct 2026, stage J3 (32-bit integer fast paths, patch 0027)
 
 Interpreter column as below; JIT column with `JSC_useM68KTemplateJIT=1`.
 

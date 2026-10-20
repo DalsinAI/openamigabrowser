@@ -91,7 +91,7 @@ registers and register file, so the two hand over at any instruction. Patch
 tools and a qemu test are in `tools/jsjit/`. A peephole pass over the
 templates (T4) came with it.
 
-Patch 0025 (J3) adds 32-bit integer fast paths: for the commonest integer
+Patch 0027 (J3) adds 32-bit integer fast paths: for the commonest integer
 operations the JIT writes its own code, with the template out of line as the
 slow path. Lab counts (68k instructions executed, `tools/jsjit/lab/RESULTS.md`):
 int-loop 10.3x fewer than the interpreter, properties 2.7x, double-loop 2.1x,
