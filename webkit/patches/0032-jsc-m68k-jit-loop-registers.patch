@@ -1,4 +1,4 @@
-From c6a6c526318c00de9c19edcb10edc73469abc684 Mon Sep 17 00:00:00 2001
+From af6fcd05a2aec3332b1f87f510c2031b606b1e63 Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 21:49:53 +0000
 Subject: [PATCH] JavaScriptCore: keep loop variables in registers in the 68k
@@ -21,12 +21,79 @@ six of the variables it uses most in d2-d7:
 - The back edge inside the copy goes past the preheader.
 
 useM68KRegisterCache (on) turns it off. Integer loops run in 1.68x fewer
-68k instructions; other tests are unchanged.
+68k instructions.
+
+Calls into JavaScript from C++ (sort comparators, map, forEach, getters,
+replace callbacks) cost less: the 68k entry keeps only the register file
+slots a C call must give back (sp, lr and the callee-saved registers, not
+the t registers) and copies them with a run of move.l instead of two
+memcpy calls, and finds CLoopStack's stack pointer field once per stack
+instead of on every entry. The sort test runs 1.41x fewer instructions.
 ---
+ .../llint/LowLevelInterpreter.cpp             |  33 +-
  .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 480 ++++++++++++++++++
  Source/JavaScriptCore/runtime/OptionsList.h   |   1 +
- 2 files changed, 481 insertions(+)
+ 3 files changed, 510 insertions(+), 4 deletions(-)
 
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+index 54385446f4f..6e7ecbb49ae 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+@@ -364,6 +364,24 @@ static void* findCLoopStackPointerField(CLoopStack& stack)
+     return field;
+ }
+ 
++// The first register file slot a nested entry must give back: the
++// interpreter's t registers are not kept across the C call a nested entry
++// happens in (as on every CPU), so only sp, lr, pc, zr and the callee-saved
++// registers are.
++static constexpr unsigned M68KSlotFirstKept = M68KSlotSP;
++static constexpr unsigned M68KKeptWords = (M68KSlotCount - M68KSlotFirstKept) * 2;
++
++// A straight run of move.l (a)+,(a)+: the C library's memcpy, and a loop,
++// cost several times the copy for these few words on the 68k.
++static ALWAYS_INLINE void copyM68KWords(uint32_t* to, const uint32_t* from)
++{
++    static_assert(M68KKeptWords == 30);
++    __asm__ volatile(".rept 30\n\tmove.l (%1)+,(%0)+\n\t.endr"
++        : "+a"(to), "+a"(from)
++        :
++        : "memory");
++}
++
+ static void setM68KSlot(M68KSlot slot, uint64_t value)
+ {
+     jsc_m68k_vrf[slot] = value;
+@@ -407,10 +425,17 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm,
+     void* spAtEntry = cloopStack.currentStackPointer();
+ 
+     // The outer entry's registers, as the C loop keeps them in its own locals.
+-    uint64_t savedRegisters[M68KSlotCount];
+-    memcpy(savedRegisters, jsc_m68k_vrf, sizeof(savedRegisters));
++    uint32_t savedRegisters[M68KKeptWords];
++    copyM68KWords(savedRegisters, reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[M68KSlotFirstKept]));
+     void* savedStackPointerField = jsc_m68k_cloop_sp_field;
+-    jsc_m68k_cloop_sp_field = findCLoopStackPointerField(cloopStack);
++    // The field's address only changes with the stack.
++    static CLoopStack* stackOfField;
++    static void* stackPointerField;
++    if (stackOfField != &cloopStack) [[unlikely]] {
++        stackPointerField = findCLoopStackPointerField(cloopStack);
++        stackOfField = &cloopStack;
++    }
++    jsc_m68k_cloop_sp_field = stackPointerField;
+ 
+     // The incoming arguments of doVMEntryToJavaScript, and the C loop's
+     // initial registers.
+@@ -424,7 +449,7 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm,
+ 
+     EncodedJSValue result = jsc_m68k_llint_enter(getOpcode(entryOpcodeID), vm->topCallFrame);
+ 
+-    memcpy(jsc_m68k_vrf, savedRegisters, sizeof(savedRegisters));
++    copyM68KWords(reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[M68KSlotFirstKept]), savedRegisters);
+     jsc_m68k_cloop_sp_field = savedStackPointerField;
+     cloopStack.setCurrentStackPointer(spAtEntry);
+     return JSValue::decode(result);
 diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
 index 5f52906aca7..9d44f726074 100644
 --- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp

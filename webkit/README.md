@@ -140,6 +140,9 @@ The patches, in order:
   d2-d7. A preheader checks and loads them; every write also goes to the
   frame, so the copy can leave for the plain code at any point and comes
   back at the next back edge. `JSC_useM68KRegisterCache=0` turns it off.
+  Calls into JavaScript from C++ (sort comparators, map, forEach, getters)
+  cost less: the 68k entry keeps only the register slots a C call must
+  give back, copied with move.l instead of memcpy.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
