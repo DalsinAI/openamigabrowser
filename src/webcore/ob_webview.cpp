@@ -7,6 +7,7 @@
 #include "ob_webview.h"
 
 #include "AmigaCookieJar.h"
+#include "AmigaHttpCache.h"
 #include "AmigaLoaderStrategy.h"
 #include "AmigaNetwork.h"
 #include "AmigaPlatformStrategies.h"
@@ -125,6 +126,10 @@ int ob_webcore_init_with_network(const char* cookieDatabase)
             jar->storeFromResponse(firstParty, url, setCookie);
     };
     setAmigaCookieHooks(WTF::move(cookieHooks));
+
+    // Pages seen before load their files from the disk (ob_httpcache.h:
+    // ENV:OB_HTTP_CACHE=0 turns this off).
+    OpenBrowser::initializeHttpCache("PROGDIR:Cache");
     return 1;
 }
 
@@ -225,6 +230,7 @@ void ob_webcore_shutdown(void)
     // and it uses the sockets that are closed below.
     stopAmigaNetwork();
     ob_webcore_stop_threads();
+    OpenBrowser::closeHttpCache();
     cookieJar() = nullptr;
     ob_network_close();
 }

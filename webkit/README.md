@@ -107,6 +107,14 @@ The patches, in order:
   plain integer (`amigaRunLoopNextFireMicroseconds()`), so the programs
   work out their waits without floating point or libatomic.
 
+- `0025-amiga-webcore-http-disk-cache.patch`: a hook for the browser's HTTP
+  disk cache (`setAmigaHttpCache()` in `AmigaNetwork.h`). Before a request
+  goes out the browser may answer it from a fresh stored copy, or add
+  `If-None-Match`/`If-Modified-Since`; a 304 is then answered with the
+  stored copy, and other responses are handed to the cache as they arrive.
+  The cache itself is `src/webcore/ob_httpcache.c` (see
+  `../docs/WEBCORE_PORT.md`).
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;
