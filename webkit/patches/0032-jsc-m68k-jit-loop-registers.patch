@@ -1,0 +1,796 @@
+From d699cae436af5b1fe8c5c991399f52ddca137058 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 21:49:53 +0000
+Subject: [PATCH] JavaScriptCore: keep loop variables in registers in the 68k
+ template JIT (J6)
+
+A loop whose body the JIT can run on int32s alone (moves, inc/dec,
+add/sub/mul/and/or/xor, the compare-and-jumps and the trap check, with
+int32 constants only) gets a second copy of its body. The copy keeps up to
+six of the variables it uses most in d2-d7:
+
+- A preheader checks that the variables coming into the loop are int32s
+  and loads them; a temporary only written in the loop gets its int32 tag
+  there once. Jumps to the loop head (its back edges, the interpreter's
+  loop entry) go to the preheader.
+- Every write also goes to the frame, so leaving the copy at any point (an
+  overflow, a value that is not an int32, an instruction the copy has no
+  code for, the loop's exit) continues in the plain code with nothing to
+  write back. A loop that left the copy comes back to it at its next back
+  edge, through the preheader.
+- The back edge inside the copy goes past the preheader.
+
+useM68KRegisterCache (on) turns it off. Integer loops run in 1.68x fewer
+68k instructions.
+
+Calls into JavaScript from C++ (sort comparators, map, forEach, getters,
+replace callbacks) cost less: the 68k entry keeps only the register file
+slots a C call must give back (sp, lr and the callee-saved registers, not
+the t registers) and copies them with a run of move.l instead of two
+memcpy calls, and finds CLoopStack's stack pointer field once per stack
+instead of on every entry. The sort test runs 1.41x fewer instructions.
+
+Calls from compiled code to a compiled function skip the interpreter's
+prologue: each compiled function's code starts with the prologue's work
+with its CodeBlock's values as immediates (frame, stack check, PB,
+metadata table), and the call fast path jumps there when the call link's
+CodeBlock has code. Too few arguments, a stack about to overflow or a
+huge frame go to the interpreter's prologues as before. The calls test
+runs 1.37x fewer instructions.
+
+The loop copy also covers get_by_id and put_by_id, with the plain code's
+fast paths: their slow cases run the plain instruction; a get_by_id result
+kept in a register is checked to be an int32 (else the copy goes on in the
+plain code). Slots used as property bases, and the slots moved to and from
+them, stay out of the registers. put_by_id's write barrier check uses d0
+instead of d2. The properties test runs 1.07x fewer instructions.
+---
+ .../llint/LowLevelInterpreter.cpp             |  33 +-
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 609 +++++++++++++++++-
+ Source/JavaScriptCore/runtime/OptionsList.h   |   1 +
+ 3 files changed, 636 insertions(+), 7 deletions(-)
+
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+index 54385446f4f..6e7ecbb49ae 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+@@ -364,6 +364,24 @@ static void* findCLoopStackPointerField(CLoopStack& stack)
+     return field;
+ }
+ 
++// The first register file slot a nested entry must give back: the
++// interpreter's t registers are not kept across the C call a nested entry
++// happens in (as on every CPU), so only sp, lr, pc, zr and the callee-saved
++// registers are.
++static constexpr unsigned M68KSlotFirstKept = M68KSlotSP;
++static constexpr unsigned M68KKeptWords = (M68KSlotCount - M68KSlotFirstKept) * 2;
++
++// A straight run of move.l (a)+,(a)+: the C library's memcpy, and a loop,
++// cost several times the copy for these few words on the 68k.
++static ALWAYS_INLINE void copyM68KWords(uint32_t* to, const uint32_t* from)
++{
++    static_assert(M68KKeptWords == 30);
++    __asm__ volatile(".rept 30\n\tmove.l (%1)+,(%0)+\n\t.endr"
++        : "+a"(to), "+a"(from)
++        :
++        : "memory");
++}
++
+ static void setM68KSlot(M68KSlot slot, uint64_t value)
+ {
+     jsc_m68k_vrf[slot] = value;
+@@ -407,10 +425,17 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm,
+     void* spAtEntry = cloopStack.currentStackPointer();
+ 
+     // The outer entry's registers, as the C loop keeps them in its own locals.
+-    uint64_t savedRegisters[M68KSlotCount];
+-    memcpy(savedRegisters, jsc_m68k_vrf, sizeof(savedRegisters));
++    uint32_t savedRegisters[M68KKeptWords];
++    copyM68KWords(savedRegisters, reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[M68KSlotFirstKept]));
+     void* savedStackPointerField = jsc_m68k_cloop_sp_field;
+-    jsc_m68k_cloop_sp_field = findCLoopStackPointerField(cloopStack);
++    // The field's address only changes with the stack.
++    static CLoopStack* stackOfField;
++    static void* stackPointerField;
++    if (stackOfField != &cloopStack) [[unlikely]] {
++        stackPointerField = findCLoopStackPointerField(cloopStack);
++        stackOfField = &cloopStack;
++    }
++    jsc_m68k_cloop_sp_field = stackPointerField;
+ 
+     // The incoming arguments of doVMEntryToJavaScript, and the C loop's
+     // initial registers.
+@@ -424,7 +449,7 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm,
+ 
+     EncodedJSValue result = jsc_m68k_llint_enter(getOpcode(entryOpcodeID), vm->topCallFrame);
+ 
+-    memcpy(jsc_m68k_vrf, savedRegisters, sizeof(savedRegisters));
++    copyM68KWords(reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[M68KSlotFirstKept]), savedRegisters);
+     jsc_m68k_cloop_sp_field = savedStackPointerField;
+     cloopStack.setCurrentStackPointer(spAtEntry);
+     return JSValue::decode(result);
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index 5f52906aca7..13c0a569c46 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -56,6 +56,11 @@
+ #undef M68K_TEMPLATE
+ 
+ extern "C" uint64_t jsc_m68k_vrf[];
++// The interpreter's prologues, for the cases the compiled one leaves to them.
++extern "C" void jsc_m68k_llint_function_for_call_prologue() __asm__("_llint_function_for_call_prologue");
++extern "C" void jsc_m68k_llint_function_for_construct_prologue() __asm__("_llint_function_for_construct_prologue");
++extern "C" void jsc_m68k_llint_function_for_call_arity_check() __asm__("_llint_function_for_call_arity_check");
++extern "C" void jsc_m68k_llint_function_for_construct_arity_check() __asm__("_llint_function_for_construct_arity_check");
+ 
+ namespace JSC {
+ namespace M68KTemplateJIT {
+@@ -223,6 +228,21 @@ public:
+     void copyFrameToIndexed(int disp, unsigned an, unsigned dn, int d8) { word(0x21ad | (an << 9)); word(disp); word(index(dn, d8)); } // move.l d16(a5),d8(an,dn.l)
+     void storeImmIndexed(uint32_t imm, unsigned an, unsigned dn, int d8) { word(0x21bc | (an << 9)); longWord(imm); word(index(dn, d8)); } // move.l #imm,d8(an,dn.l)
+ 
++    // Register caching (stage J6): register-to-register forms.
++    void moveReg(unsigned src, unsigned dn) { word(0x2000 | (dn << 9) | src); } // move.l src,dn
++    void addReg(unsigned src, unsigned dn) { word(0xd080 | (dn << 9) | src); } // add.l src,dn
++    void subReg(unsigned src, unsigned dn) { word(0x9080 | (dn << 9) | src); } // sub.l src,dn
++    void andReg(unsigned src, unsigned dn) { word(0xc080 | (dn << 9) | src); } // and.l src,dn
++    void orReg(unsigned src, unsigned dn) { word(0x8080 | (dn << 9) | src); } // or.l src,dn
++    void cmpReg(unsigned src, unsigned dn) { word(0xb080 | (dn << 9) | src); } // cmp.l src,dn
++    // move.l (addr).l,d0; andi.l #mask,d0
++    void loadAbsoluteMasked(const void* address, uint32_t mask)
++    {
++        word(0x2039); longWord(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(address)));
++        word(0x0280); longWord(mask);
++    }
++    void mulsReg(unsigned src, unsigned dn) { word(0x4c00 | src); word((dn << 12) | 0x0800); } // muls.l src,dn
++
+     // op_enter (stage J5).
+     void clrFrame(int disp) { word(0x42ad); word(disp); } // clr.l d16(a5)
+     void moveq(int8_t imm, unsigned dn) { word(0x7000 | (dn << 9) | static_cast<uint8_t>(imm)); }
+@@ -322,6 +342,12 @@ public:
+         fixups.append({ at, from, true, 0, 0, false });
+         return fixups.size() - 1;
+     }
++    // b<cc>.l to a buffer position.
++    void branchToBuffer(Condition cc, size_t target)
++    {
++        size_t i = branch(cc);
++        fixups[i].targetBuffer = target;
++    }
+     void branchToBytecode(Condition cc, unsigned offset)
+     {
+         size_t i = branch(cc);
+@@ -703,10 +729,10 @@ private:
+         } else {
+             m_hot.tstFrame(value.hi);
+             size_t notCell1 = m_hot.branchShort(Builder::NotEqual);
+-            m_hot.loadFrame(value.lo, 2);
+-            m_hot.btst1(2);
++            m_hot.loadFrame(value.lo, 0); // d0: the loop copy keeps variables in d2-d7
++            m_hot.btst1(0);
+             size_t notCell2 = m_hot.branchShort(Builder::NotEqual);
+-            m_hot.tst(2);
++            m_hot.tst(0);
+             size_t notCell3 = m_hot.branchShort(Builder::Equal);
+             m_hot.tstByteDisp(0, JSCell::cellStateOffset());
+             slowUnless(Builder::Equal);
+@@ -843,6 +869,18 @@ private:
+         // cloopCallJSFunction: lr is the return point, then jump.
+         size_t returnPoint = m_hot.storeCodeAddressAbs(lr + 1);
+         m_hot.clrAbs(lr);
++        // A callee with compiled code: straight into its compiled prologue,
++        // at the start of its code. Otherwise (no CodeBlock, as for a native
++        // callee, or not compiled yet) the call link's destination.
++        m_hot.word(0x2039); m_hot.longWord(reinterpret_cast<uintptr_t>(linkBase + CallLinkInfo::offsetOfCodeBlock())); // move.l (codeBlock).l,d0
++        size_t noCodeBlock = m_hot.branchShort(Builder::Equal);
++        m_hot.word(0x2040); // movea.l d0,a0
++        m_hot.word(0x2028); m_hot.word(static_cast<uint16_t>(OBJECT_OFFSETOF(CodeBlock, m_m68kTemplateCode))); // move.l d16(a0),d0
++        size_t notCompiled = m_hot.branchShort(Builder::Equal);
++        m_hot.word(0x2040); // movea.l d0,a0
++        m_hot.jumpA0();
++        m_hot.bindShort(noCodeBlock);
++        m_hot.bindShort(notCompiled);
+         m_hot.loadAddressAbs(linkBase + CallLinkInfo::offsetOfMonomorphicCallDestination(), 0);
+         m_hot.jumpA0();
+         // Back from the callee (its op_ret restored cfr and metadataTable):
+@@ -988,6 +1026,515 @@ private:
+     FloatPath* m_float { nullptr };
+ };
+ 
++// Register caching (stage J6). A loop's body gets a second copy that keeps
++// the int32 variables it computes with in data registers d2-d7 from one
++// iteration to the next, instead of loading and checking them from the
++// frame at every use. The copy starts at a preheader, which checks those
++// variables are int32s and loads them; the loop's back edge then jumps past
++// the preheader. Every write also goes to the frame (the registers are a
++// cache), so leaving the copy needs no clean-up: anything the copy does not
++// handle (a non-int32, an overflow, an instruction it has no code for)
++// jumps to the start of that instruction in the ordinary code (the plain
++// copy), which redoes it with full checks and runs the rest of the
++// iteration; its back edge comes back to the preheader.
++class LoopCopy {
++public:
++    LoopCopy(CodeBlock* codeBlock, Builder& code, FastPaths& fastPaths, const Vector<unsigned>& plainStart)
++        : m_codeBlock(codeBlock)
++        , m_code(code)
++        , m_fastPaths(fastPaths)
++        , m_plainStart(plainStart)
++    {
++    }
++
++    // Emits the copy for the loop whose op_loop_hint is at head. Returns the
++    // preheader's position, or SIZE_MAX when the copy would not pay.
++    size_t emit(const JSInstruction* head, unsigned headOffset)
++    {
++        m_head = headOffset;
++        if (!plan(head))
++            return SIZE_MAX;
++        size_t preheader = m_code.size();
++        for (unsigned i = 0; i < m_registers.size(); ++i) {
++            auto [slot, reg] = m_registers[i];
++            if (!m_liveIn[i]) {
++                // A temporary is written before it is read on every path, so
++                // its tag can be int32 from here on; a variable's tag is
++                // stored with each write instead.
++                if (isTemporary(slot))
++                    m_code.storeFrameImm(int32Tag, slot);
++                continue;
++            }
++            m_code.cmpFrameImm(int32Tag, slot);
++            m_code.branchToBuffer(Builder::NotEqual, m_plainStart[m_head]);
++            m_code.loadFrame(slot + 4, reg);
++        }
++        m_loop = m_code.size();
++        const JSInstruction* instruction = head;
++        while (true) {
++            unsigned offset = m_codeBlock->bytecodeOffset(instruction);
++            unsigned next = offset + instruction->size();
++            Result result = emitOne(instruction, offset);
++            if (result == Stop) {
++                m_code.branchToBuffer(Builder::Always, m_plainStart[offset]);
++                break;
++            }
++            if (result == End)
++                break;
++            if (next >= m_codeBlock->instructions().size()) {
++                m_code.jumpToBytecode(next);
++                break;
++            }
++            instruction = m_codeBlock->instructions().at(next).ptr();
++        }
++        return preheader;
++    }
++
++private:
++    enum Result { Next, Stop, End };
++
++    struct Value {
++        bool isConstant { false };
++        int32_t constant { 0 };
++        int reg { -1 }; // a cached variable's register
++        bool liveIn { false }; // cached, and its frame tag checked by the preheader
++        int hi { 0 };
++        int lo { 0 };
++    };
++
++    static bool isCompareJump(OpcodeID opcode)
++    {
++        switch (opcode) {
++        case op_jless: case op_jlesseq: case op_jgreater: case op_jgreatereq:
++        case op_jnless: case op_jnlesseq: case op_jngreater: case op_jngreatereq:
++            return true;
++        default:
++            return false;
++        }
++    }
++
++    // The variables (frame slots, by their high word's displacement) the
++    // instruction computes with as int32s; false when the copy has no code
++    // for it.
++    bool operands(const JSInstruction* instruction, Vector<VirtualRegister, 3>& uses, Vector<VirtualRegister, 1>* cells = nullptr)
++    {
++        // A property access's base: a cell, never one of the registers.
++        auto cell = [&](VirtualRegister reg) {
++            if (cells)
++                cells->append(reg);
++        };
++        // A constant that is not an int32 (a double, say) never takes the
++        // copy's int32 code, so the copy stops before it.
++        bool int32Constants = true;
++        auto add = [&](VirtualRegister reg) {
++            if (reg.isConstant() && !m_codeBlock->getConstant(reg).isInt32())
++                int32Constants = false;
++            uses.append(reg);
++        };
++        auto result = [&](bool handled) { return handled && int32Constants; };
++        switch (instruction->opcodeID()) {
++        case op_loop_hint:
++        case op_jmp:
++        case op_check_traps:
++            return true;
++        case op_mov: {
++            auto bytecode = instruction->as<OpMov>();
++            if (bytecode.m_src.isConstant() && !m_codeBlock->getConstant(bytecode.m_src).isInt32())
++                return false;
++            add(bytecode.m_dst);
++            add(bytecode.m_src);
++            return true;
++        }
++        // Property access, with the plain code's fast paths; get_by_id's
++        // result can be one of the registers.
++        case op_get_by_id: {
++            auto bytecode = instruction->as<OpGetById>();
++            add(bytecode.m_dst);
++            cell(bytecode.m_base);
++            return Options::useM68KPropertyFastPaths() && !bytecode.m_base.isConstant() && !bytecode.m_dst.isConstant();
++        }
++        case op_put_by_id: {
++            auto bytecode = instruction->as<OpPutById>();
++            cell(bytecode.m_base);
++            if (!bytecode.m_value.isConstant())
++                add(bytecode.m_value);
++            return Options::useM68KPropertyFastPaths() && !bytecode.m_base.isConstant();
++        }
++        case op_inc: add(instruction->as<OpInc>().m_srcDst); return true;
++        case op_dec: add(instruction->as<OpDec>().m_srcDst); return true;
++#define M68K_BINARY(name, Op) case name: { auto bytecode = instruction->as<Op>(); add(bytecode.m_dst); add(bytecode.m_lhs); add(bytecode.m_rhs); return result(true); }
++        M68K_BINARY(op_add, OpAdd)
++        M68K_BINARY(op_sub, OpSub)
++        M68K_BINARY(op_mul, OpMul)
++        M68K_BINARY(op_bitand, OpBitand)
++        M68K_BINARY(op_bitor, OpBitor)
++        M68K_BINARY(op_bitxor, OpBitxor)
++#undef M68K_BINARY
++#define M68K_COMPARE(name, Op) case name: { auto bytecode = instruction->as<Op>(); add(bytecode.m_lhs); add(bytecode.m_rhs); return result(true); }
++        M68K_COMPARE(op_jless, OpJless)
++        M68K_COMPARE(op_jlesseq, OpJlesseq)
++        M68K_COMPARE(op_jgreater, OpJgreater)
++        M68K_COMPARE(op_jgreatereq, OpJgreatereq)
++        M68K_COMPARE(op_jnless, OpJnless)
++        M68K_COMPARE(op_jnlesseq, OpJnlesseq)
++        M68K_COMPARE(op_jngreater, OpJngreater)
++        M68K_COMPARE(op_jngreatereq, OpJngreatereq)
++#undef M68K_COMPARE
++        default:
++            return false;
++        }
++    }
++
++    int jumpTarget(const JSInstruction* instruction, unsigned offset)
++    {
++        int target = 0;
++        switch (instruction->opcodeID()) {
++#define M68K_TARGET(name, Op) case name: target = instruction->as<Op>().m_targetLabel; break;
++        M68K_TARGET(op_jmp, OpJmp)
++        M68K_TARGET(op_jless, OpJless)
++        M68K_TARGET(op_jlesseq, OpJlesseq)
++        M68K_TARGET(op_jgreater, OpJgreater)
++        M68K_TARGET(op_jgreatereq, OpJgreatereq)
++        M68K_TARGET(op_jnless, OpJnless)
++        M68K_TARGET(op_jnlesseq, OpJnlesseq)
++        M68K_TARGET(op_jngreater, OpJngreater)
++        M68K_TARGET(op_jngreatereq, OpJngreatereq)
++#undef M68K_TARGET
++        default:
++            return -1;
++        }
++        if (!target)
++            target = m_codeBlock->outOfLineJumpOffset(instruction);
++        return static_cast<int>(offset) + target;
++    }
++
++    // Walks the body from the loop hint to its back edge, or to the first
++    // instruction the copy has no code for, and picks the variables to keep
++    // in registers: the ones used most, up to six.
++    bool plan(const JSInstruction* head)
++    {
++        HashMap<int, unsigned, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> uses;
++        HashSet<int, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> liveIn;
++        // Slots that hold cells (property bases), and the moves between
++        // slots: a move's ends share a kind.
++        HashSet<int, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> cellSlots;
++        Vector<std::pair<int, int>> moves;
++        auto displacement = [](VirtualRegister reg) { return reg.offset() * static_cast<int>(sizeof(Register)); };
++        unsigned handled = 0;
++        bool backEdge = false;
++        const JSInstruction* instruction = head;
++        while (true) {
++            unsigned offset = m_codeBlock->bytecodeOffset(instruction);
++            Vector<VirtualRegister, 3> regs;
++            Vector<VirtualRegister, 1> cells;
++            if (!operands(instruction, regs, &cells))
++                break;
++            ++handled;
++            for (auto reg : cells)
++                cellSlots.add(displacement(reg));
++            if (instruction->opcodeID() == op_mov && !regs[1].isConstant())
++                moves.append({ displacement(regs[0]), displacement(regs[1]) });
++            // mov and the arithmetic list their result first; it is written
++            // after the others are read.
++            OpcodeID opcode = instruction->opcodeID();
++            bool writesFirst = opcode == op_mov || opcode == op_add || opcode == op_sub || opcode == op_mul
++                || opcode == op_bitand || opcode == op_bitor || opcode == op_bitxor || opcode == op_get_by_id;
++            for (unsigned pass = 0; pass < 2; ++pass) {
++                for (unsigned i = 0; i < regs.size(); ++i) {
++                    bool isWrite = writesFirst && !i;
++                    if (isWrite != (pass == 1) || regs[i].isConstant())
++                        continue;
++                    int disp = regs[i].offset() * static_cast<int>(sizeof(Register));
++                    if (disp < -32768 || disp + 4 > 32767)
++                        return false;
++                    auto added = uses.add(disp, 0);
++                    added.iterator->value++;
++                    // Read before any write in the body: its value comes in
++                    // from before the loop, so the preheader checks and loads it.
++                    if (added.isNewEntry && !isWrite)
++                        liveIn.add(disp);
++                }
++            }
++            int target = jumpTarget(instruction, offset);
++            if (target == static_cast<int>(m_head)) {
++                backEdge = true;
++                break;
++            }
++            if (instruction->opcodeID() == op_jmp)
++                break;
++            unsigned next = offset + instruction->size();
++            if (next >= m_codeBlock->instructions().size())
++                break;
++            instruction = m_codeBlock->instructions().at(next).ptr();
++        }
++        // Without the back edge the registers never carry over; with too
++        // little in the body they never pay for the preheader.
++        if (!backEdge || handled < 4 || uses.isEmpty())
++            return false;
++        for (bool changed = true; changed;) {
++            changed = false;
++            for (auto [dst, src] : moves) {
++                if (cellSlots.contains(dst) != cellSlots.contains(src)) {
++                    cellSlots.add(dst);
++                    cellSlots.add(src);
++                    changed = true;
++                }
++            }
++        }
++        Vector<std::pair<unsigned, int>> ranked;
++        for (auto& entry : uses) {
++            if (!cellSlots.contains(entry.key))
++                ranked.append({ entry.value, entry.key });
++        }
++        std::sort(ranked.begin(), ranked.end(), [](auto& a, auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
++        static constexpr unsigned registers[] = { 2, 3, 4, 5, 6, 7 };
++        m_registers.clear();
++        m_liveIn.clear();
++        for (unsigned i = 0; i < ranked.size() && i < std::size(registers); ++i) {
++            if (ranked[i].first < 2)
++                break;
++            m_registers.append({ ranked[i].second, registers[m_registers.size()] });
++            m_liveIn.append(liveIn.contains(ranked[i].second));
++        }
++        return !m_registers.isEmpty();
++    }
++
++    bool isTemporary(int hi) const
++    {
++        VirtualRegister reg(hi / static_cast<int>(sizeof(Register)));
++        return reg.isLocal() && static_cast<unsigned>(reg.toLocal()) >= m_codeBlock->numVars();
++    }
++
++    int registerFor(int hi) const
++    {
++        for (auto& [slot, reg] : m_registers) {
++            if (slot == hi)
++                return reg;
++        }
++        return -1;
++    }
++
++    Value valueFor(VirtualRegister reg)
++    {
++        Value value;
++        if (reg.isConstant()) {
++            value.isConstant = true;
++            value.constant = m_codeBlock->getConstant(reg).asInt32();
++            return value;
++        }
++        value.hi = reg.offset() * static_cast<int>(sizeof(Register));
++        value.lo = value.hi + 4;
++        value.reg = registerFor(value.hi);
++        for (unsigned i = 0; i < m_registers.size(); ++i) {
++            if (m_registers[i].first == value.hi)
++                value.liveIn = m_liveIn[i];
++        }
++        return value;
++    }
++
++    void bail(Builder::Condition cc) { m_code.branchToBuffer(cc, m_plainStart[m_offset]); }
++
++    // A value that is not cached: check it is an int32 (else leave the copy).
++    void checkUncached(const Value& value)
++    {
++        if (value.isConstant || value.reg >= 0)
++            return;
++        m_code.cmpFrameImm(int32Tag, value.hi);
++        bail(Builder::NotEqual);
++    }
++    void load(const Value& value, unsigned dn)
++    {
++        if (value.isConstant)
++            m_code.moveImm(value.constant, dn);
++        else if (value.reg >= 0)
++            m_code.moveReg(value.reg, dn);
++        else
++            m_code.loadFrame(value.lo, dn);
++    }
++    // The result in dn into dst: its register if cached, and the frame. A
++    // live-in variable's frame tag is int32 already (the preheader checked
++    // it, and the copy only writes int32s to it), as is a cached temporary's
++    // (the preheader stored it); any other gets its tag.
++    void store(unsigned dn, const Value& dst)
++    {
++        if (dst.reg >= 0 && static_cast<unsigned>(dst.reg) != dn)
++            m_code.moveReg(dn, dst.reg);
++        m_code.storeFrame(dn, dst.lo);
++        if (!dst.liveIn && !(dst.reg >= 0 && isTemporary(dst.hi)))
++            m_code.storeFrameImm(int32Tag, dst.hi);
++    }
++    void branchTo(Builder::Condition cc, unsigned target)
++    {
++        if (target == m_head)
++            m_code.branchToBuffer(cc, m_loop);
++        else
++            m_code.branchToBytecode(cc, target);
++    }
++
++    enum class Arith { Add, Sub, Mul, And, Or, Xor };
++    template<typename Op>
++    Result binary(const JSInstruction* instruction, Arith arith)
++    {
++        auto bytecode = instruction->as<Op>();
++        if (bytecode.m_dst.isConstant())
++            return Stop;
++        Value dst = valueFor(bytecode.m_dst);
++        Value lhs = valueFor(bytecode.m_lhs);
++        Value rhs = valueFor(bytecode.m_rhs);
++        checkUncached(lhs);
++        checkUncached(rhs);
++        load(lhs, 0);
++        unsigned src = 1;
++        if (rhs.reg >= 0)
++            src = rhs.reg;
++        else
++            load(rhs, 1);
++        switch (arith) {
++        case Arith::Add: m_code.addReg(src, 0); bail(Builder::OverflowSet); break;
++        case Arith::Sub: m_code.subReg(src, 0); bail(Builder::OverflowSet); break;
++        case Arith::Mul:
++            m_code.mulsReg(src, 0);
++            bail(Builder::OverflowSet);
++            bail(Builder::Equal); // a zero product may be -0
++            break;
++        case Arith::And: m_code.andReg(src, 0); break;
++        case Arith::Or: m_code.orReg(src, 0); break;
++        case Arith::Xor: m_code.eorReg(src, 0); break;
++        }
++        store(0, dst);
++        return Next;
++    }
++
++    template<typename Op>
++    Result compare(const JSInstruction* instruction, unsigned offset, Builder::Condition cc)
++    {
++        auto bytecode = instruction->as<Op>();
++        Value lhs = valueFor(bytecode.m_lhs);
++        Value rhs = valueFor(bytecode.m_rhs);
++        checkUncached(lhs);
++        checkUncached(rhs);
++        unsigned left = 0;
++        if (lhs.reg >= 0)
++            left = lhs.reg;
++        else
++            load(lhs, 0);
++        if (rhs.isConstant)
++            m_code.cmpImm(rhs.constant, left);
++        else if (rhs.reg >= 0)
++            m_code.cmpReg(rhs.reg, left);
++        else
++            m_code.cmpFrame(rhs.lo, left);
++        unsigned target = jumpTarget(instruction, offset);
++        branchTo(cc, target);
++        if (target == m_head) {
++            // The back edge: falling through leaves the loop.
++            m_code.jumpToBytecode(offset + instruction->size());
++            return End;
++        }
++        return Next;
++    }
++
++    Result emitOne(const JSInstruction* instruction, unsigned offset)
++    {
++        m_offset = offset;
++        Vector<VirtualRegister, 3> unused;
++        if (!operands(instruction, unused))
++            return Stop;
++        switch (instruction->opcodeID()) {
++        case op_loop_hint:
++            return Next;
++        case op_check_traps:
++            m_code.loadAbsoluteMasked(m_codeBlock->vm().traps().trapBitsAddress(), VMTraps::AsyncEvents);
++            bail(Builder::NotEqual);
++            return Next;
++        case op_jmp: {
++            unsigned target = jumpTarget(instruction, offset);
++            branchTo(Builder::Always, target);
++            return End;
++        }
++        case op_mov: {
++            auto bytecode = instruction->as<OpMov>();
++            if (bytecode.m_dst.isConstant())
++                return Stop;
++            Value dst = valueFor(bytecode.m_dst);
++            Value src = valueFor(bytecode.m_src);
++            if (dst.reg < 0 && src.reg < 0 && !src.isConstant) {
++                // Neither is cached: copy the whole value, as the plain code.
++                m_code.copyFrame(src.hi, dst.hi);
++                m_code.copyFrame(src.lo, dst.lo);
++                return Next;
++            }
++            checkUncached(src);
++            load(src, 0);
++            store(0, dst);
++            return Next;
++        }
++        case op_inc:
++        case op_dec: {
++            VirtualRegister reg = instruction->opcodeID() == op_inc ? instruction->as<OpInc>().m_srcDst : instruction->as<OpDec>().m_srcDst;
++            if (reg.isConstant())
++                return Stop;
++            Value value = valueFor(reg);
++            checkUncached(value);
++            load(value, 0);
++            if (instruction->opcodeID() == op_inc)
++                m_code.addq1(0);
++            else
++                m_code.subq1(0);
++            bail(Builder::OverflowSet);
++            store(0, value);
++            return Next;
++        }
++        case op_get_by_id:
++        case op_put_by_id: {
++            Vector<size_t> branches;
++            FloatPath floatPath;
++            if (!m_fastPaths.emit(instruction, offset, branches, floatPath))
++                return Stop;
++            // Its slow cases run the plain code's instruction.
++            for (size_t i : branches)
++                m_code.fixups[i].targetBuffer = m_plainStart[offset];
++            if (instruction->opcodeID() == op_get_by_id) {
++                Value dst = valueFor(instruction->as<OpGetById>().m_dst);
++                if (dst.reg >= 0) {
++                    // Not an int32: the value is in the frame; go on in the plain code.
++                    m_code.cmpFrameImm(int32Tag, dst.hi);
++                    m_code.branchToBuffer(Builder::NotEqual, m_plainStart[offset + instruction->size()]);
++                    m_code.loadFrame(dst.lo, dst.reg);
++                }
++            }
++            return Next;
++        }
++        case op_add: return binary<OpAdd>(instruction, Arith::Add);
++        case op_sub: return binary<OpSub>(instruction, Arith::Sub);
++        case op_mul: return binary<OpMul>(instruction, Arith::Mul);
++        case op_bitand: return binary<OpBitand>(instruction, Arith::And);
++        case op_bitor: return binary<OpBitor>(instruction, Arith::Or);
++        case op_bitxor: return binary<OpBitxor>(instruction, Arith::Xor);
++        case op_jless: return compare<OpJless>(instruction, offset, Builder::Less);
++        case op_jlesseq: return compare<OpJlesseq>(instruction, offset, Builder::LessEqual);
++        case op_jgreater: return compare<OpJgreater>(instruction, offset, Builder::Greater);
++        case op_jgreatereq: return compare<OpJgreatereq>(instruction, offset, Builder::GreaterEqual);
++        case op_jnless: return compare<OpJnless>(instruction, offset, Builder::GreaterEqual);
++        case op_jnlesseq: return compare<OpJnlesseq>(instruction, offset, Builder::Greater);
++        case op_jngreater: return compare<OpJngreater>(instruction, offset, Builder::LessEqual);
++        case op_jngreatereq: return compare<OpJngreatereq>(instruction, offset, Builder::Less);
++        default:
++            return Stop;
++        }
++    }
++
++    CodeBlock* m_codeBlock;
++    Builder& m_code;
++    FastPaths& m_fastPaths;
++    const Vector<unsigned>& m_plainStart;
++    Vector<std::pair<int, unsigned>> m_registers; // frame slot (high word) -> data register
++    Vector<bool> m_liveIn; // per register: its value comes in from before the loop
++    unsigned m_head { 0 };
++    unsigned m_offset { 0 };
++    size_t m_loop { 0 };
++};
++
+ bool compile(CodeBlock* codeBlock)
+ {
+     const auto& instructions = codeBlock->instructions();
+@@ -1012,6 +1559,48 @@ bool compile(CodeBlock* codeBlock)
+         FloatPath floatPath;
+     };
+     Vector<Slow> slows;
++
++    // The function prologue, at the start of the code (m_m68kTemplateCode),
++    // for calls from compiled code (FastPaths::call): what the interpreter's
++    // prologue does on the 68k, with this CodeBlock's values as immediates.
++    // A call with too few arguments, a stack that would overflow, or a
++    // frame too big for a displacement goes to the interpreter's prologue.
++    if (codeBlock->codeType() == FunctionCode) {
++        bool isConstruct = codeBlock->specializationKind() == CodeSpecializationKind::CodeForConstruct;
++        auto address = [](const void* pointer) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pointer)); };
++        uint32_t prologue = address(reinterpret_cast<const void*>(isConstruct ? jsc_m68k_llint_function_for_construct_prologue : jsc_m68k_llint_function_for_call_prologue));
++        uint32_t arityCheck = address(reinterpret_cast<const void*>(isConstruct ? jsc_m68k_llint_function_for_construct_arity_check : jsc_m68k_llint_function_for_call_arity_check));
++        uint32_t* sp = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotSP]);
++        uint32_t* lr = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotLR]);
++        // StackManager's first field is the trap-aware soft limit the
++        // interpreter's prologue checks.
++        static_assert(StackManager::offsetOfSoftStackLimit() == sizeof(void*));
++        void** limit = codeBlock->vm().addressOfSoftStackLimit() - 1;
++        int64_t frameSize = static_cast<int64_t>(codeBlock->numCalleeLocals()) * sizeof(Register) + maxFrameExtentForSlowPathCall + sizeof(CallerFrameAndPC);
++        // The callee frame's argument count, from sp (the frame + 8).
++        int argumentCount = static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * static_cast<int>(sizeof(Register)) + 4 - static_cast<int>(sizeof(CallerFrameAndPC));
++        if (frameSize > 32767) {
++            code.word(0x4ef9); code.longWord(prologue); // jmp prologue
++        } else {
++            code.word(0x2279); code.longWord(address(sp + 1)); // movea.l (sp).l,a1
++            code.word(0x0ca9); code.longWord(codeBlock->numParameters()); code.word(argumentCount); // cmpi.l #numParameters,d16(a1)
++            code.word(0x6406); // bcc.s +6
++            code.word(0x4ef9); code.longWord(arityCheck); // jmp arity check
++            code.word(0x41e9); code.word(static_cast<uint16_t>(-frameSize)); // lea -frameSize(a1),a0
++            code.word(0xb1f9); code.longWord(address(limit)); // cmpa.l (limit).l,a0
++            code.word(0x6406); // bcc.s +6
++            code.word(0x4ef9); code.longWord(prologue); // jmp prologue
++            code.word(0x2339); code.longWord(address(lr + 1)); // move.l (lr).l,-(a1)
++            code.word(0x230d); // move.l a5,-(a1)
++            code.word(0x2a49); // movea.l a1,a5
++            code.word(0x2b4c); code.word(0xfffc); // move.l a4,-4(a5): the caller's metadataTable, for op_ret
++            code.word(0x23c8); code.longWord(address(sp + 1)); // move.l a0,(sp).l
++            code.word(0x267c); code.longWord(address(codeBlock->instructionsRawPointer())); // movea.l #PB,a3
++            code.word(0x95ca); // suba.l a2,a2 (PC 0)
++            code.word(0x287c); code.longWord(address(codeBlock->metadataTable())); // movea.l #metadata,a4
++            code.word(0x2a3c); code.longWord(address(codeBlock)); // move.l #codeBlock,d5 (t1)
++        }
++    }
+     auto copyTemplate = [&](const JSInstruction* ptr, unsigned offset) {
+         code.setPC(offset);
+         const m68k_tpl* tpl = templateFor(ptr);
+@@ -1034,6 +1623,20 @@ bool compile(CodeBlock* codeBlock)
+         copyTemplate(ptr, offset);
+     }
+     size_t hotSize = code.size();
++    Vector<unsigned> plainStart = hotStart;
++    bool registerCache = fast && Options::useM68KRegisterCache();
++    // Loop bodies' register copies; jumps to a loop's head (its back edges,
++    // the interpreter's loop OSR) go to the copy's preheader from now on.
++    if (registerCache) {
++        LoopCopy loopCopy(codeBlock, code, fastPaths, plainStart);
++        for (const auto& instruction : instructions) {
++            if (instruction->opcodeID() != op_loop_hint)
++                continue;
++            size_t preheader = loopCopy.emit(instruction.ptr(), instruction.offset());
++            if (preheader != SIZE_MAX)
++                hotStart[instruction.offset()] = preheader;
++        }
++    }
+     for (auto& slow : slows) {
+         unsigned next = slow.offset + slow.instruction->size();
+         if (slow.floatPath.needed) {
+diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
+index d975553da0a..8f1e2be040f 100644
+--- a/Source/JavaScriptCore/runtime/OptionsList.h
++++ b/Source/JavaScriptCore/runtime/OptionsList.h
+@@ -657,6 +657,7 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, useM68KTemplateJIT, true, Normal, "68k only: compile hot functions and loops by stitching the interpreter's handlers (J2). JSC_useM68KTemplateJIT=0 turns it off."_s) \
+     v(Bool, useM68KFastPaths, true, Normal, "68k only: the template JIT writes its own 32-bit code for common integer operations (J3)."_s) \
+     v(Bool, useM68KPropertyFastPaths, true, Normal, "68k only: the template JIT writes its own code for property reads and writes its inline cache has settled (J4)."_s) \
++    v(Bool, useM68KRegisterCache, true, Normal, "68k only: the template JIT keeps loops' int32 variables in data registers (J6)."_s) \
+     v(Unsigned, m68kTemplateJITMaximumBytecodeSize, 4096, Normal, "68k only: largest CodeBlock, in bytecode bytes, the template JIT compiles."_s) \
+     v(Bool, useBaselineJITCodeSharing, jitEnabledByDefault(), Normal, nullptr) \
+     v(Bool, libpasScavengeContinuously, false, Normal, nullptr) \
+-- 
+2.43.0
+
