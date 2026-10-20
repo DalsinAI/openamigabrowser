@@ -1,0 +1,135 @@
+name: OpenBrowser Lite
+
+# OpenBrowser Lite and weblayout (src/ob_*.c, src/weblayout, OpenMail's
+# network layer): the host tests, and the 68040 build with the OpenAmigaGCC
+# release and OpenNDK, pinned as openamigacurl's CI pins them.
+on:
+  push:
+    paths:
+      - 'src/*.c'
+      - 'src/*.h'
+      - 'src/weblayout/**'
+      - 'third_party/openmail/**'
+      - 'third_party/opentls/**'
+      - 'tests/test_*.c'
+      - 'tests/host/**'
+      - 'tests/run-host-tests.sh'
+      - 'tools/obfetch.c'
+      - 'scripts/build-openbrowser.sh'
+      - 'scripts/package-lite.sh'
+      - 'openbrowserlite.readme'
+      - 'icons/**'
+      - '.github/workflows/lite.yml'
+  pull_request:
+    paths:
+      - 'src/*.c'
+      - 'src/*.h'
+      - 'src/weblayout/**'
+      - 'third_party/openmail/**'
+      - 'third_party/opentls/**'
+      - 'tests/test_*.c'
+      - 'tests/host/**'
+      - 'tests/run-host-tests.sh'
+      - 'tools/obfetch.c'
+      - 'scripts/build-openbrowser.sh'
+      - 'scripts/package-lite.sh'
+      - 'openbrowserlite.readme'
+      - 'icons/**'
+      - '.github/workflows/lite.yml'
+  workflow_dispatch:
+
+env:
+  OPENLAYOUT_REF: ce9f92de37463c9333bf5793b35a6b37ea27614e   # openamigalayout master: openlayout.library 2.0
+  OPENSDK_REF: 5bfeaea0d004e86afb990fddb591bf0039f09233      # openamigasdk main, as openamigacurl
+  TC_URL: https://github.com/DalsinAI/openamigagcc/releases/download/v16.2.0-open3/openamigagcc-16.2.0-open3-x86_64-linux.tar.xz
+  TC_SHA256: 9fcc136ab59e3bb5b91d2764d0bf290b709d72d7380be4ce0cdf005edf8eff21
+
+jobs:
+  host:
+    # HTML Lite, CSS Lite, the address resolver, weblayout's calls and
+    # OpenMail's HTML-to-text converter with the host's compiler
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DalsinAI/openamigalayout
+          ref: ${{ env.OPENLAYOUT_REF }}
+          path: openamigalayout
+      - name: Host tests
+        run: OPENLAYOUT_SRC=openamigalayout tests/run-host-tests.sh
+      - name: Host tests with AddressSanitizer and UBSan
+        run: OPENLAYOUT_SRC=openamigalayout SANITIZE=1 OUT=build/host-asan tests/run-host-tests.sh
+
+  amiga:
+    # OpenBrowser, obfetch and the Amiga test programs for the 68040 with its FPU
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DalsinAI/openamigalayout
+          ref: ${{ env.OPENLAYOUT_REF }}
+          path: openamigalayout
+      - uses: actions/checkout@v4
+        with:
+          repository: DalsinAI/openamigasdk
+          ref: ${{ env.OPENSDK_REF }}
+          path: openamigasdk
+      - name: Fetch the toolchain
+        run: |
+          mkdir -p tc
+          curl -fsSL -o tc/tc.tar.xz "$TC_URL"
+          echo "$TC_SHA256  tc/tc.tar.xz" | sha256sum -c -
+          tar xf tc/tc.tar.xz -C tc
+      - name: 68040 build (OpenLayout built in)
+        run: |
+          TOOLCHAIN_DIR=tc/openamigagcc-16.2.0-open3-x86_64-linux \
+          NDK_INCLUDE=$PWD/openamigasdk/OpenNDK/Include_H \
+          OPENLAYOUT_SRC=$PWD/openamigalayout TESTS=1 \
+          scripts/build-openbrowser.sh build/os3
+      - name: 68040 build (resident openlayout.library)
+        run: |
+          TOOLCHAIN_DIR=tc/openamigagcc-16.2.0-open3-x86_64-linux \
+          NDK_INCLUDE=$PWD/openamigasdk/OpenNDK/Include_H \
+          OPENLAYOUT_SRC=$PWD/openamigalayout OPENLAYOUT=library \
+          scripts/build-openbrowser.sh build/os3-library
+      - name: Check the programs
+        run: |
+          D=tc/openamigagcc-16.2.0-open3-x86_64-linux/bin
+          for f in build/os3/OpenBrowserLite build/os3/obfetch build/os3/tests/* build/os3-library/OpenBrowserLite; do
+            $D/m68k-amigaos-objdump -f "$f" | grep -q 'file format amiga' || { echo "$f is not an Amiga executable"; exit 1; }
+          done
+          strings build/os3/OpenBrowserLite | grep '^\$VER: OpenBrowserLite 0\.4\.' 
+          if strings build/os3/OpenBrowserLite | grep -i amissl; then echo "AmiSSL is still named in OpenBrowser"; exit 1; fi
+          sha256sum build/os3/OpenBrowserLite build/os3/obfetch
+      - name: Install the LhA packer
+        # jlha-utils packs (jlha, also as lha); lhasa reads, to check the archive
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jlha-utils lhasa
+      - name: Release archive
+        run: |
+          scripts/package-lite.sh build/os3 build/package
+          lhasa t build/package/OpenBrowserLite-*.lha
+          lhasa v build/package/OpenBrowserLite-*.lha
+          echo "### OpenBrowser Lite release archive" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat build/package/OpenBrowserLite-*.lha.sha256 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openbrowser-lite-68040
+          path: |
+            build/os3/OpenBrowserLite
+            build/os3/obfetch
+            build/os3/tests/
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openbrowser-lite-release
+          path: |
+            build/package/OpenBrowserLite-*.lha
+            build/package/OpenBrowserLite-*.lha.sha256
+            build/package/OpenBrowserLite-*.readme
+          retention-days: 30
