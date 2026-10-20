@@ -6,6 +6,7 @@ The compiler OpenBrowser builds with: bebbo's amiga-gcc framework
 
 - `gcc-patches/`: our changes to GCC and newlib headers. These are GPL
   (GCC's licence), not MIT. See `../docs/PORT_NOTES.md` for what each does.
-- `compat/` and `include/`: our additions to libnix: aligned allocation, long
-  double maths, `fenv.h`, `uchar.h` and small shims. These are MIT.
+- `compat/` and `include/`: our additions to libnix: the allocator (small
+  blocks in size classes, large ones and aligned allocation over libnix's
+  malloc), long double maths, `fenv.h`, `uchar.h` and small shims. These are MIT.
 - `STOVE-NOTES.txt`: how the stove was built, and its flags.
