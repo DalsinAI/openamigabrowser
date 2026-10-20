@@ -1,4 +1,4 @@
-From 37de9491a3387f13da48fda65020f867fa068923 Mon Sep 17 00:00:00 2001
+From 08a8a539cc1193e265b6a1201227f1232ac89f9a Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 11:44:10 +0000
 Subject: [PATCH] JavaScriptCore: the 68k template JIT (J2, first stage)
@@ -20,29 +20,37 @@ PC, else in the interpreter.
 Off by default: JSC_useM68KTemplateJIT=1 turns it on.
 m68kTemplateJITMaximumBytecodeSize (4096) caps the CodeBlocks it compiles.
 ---
- Source/JavaScriptCore/CMakeLists.txt          |  11 +
+ Source/JavaScriptCore/CMakeLists.txt          |  15 +-
  Source/JavaScriptCore/Sources.txt             |   1 +
  Source/JavaScriptCore/bytecode/CodeBlock.cpp  |   5 +
  Source/JavaScriptCore/bytecode/CodeBlock.h    |  11 +
  .../JavaScriptCore/llint/LLIntSlowPaths.cpp   |   7 +
  .../llint/LowLevelInterpreter.cpp             |   6 +
  .../llint/LowLevelInterpreter64.asm           |  26 ++
- .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 167 +++++++++
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 186 ++++++++++
  Source/JavaScriptCore/llint/M68KTemplateJIT.h |  55 +++
  .../JavaScriptCore/llint/M68KTemplateStitch.h |  78 ++++
- .../offlineasm-py/m68k_templates.py           | 333 ++++++++++++++++++
+ .../offlineasm-py/m68k_templates.py           | 349 ++++++++++++++++++
  Source/JavaScriptCore/runtime/OptionsList.h   |   2 +
- 12 files changed, 702 insertions(+)
+ 12 files changed, 740 insertions(+), 1 deletion(-)
  create mode 100644 Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
  create mode 100644 Source/JavaScriptCore/llint/M68KTemplateJIT.h
  create mode 100644 Source/JavaScriptCore/llint/M68KTemplateStitch.h
  create mode 100755 Source/JavaScriptCore/offlineasm-py/m68k_templates.py
 
 diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
-index 106e479acab..75679b2a908 100644
+index 106e479acab..79d7d2bafdf 100644
 --- a/Source/JavaScriptCore/CMakeLists.txt
 +++ b/Source/JavaScriptCore/CMakeLists.txt
-@@ -561,6 +561,17 @@ add_custom_command(
+@@ -544,6 +544,7 @@ endif ()
+ # running this command for every build, we artificially update LLIntAssembly.h's mtime (using touch)
+ # after every asm.rb run.
+ set(LLIntOutput LLIntAssembly.h)
++set(LLIntTemplateOutputs)
+ 
+ if (WTF_OS_AMIGA)
+     set(LLINT_OFFSETS_EXTRACTOR_FILE
+@@ -561,6 +562,18 @@ add_custom_command(
      WORKING_DIRECTORY ${JavaScriptCore_DERIVED_SOURCES_DIR}
      VERBATIM)
  
@@ -54,12 +62,22 @@ index 106e479acab..75679b2a908 100644
 +        DEPENDS ${JavaScriptCore_DERIVED_SOURCES_DIR}/${LLIntOutput}
 +        COMMAND ${PYTHON_EXECUTABLE} ${JAVASCRIPTCORE_DIR}/offlineasm-py/m68k_templates.py ${JavaScriptCore_DERIVED_SOURCES_DIR}/${LLIntOutput} ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntTemplates.h
 +        VERBATIM)
-+    list(APPEND JavaScriptCore_HEADERS ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntTemplates.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntTemplateIndex.h)
++    set(LLIntTemplateOutputs ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntTemplates.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntTemplateIndex.h)
++    list(APPEND JavaScriptCore_HEADERS ${LLIntTemplateOutputs})
 +endif ()
 +
  # The explanation for not making LLIntAssembly.h part of the OBJECT_DEPENDS property of some of
  # the .cpp files below is similar to the one in the previous comment. However, since these .cpp
  # files are used to build JavaScriptCore itself, we can just add LLIntAssembly.h to JSC_HEADERS
+@@ -574,7 +587,7 @@ add_custom_command(
+ # and cmake doesn't allow us to introduce a compiler wrapper for a
+ # single source file, so we need to create a separate target for it.
+ add_library(LowLevelInterpreterLib OBJECT llint/LowLevelInterpreter.cpp
+-    ${JavaScriptCore_DERIVED_SOURCES_DIR}/${LLIntOutput})
++    ${JavaScriptCore_DERIVED_SOURCES_DIR}/${LLIntOutput} ${LLIntTemplateOutputs})
+ if (OFFLINE_ASM_BACKEND STREQUAL "M68K")
+     target_compile_definitions(LowLevelInterpreterLib PRIVATE JSC_M68K_LLINT=1)
+ endif ()
 diff --git a/Source/JavaScriptCore/Sources.txt b/Source/JavaScriptCore/Sources.txt
 index 10fec53b407..3fd65a1a052 100644
 --- a/Source/JavaScriptCore/Sources.txt
@@ -202,10 +220,10 @@ index dcbe958183b..059ff5bacb5 100644
 +end
 diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
 new file mode 100644
-index 00000000000..e3f5b7bb6d1
+index 00000000000..ac5ee216887
 --- /dev/null
 +++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,186 @@
 +/*
 + * Copyright (c) 2026 AmigaChrome Team
 + *
@@ -241,6 +259,9 @@ index 00000000000..e3f5b7bb6d1
 +
 +#if OS(AMIGA)
 +#include <proto/exec.h>
++#else
++#include <sys/mman.h>
++#include <unistd.h>
 +#endif
 +
 +// The templates, generated beside LLIntAssembly.h. Their code lives in
@@ -294,6 +315,21 @@ index 00000000000..e3f5b7bb6d1
 +    return nullptr;
 +}
 +
++void makeExecutable(void* code, size_t size)
++{
++#if OS(AMIGA)
++    UNUSED_PARAM(code);
++    UNUSED_PARAM(size);
++#else
++    // Test hosts (m68k Linux under qemu) enforce execute permission; the
++    // Amiga does not.
++    uintptr_t pageSize = sysconf(_SC_PAGESIZE);
++    uintptr_t begin = reinterpret_cast<uintptr_t>(code) & ~(pageSize - 1);
++    uintptr_t end = (reinterpret_cast<uintptr_t>(code) + size + pageSize - 1) & ~(pageSize - 1);
++    mprotect(reinterpret_cast<void*>(begin), end - begin, PROT_READ | PROT_WRITE | PROT_EXEC);
++#endif
++}
++
 +void flushInstructionCache(void* code, size_t size)
 +{
 +#if OS(AMIGA)
@@ -335,6 +371,7 @@ index 00000000000..e3f5b7bb6d1
 +        offset += m68k_tpl_stitch(code + offset, templateFor(ptr), reinterpret_cast<const uint8_t*>(ptr), instruction.offset(), ptr->size());
 +    }
 +    RELEASE_ASSERT(offset == codeSize);
++    makeExecutable(code, codeSize);
 +    flushInstructionCache(code, codeSize);
 +
 +    codeBlock->m_m68kTemplateCode = code;
@@ -520,10 +557,10 @@ index 00000000000..be3a23f5512
 +#endif
 diff --git a/Source/JavaScriptCore/offlineasm-py/m68k_templates.py b/Source/JavaScriptCore/offlineasm-py/m68k_templates.py
 new file mode 100755
-index 00000000000..e5d2b008128
+index 00000000000..69bc9380eb7
 --- /dev/null
 +++ b/Source/JavaScriptCore/offlineasm-py/m68k_templates.py
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,349 @@
 +#!/usr/bin/env python3
 +# OpenBrowser (DalsinAI/openamigabrowser)
 +# Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
@@ -652,6 +689,7 @@ index 00000000000..e5d2b008128
 +
 +
 +def rename(text, local):
++    text = GLOBAL_REF.sub(lambda m: 'LOCAL_LABEL_STRING(%s%s)' % (m.group(1), SUFFIX) if m.group(1) in local else m.group(0), text)
 +    text = LOCAL_REF.sub(lambda m: 'LOCAL_LABEL_STRING(%s%s)' % (m.group(1), SUFFIX) if m.group(1) in local else m.group(0), text)
 +    text = INLINE_REF.sub(lambda m: m.group(1) + SUFFIX if m.group(1) in local else m.group(0), text)
 +    return text
@@ -670,6 +708,16 @@ index 00000000000..e5d2b008128
 +    if m:
 +        return m.group(1), "global"
 +    return None, None
++
++
++def is_handler_part(op, name):
++    """Global labels the interpreter puts after a handler that still belong
++    to it: the return point of a call op (llint_cloop_did_return_from_js_N,
++    op_X_return_location) and its slow paths (js_trampoline_op_X). Taken
++    into the template so calls return into compiled code."""
++    return (re.match(r'llint_cloop_did_return_from_js_\d+$', name) is not None
++            or name in (op.replace("_wide", "_return_location_wide") if "_wide" in op else op + "_return_location",
++                        "js_trampoline_" + op))
 +
 +
 +def ref(name, scope):
@@ -833,12 +881,17 @@ index 00000000000..e5d2b008128
 +    blocks = parse(argv[1])
 +    templates = []
 +    report = []
-+    for name, kind, lines in blocks:
++    for b, (name, kind, lines) in enumerate(blocks):
 +        if kind != "OPCODE_LABEL" or not name.startswith("op_"):
 +            continue
 +        if only is not None and name not in only:
 +            continue
 +        body = items(lines)
++        k = b + 1
++        while k < len(blocks) and blocks[k][1] != "OPCODE_LABEL" and is_handler_part(name, blocks[k][0]):
++            body.append(("label", blocks[k][0]))
++            body.extend(items(blocks[k][2]))
++            k += 1
 +        try:
 +            out, holes, end = make_template(name, body)
 +        except Unsupported as e:

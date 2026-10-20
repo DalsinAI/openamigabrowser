@@ -126,6 +126,7 @@ def find_dispatch(body, i):
 
 
 def rename(text, local):
+    text = GLOBAL_REF.sub(lambda m: 'LOCAL_LABEL_STRING(%s%s)' % (m.group(1), SUFFIX) if m.group(1) in local else m.group(0), text)
     text = LOCAL_REF.sub(lambda m: 'LOCAL_LABEL_STRING(%s%s)' % (m.group(1), SUFFIX) if m.group(1) in local else m.group(0), text)
     text = INLINE_REF.sub(lambda m: m.group(1) + SUFFIX if m.group(1) in local else m.group(0), text)
     return text
@@ -144,6 +145,16 @@ def target_of(text):
     if m:
         return m.group(1), "global"
     return None, None
+
+
+def is_handler_part(op, name):
+    """Global labels the interpreter puts after a handler that still belong
+    to it: the return point of a call op (llint_cloop_did_return_from_js_N,
+    op_X_return_location) and its slow paths (js_trampoline_op_X). Taken
+    into the template so calls return into compiled code."""
+    return (re.match(r'llint_cloop_did_return_from_js_\d+$', name) is not None
+            or name in (op.replace("_wide", "_return_location_wide") if "_wide" in op else op + "_return_location",
+                        "js_trampoline_" + op))
 
 
 def ref(name, scope):
@@ -307,12 +318,17 @@ def main(argv):
     blocks = parse(argv[1])
     templates = []
     report = []
-    for name, kind, lines in blocks:
+    for b, (name, kind, lines) in enumerate(blocks):
         if kind != "OPCODE_LABEL" or not name.startswith("op_"):
             continue
         if only is not None and name not in only:
             continue
         body = items(lines)
+        k = b + 1
+        while k < len(blocks) and blocks[k][1] != "OPCODE_LABEL" and is_handler_part(name, blocks[k][0]):
+            body.append(("label", blocks[k][0]))
+            body.extend(items(blocks[k][2]))
+            k += 1
         try:
             out, holes, end = make_template(name, body)
         except Unsupported as e:
