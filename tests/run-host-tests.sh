@@ -1,7 +1,9 @@
 #!/bin/sh
 # OpenBrowser Lite's host tests: weblayout's HTML Lite, CSS Lite, address
-# resolver, own C library calls, text converter and allocator, with the
-# host's C compiler, on OpenLayout's portable C.
+# resolver, own C library calls, text converter and allocator, and its calls
+# (weblayout.h, drawn by tests/host's stand-in graphics.library), and
+# OpenMail's HTML-to-text converter, with the host's C compiler, on
+# OpenLayout's portable C.
 #
 #   OPENLAYOUT_SRC  an openamigalayout checkout (default ../openamigalayout)
 #   HOST_CC         the compiler (default cc)
@@ -24,8 +26,17 @@ RT="$WL/wl_mem.c $WL/wl_libc.c"     # weblayout's allocator and its own C librar
     "$HERE/tests/test_wl_css.c" -o "$OUT/test_wl_css"
 "$CC" $FLAGS -I"$WL" "$WL/wl_url.c" $RT "$HERE/tests/test_wl_url.c" -o "$OUT/test_wl_url"
 "$CC" $FLAGS -I"$WL" "$WL/wl_text.c" $RT "$HERE/tests/test_wl_libc.c" -o "$OUT/test_wl_libc"
+OM="$HERE/third_party/openmail"     # strncasecmp: POSIX
+"$CC" $FLAGS -D_DEFAULT_SOURCE -I"$HERE/tests/host" -I"$WL" -I"$OM" -I"$OL/include" \
+    "$WL/wl_document.c" "$WL/wl_paint.c" "$WL/wl_html.c" "$WL/wl_css.c" "$WL/wl_url.c" \
+    "$WL/wl_text.c" $RT "$OL/src/openlayout.c" \
+    "$HERE/tests/test_wl_document.c" -o "$OUT/test_wl_document"
+"$CC" $FLAGS -D_DEFAULT_SOURCE -I"$OM" "$OM/oam_html.c" "$OM/oam_buf.c" \
+    "$HERE/tests/test_oam_html.c" -o "$OUT/test_oam_html"
 "$OUT/test_wl_html" > "$OUT/test_wl_html.log" || { cat "$OUT/test_wl_html.log"; exit 1; }
 tail -1 "$OUT/test_wl_html.log"
 "$OUT/test_wl_css"
 "$OUT/test_wl_url"
 "$OUT/test_wl_libc"
+"$OUT/test_wl_document"
+"$OUT/test_oam_html"
