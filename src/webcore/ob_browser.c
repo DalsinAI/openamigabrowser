@@ -80,6 +80,19 @@ static char titleText[256] = "OpenBrowser";
 static int quitNow;
 static int loading;
 
+/* OB_PAINT_LEGACY=1 (an environment variable): paint as before, to compare
+ * in one build: after every run-loop turn that left a change, as one area
+ * around all the changes, laying the page out first. */
+static int paintLegacy;
+
+/* For the lab's comparison, per page load: the areas painted, the passes
+ * that painted any, and the time spent painting them and copying them into
+ * the window. Printed as one OBVIEW_BENCH line once the page has loaded and
+ * settled (nothing left to lay out or paint). */
+static ULONG benchLoadStart, benchLoadEnd;
+static ULONG benchPaints, benchRounds, benchPaintMicros, benchPaintMax, benchBlitMicros, benchBlitMax;
+static int benchDue;
+
 /* Page options (Settings menu; tool types JAVASCRIPT=NO, PICTURES=NO,
  * WEBFONTS=YES and LITE=YES). */
 static int scriptsOn = 1, picturesOn = 1, webFontsOn = 0, liteOn = 0;
@@ -122,14 +135,59 @@ static void latin1ToUTF8(const char *in, char *out, int size)
     out[n] = 0;
 }
 
+/* --- time ------------------------------------------------------------------ */
+
+/* Microseconds of timer.device's system time, wrapping every 71 minutes
+ * (differences stay right): GetSysTime() is a library call, no I/O and no
+ * floating point. 0 without the timer. */
+static ULONG clockMicros(void)
+{
+    struct timeval now;
+    if (!TimerBase)
+        return 0;
+    GetSysTime(&now);
+    return now.tv_secs * 1000000UL + now.tv_micro;
+}
+
 /* --- the window ---------------------------------------------------------- */
+
+/* While a page loads, the status line changes at most four times a second;
+ * the latest text waits in pendingStatus until flushStatus(). */
+#define STATUS_MICROS 250000UL
+static char pendingStatus[sizeof statusText];
+static int statusPending;
+static ULONG statusShownAt;
 
 static void setStatus(const char *text)
 {
-    strncpy(statusText, text, sizeof statusText - 1);
-    statusText[sizeof statusText - 1] = 0;
+    char shown[sizeof statusText];
+    strncpy(shown, text, sizeof shown - 1);
+    shown[sizeof shown - 1] = 0;
+    statusPending = 0;
+    if (!strcmp(shown, statusText))
+        return;
+    strcpy(statusText, shown);
     if (window && gadgets[GID_STATUS])
         GT_SetGadgetAttrs(gadgets[GID_STATUS], window, NULL, GTTX_Text, (ULONG)statusText, TAG_DONE);
+}
+
+static void setLoadingStatus(const char *text)
+{
+    ULONG now = clockMicros();
+    if (TimerBase && now - statusShownAt < STATUS_MICROS) {
+        strncpy(pendingStatus, text, sizeof pendingStatus - 1);
+        pendingStatus[sizeof pendingStatus - 1] = 0;
+        statusPending = 1;
+        return;
+    }
+    statusShownAt = now;
+    setStatus(text);
+}
+
+static void flushStatus(void)
+{
+    if (statusPending && clockMicros() - statusShownAt >= STATUS_MICROS)
+        setLoadingStatus(pendingStatus);
 }
 
 static void setURLGadget(const char *latin1)
@@ -140,13 +198,24 @@ static void setURLGadget(const char *latin1)
         GT_SetGadgetAttrs(gadgets[GID_URL], window, NULL, GTST_String, (ULONG)urlText, TAG_DONE);
 }
 
+/* The buttons' disabled state as shown (-1: not set since they were made). */
+static signed char shownDisabled[GID_COUNT];
+
+static void setDisabled(int id, int disabled)
+{
+    if (shownDisabled[id] == disabled)
+        return;
+    shownDisabled[id] = disabled;
+    GT_SetGadgetAttrs(gadgets[id], window, NULL, GA_Disabled, disabled, TAG_DONE);
+}
+
 static void updateButtons(void)
 {
     if (!window)
         return;
-    GT_SetGadgetAttrs(gadgets[GID_BACK], window, NULL, GA_Disabled, !ob_webview_can_go_back(view), TAG_DONE);
-    GT_SetGadgetAttrs(gadgets[GID_FORWARD], window, NULL, GA_Disabled, !ob_webview_can_go_forward(view), TAG_DONE);
-    GT_SetGadgetAttrs(gadgets[GID_STOP], window, NULL, GA_Disabled, !loading, TAG_DONE);
+    setDisabled(GID_BACK, !ob_webview_can_go_back(view));
+    setDisabled(GID_FORWARD, !ob_webview_can_go_forward(view));
+    setDisabled(GID_STOP, !loading);
 }
 
 static struct Gadget *makeButton(struct Gadget *previous, struct NewGadget *ng, int id, const char *label, int x, int width)
@@ -175,6 +244,7 @@ static int makeGadgets(void)
     int inner = window->Width - window->BorderLeft - window->BorderRight;
 
     memset(&ng, 0, sizeof ng);
+    memset(shownDisabled, -1, sizeof shownDisabled);
     ng.ng_TextAttr = screenFont;
     ng.ng_VisualInfo = visualInfo;
     ng.ng_TopEdge = top;
@@ -240,10 +310,15 @@ static int allocatePage(void)
     return pageBuffer != NULL;
 }
 
-static void paintPage(int x, int y, int width, int height)
+/* Paints an area of the page and copies it into the window. layOut: lay
+ * the page out first if it must (a new window size, a damaged window);
+ * without, an area whose layout is still due is left for later. Returns
+ * whether it painted. */
+static int paintPage(int x, int y, int width, int height, int layOut)
 {
+    ULONG start, painted, end;
     if (!pageBuffer || width <= 0 || height <= 0)
-        return;
+        return 0;
     if (x < 0) { width += x; x = 0; }
     if (y < 0) { height += y; y = 0; }
     if (x + width > pageWidth)
@@ -251,17 +326,84 @@ static void paintPage(int x, int y, int width, int height)
     if (y + height > pageHeight)
         height = pageHeight - y;
     if (width <= 0 || height <= 0)
-        return;
-    ob_webview_paint(view, pageBuffer, pageStride, x, y, width, height);
+        return 0;
+    start = clockMicros();
+    if (layOut)
+        ob_webview_paint(view, pageBuffer, pageStride, x, y, width, height);
+    else if (!ob_webview_paint_laid_out(view, pageBuffer, pageStride, x, y, width, height))
+        return 0;
+    painted = clockMicros();
     ob_blit(window->RPort, pageLeft + x, pageTop + y, pageBuffer + y * pageStride + x * 4, pageStride, width, height);
+    end = clockMicros();
+    benchPaints++;
+    benchPaintMicros += painted - start;
+    if (painted - start > benchPaintMax)
+        benchPaintMax = painted - start;
+    benchBlitMicros += end - painted;
+    if (end - painted > benchBlitMax)
+        benchBlitMax = end - painted;
+    return 1;
 }
 
+static void benchReport(void)
+{
+    ULONG now = clockMicros();
+    benchDue = 0;
+    printf("OBVIEW_BENCH gui_legacy=%d gui_load_ms=%lu gui_settled_ms=%lu gui_paints=%lu gui_rounds=%lu"
+        " paint_ms=%lu paint_max_ms=%lu blit_ms=%lu blit_max_ms=%lu\n", paintLegacy,
+        (unsigned long)((benchLoadEnd - benchLoadStart) / 1000), (unsigned long)((now - benchLoadStart) / 1000),
+        (unsigned long)benchPaints, (unsigned long)benchRounds, (unsigned long)(benchPaintMicros / 1000),
+        (unsigned long)(benchPaintMax / 1000), (unsigned long)(benchBlitMicros / 1000),
+        (unsigned long)(benchBlitMax / 1000));
+    fflush(stdout);
+}
+
+static void benchStart(void)
+{
+    if (benchDue)
+        benchReport();
+    benchLoadStart = clockMicros();
+    benchPaints = benchRounds = benchPaintMicros = benchPaintMax = benchBlitMicros = benchBlitMax = 0;
+}
+
+/* What changed on the page: each area by itself once it is laid out (see
+ * ob_webview_dirty_rects()), or, with OB_PAINT_LEGACY, one area around them
+ * all, laid out at once. */
 static void paintDirty(void)
 {
-    int x, y, width, height;
-    ob_webview_dirty(view, &x, &y, &width, &height);
-    if (width > 0 && height > 0)
-        paintPage(x, y, width, height);
+    int rects[8 * 4], n, i, painted = 0;
+    if (!window || !view)
+        return;
+    if (paintLegacy) {
+        ob_webview_dirty(view, &rects[0], &rects[1], &rects[2], &rects[3]);
+        n = rects[2] > 0 && rects[3] > 0;
+        if (n)
+            painted = paintPage(rects[0], rects[1], rects[2], rects[3], 1);
+    } else {
+        n = ob_webview_dirty_rects(view, rects, 8);
+        for (i = 0; i < n; i++)
+            painted |= paintPage(rects[i * 4], rects[i * 4 + 1], rects[i * 4 + 2], rects[i * 4 + 3], 0);
+    }
+    if (painted)
+        benchRounds++;
+    if (benchDue && !n && !loading && !ob_webview_rendering_pending(view))
+        benchReport();
+}
+
+/* After each turn of the run loop. */
+static void updateWindow(void)
+{
+    flushStatus();
+    paintDirty();
+}
+
+/* The page has been laid out (a rendering update): paint what changed now,
+ * while nothing has changed its layout again. */
+static void onRendered(void *context)
+{
+    (void)context;
+    if (!paintLegacy)
+        paintDirty();
 }
 
 static void relayout(void)
@@ -275,7 +417,7 @@ static void relayout(void)
         return;
     ob_webview_resize(view, pageWidth, pageHeight);
     updateButtons();
-    paintPage(0, 0, pageWidth, pageHeight);
+    paintPage(0, 0, pageWidth, pageHeight, 1);
 }
 
 /* --- WebCore's callbacks ---------------------------------------------------- */
@@ -311,13 +453,22 @@ static void onLoading(void *context, int isLoading, int percent)
 {
     char text[64];
     (void)context;
+    if (isLoading && !loading)
+        benchStart();
+    else if (!isLoading && loading) {
+        benchLoadEnd = clockMicros();
+        benchDue = 1;
+    }
+    /* Only what shows: the whole percentage, and whether it loads. */
+    if (isLoading == loading && (!isLoading || percent == loadPercent))
+        return;
     loading = isLoading;
     loadPercent = percent;
-    if (isLoading)
+    if (isLoading) {
         snprintf(text, sizeof text, "Loading... %d%%", percent);
-    else
-        strcpy(text, "Done.");
-    setStatus(text);
+        setLoadingStatus(text);
+    } else
+        setStatus("Done.");
     updateButtons();
 }
 
@@ -337,7 +488,7 @@ static void onResource(void *context, const char *url, int started, const char *
         shown += 7;
     utf8ToLatin1(shown, latin1, sizeof latin1);
     snprintf(text, sizeof text, "Loading %d%%: %s", loadPercent, latin1);
-    setStatus(text);
+    setLoadingStatus(text);
 }
 
 static void onFailed(void *context, const char *url, const char *description)
@@ -606,10 +757,24 @@ static void readToolTypes(int argc, char **argv)
 
 static void handleWindow(void)
 {
-    struct IntuiMessage *msg;
+    struct IntuiMessage *msg, move;
+    int moved = 0;
     while (window && (msg = GT_GetIMsg(window->UserPort))) {
         ULONG class = msg->Class;
         struct IntuiMessage copy = *msg;
+        /* Of the moves waiting, only the last counts: each one is a hit
+         * test of the page, and may change its hover state. Any other
+         * message takes the move before it first, in order. */
+        if (class == IDCMP_MOUSEMOVE) {
+            move = copy;
+            moved = 1;
+            GT_ReplyIMsg(msg);
+            continue;
+        }
+        if (moved) {
+            handleMouse(&move);
+            moved = 0;
+        }
         if (class == IDCMP_RAWKEY)
             handleKey(msg);
         GT_ReplyIMsg(msg);
@@ -623,7 +788,6 @@ static void handleWindow(void)
         case IDCMP_MENUPICK:
             handleMenu(copy.Code);
             break;
-        case IDCMP_MOUSEMOVE:
         case IDCMP_MOUSEBUTTONS:
             handleMouse(&copy);
             break;
@@ -633,7 +797,7 @@ static void handleWindow(void)
         case IDCMP_REFRESHWINDOW:
             GT_BeginRefresh(window);
             GT_EndRefresh(window, TRUE);
-            paintPage(0, 0, pageWidth, pageHeight);
+            paintPage(0, 0, pageWidth, pageHeight, 1);
             break;
         case IDCMP_ACTIVEWINDOW:
             ob_webview_focus(view, 1);
@@ -643,6 +807,8 @@ static void handleWindow(void)
             break;
         }
     }
+    if (moved && window)
+        handleMouse(&move);
 }
 
 static int openLibraries(void)
@@ -748,6 +914,11 @@ static int openBrowserWindow(const char *url, int network)
     callbacks.alert = onAlert;
     callbacks.confirm = onConfirm;
     callbacks.resource = onResource;
+    callbacks.rendered = onRendered;
+    {
+        const char *legacy = getenv("OB_PAINT_LEGACY");
+        paintLegacy = legacy && *legacy == '1';
+    }
     view = ob_webview_create(pageWidth > 0 ? pageWidth : 640, pageHeight > 0 ? pageHeight : 400, &callbacks);
     ob_webview_set_scripts(view, scriptsOn);
     ob_webview_set_pictures(view, picturesOn);
@@ -764,6 +935,8 @@ static int openBrowserWindow(const char *url, int network)
 
 static void closeBrowserWindow(void)
 {
+    if (benchDue)
+        benchReport();
     if (view)
         ob_webview_destroy(view);
     view = NULL;
@@ -801,6 +974,7 @@ static void closeBrowserWindow(void)
 #include "ob_browser.h"
 
 static int guiLibrariesOpen;
+static struct timerequest clockRequest;  /* opened for TimerBase only: GetSysTime() */
 
 int obb_open(const char *url, int scripts, int pictures, int webFonts, int lite, int network)
 {
@@ -819,6 +993,8 @@ int obb_open(const char *url, int scripts, int pictures, int webFonts, int lite,
         KeymapBase = OpenLibrary((CONST_STRPTR)"keymap.library", 37);
         if (!IntuitionBase || !GfxBase || !GadToolsBase || !KeymapBase)
             return 0;
+        if (!OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_MICROHZ, (struct IORequest *)&clockRequest, 0))
+            TimerBase = clockRequest.tr_node.io_Device;
         guiLibrariesOpen = 1;
     }
     scriptsOn = scripts;
@@ -848,7 +1024,7 @@ int obb_update(void)
         closeBrowserWindow();
         return 0;
     }
-    paintDirty();
+    updateWindow();
     return 1;
 }
 
@@ -860,6 +1036,9 @@ void obb_close(void)
         CloseLibrary(GadToolsBase);
         CloseLibrary((struct Library *)GfxBase);
         CloseLibrary((struct Library *)IntuitionBase);
+        if (TimerBase)
+            CloseDevice((struct IORequest *)&clockRequest);
+        TimerBase = NULL;
         guiLibrariesOpen = 0;
     }
 }
@@ -894,7 +1073,7 @@ static int browserMain(int argc, char **argv)
         double next;
 
         ob_webcore_cycle();
-        paintDirty();
+        updateWindow();
         next = ob_webcore_next_timer();
         if (next == 0) {
             /* More is due at once: take any input, then go round again. */
