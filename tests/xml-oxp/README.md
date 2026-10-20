@@ -1,6 +1,6 @@
 # The XML parser under WebCore: OXP
 
-WebKit patch 0018 (`webkit/patches/0018-amiga-xml-parser-oxp.patch`)
+WebKit patch 0030 (`webkit/patches/0030-amiga-xml-parser-oxp.patch`)
 parses XML with OXP, the Open XML Parser (DalsinAI/openamigaxml, `oxp/`), in
 place of libxml2. XML here covers SVG, XHTML, `DOMParser`, `responseXML` and
 `innerHTML` on XHTML.
@@ -44,8 +44,9 @@ a non-fatal error and an element with no namespace, as libxml2 does
 | `../pages/xml-xhtml.xhtml` | `obcore-view xml-xhtml.xhtml` | An XHTML 1.0 Strict page: `&nbsp;` and `&copy;` from HTML's names, the XML version, `innerHTML` | `OBVIEW_TITLE xhtml a0 a9 1.0 i` |
 | `../pages/xml-svg.svg` | `obcore-view xml-svg.svg 400 300 xml-svg.png` | An SVG with `xlink:href`, a gradient and text | Draws the picture; compare with a desktop browser |
 
-Not run yet. Building WebCore waits for the Ruby-free WebKit toolchain;
-then the patch is rebased onto that series and built.
+Not run yet. The patch now applies last, on top of the Ruby-free WebKit
+toolchain (0019, 0021) and the OpenTLS curl (0022); the next engine build
+with OXP in the dependency prefix runs them.
 
 ## Building with it
 

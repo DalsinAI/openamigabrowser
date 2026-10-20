@@ -1,0 +1,430 @@
+From 898a6482da7b0fc8a870c97a0486ccc6c4d54342 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 00:02:43 +0100
+Subject: [PATCH] offlineasm M68K: t0-t3 in data registers (J1)
+
+The low words of t0-t3 live in d4-d7 instead of the register file; their
+high words stay there. The low word is what 32-bit and pointer operations
+use, so most of the interpreter's work on them becomes register work: 32-bit
+arithmetic, compares and tests go straight to the data register, and an
+index in one of them is used as the index register as it is. Scratch is now
+d0-d3, a0, a1 and a6 (an index loaded from memory). C functions keep d4-d7,
+and jsc_m68k_llint_enter loads them from the register file on entry (the
+caller's are saved as before); llint_return_to_host takes t0's low word
+from d4.
+
+The generated interpreter has 58% fewer register-file accesses (56.6k ->
+23.6k) and 7% fewer instructions.
+---
+ .../llint/LowLevelInterpreter.cpp             |  17 ++-
+ .../offlineasm-py/offlineasm/m68k.py          | 143 ++++++++++++------
+ 2 files changed, 106 insertions(+), 54 deletions(-)
+
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+index ba7377f..58dd3dd 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+@@ -269,8 +269,10 @@ static void decodeResult(UGPRPair result, CLoopRegister& t0, CLoopRegister& t1)
+ 
+ #if OFFLINE_ASM_M68K
+ 
+-// The 68k interpreter's register file (offlineasm/m68k.rb): one 64-bit slot
+-// per interpreter register, big-endian, in this order.
++// The 68k interpreter's register file (offlineasm-py/offlineasm/m68k.py):
++// one 64-bit slot per interpreter register, big-endian, in this order. t0-t3
++// keep only their high words here while the interpreter runs; their low
++// words are in d4-d7.
+ enum M68KSlot : unsigned {
+     M68KSlotT0 = 0, M68KSlotT1 = 1, M68KSlotT2 = 2,
+     M68KSlotSP = 13, M68KSlotLR = 14,
+@@ -287,8 +289,9 @@ EncodedJSValue jsc_m68k_llint_enter(const void* opcode, CallFrame*);
+ }
+ 
+ // Saves the C registers the ABI asks to keep (the interpreter uses all of
+-// them), sets cfr (a5) and jumps to the first opcode. The interpreter comes
+-// back through llint_return_to_host with its result in t0.
++// them), sets cfr (a5), loads t0-t3's low words into d4-d7 (they live there,
++// the high words in the register file) and jumps to the first opcode. The
++// interpreter comes back through llint_return_to_host with its result in t0.
+ __asm__(
+     ".text\n"
+     ".balign 2\n"
+@@ -298,11 +301,15 @@ __asm__(
+     "    fmovem.x fp2-fp7,-(sp)\n"
+     "    move.l 120(sp),a0\n"
+     "    move.l 124(sp),a5\n"
++    "    move.l _jsc_m68k_vrf+4,d4\n"
++    "    move.l _jsc_m68k_vrf+12,d5\n"
++    "    move.l _jsc_m68k_vrf+20,d6\n"
++    "    move.l _jsc_m68k_vrf+28,d7\n"
+     "    jmp (a0)\n"
+     ".globl _llint_return_to_host\n"
+     "_llint_return_to_host:\n"
+     "    move.l _jsc_m68k_vrf,d0\n"
+-    "    move.l _jsc_m68k_vrf+4,d1\n"
++    "    move.l d4,d1\n"
+     "    fmovem.x (sp)+,fp2-fp7\n"
+     "    movem.l (sp)+,d2-d7/a2-a6\n"
+     "    rts\n"
+diff --git a/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py b/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py
+index a5d3572..bfb4709 100644
+--- a/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py
++++ b/Source/JavaScriptCore/offlineasm-py/offlineasm/m68k.py
+@@ -32,6 +32,9 @@
+ # data registers and seven address registers. So:
+ #
+ # - cfr lives in a5; it only ever holds a pointer.
++# - t0 to t3's low words live in d4 to d7, their high words in the register
++#   file below. The low word is what 32-bit and pointer operations use, so
++#   most of the interpreter's work on them is register work.
+ # - Every other interpreter register (t0-t12, sp, lr, csr0-csr10, ...) is a
+ #   64-bit slot in a register file in memory, _jsc_m68k_vrf, big-endian: the
+ #   high word at +0, the low word at +4. 32-bit and pointer operations use the
+@@ -41,8 +44,10 @@
+ # - ft0-ft5 are fp0-fp5 (fp7 is scratch). Double arithmetic uses the 68040's
+ #   fdadd/fdsub/fdmul/fddiv/fdsqrt, which round to double whatever the FPCR
+ #   says.
+-# - d0-d7, a0, a1 are scratch inside each instruction. a2-a4 and a6 are not
+-#   used, so C functions called from here keep them, as the ABI asks.
++# - d0-d3, a0, a1 and a6 are scratch inside each instruction (a6 holds an
++#   index loaded from memory). d4-d7 and a2-a5 are the interpreter's: C
++#   functions called from here keep them, as the ABI asks, and
++#   jsc_m68k_llint_enter (LowLevelInterpreter.cpp) saves the caller's.
+ #
+ # One register file serves the whole program: JavaScript runs on one thread
+ # here. CLoop::execute (LowLevelInterpreter.cpp) saves it on the way in and
+@@ -77,6 +82,13 @@ M68K_PINNED = {"cfr": "a5", "csr0": "a3", "t4": "a2", "csr3": "a4"}
+ # writes are dropped.
+ M68K_CONSTANT_REGISTERS = {"csr1": 0xfffe000000000000, "csr2": 0xfffe000000000002}
+ 
++# The low words of the hottest temporaries live in data registers (J1). Their
++# high words stay in the register file.
++M68K_DATA = {"t0": "d4", "t1": "d5", "t2": "d6", "t3": "d7"}
++
++# The index register for a BaseIndex whose index is in memory.
++M68K_INDEX_SCRATCH = "a6"
++
+ M68K_VRF_SIZE = len(M68K_GPR_SLOTS) * 8
+ M68K_VRF_SP = "%s+%d" % (M68K_VRF, M68K_GPR_SLOTS.index("sp") * 8 + 4)
+ M68K_VRF_LR = "%s+%d" % (M68K_VRF, M68K_GPR_SLOTS.index("lr") * 8 + 4)
+@@ -112,6 +124,10 @@ def _registerSlot(self):
+     return M68K_GPR_SLOTS.index(self.name) * 8
+ 
+ 
++def _registerData(self):
++    return M68K_DATA.get(self.name)
++
++
+ def _registerHi(self):
+     if self.m68kPinned():
+         raise Exception("No high word for %s" % self.name)
+@@ -121,10 +137,13 @@ def _registerHi(self):
+ def _registerLo(self):
+     if self.m68kPinned():
+         return self.m68kPinned()
++    if self.m68kData():
++        return self.m68kData()
+     return "%s+%d" % (M68K_VRF, self.m68kSlot() + 4)
+ 
+ 
+ RegisterID.m68kPinned = _registerPinned
++RegisterID.m68kData = _registerData
+ RegisterID.m68kSlot = _registerSlot
+ RegisterID.m68kHi = _registerHi
+ RegisterID.m68kLo = _registerLo
+@@ -176,7 +195,7 @@ def _isPinnedRegister(operand):
+ # The effective address of a memory operand, extra bytes on. Loads the base
+ # (and index) into areg (and ireg) first when they are not already in
+ # hardware registers.
+-def m68kAddress(operand, extra=0, areg="a0", ireg="d7"):
++def m68kAddress(operand, extra=0, areg="a0", ireg=M68K_INDEX_SCRATCH):
+     if isinstance(operand, Address):
+         base = operand.base
+         offset = operand.offset.value + extra
+@@ -191,7 +210,7 @@ def m68kAddress(operand, extra=0, areg="a0", ireg="d7"):
+         if not baseRegister:
+             emit("move.l %s,%s" % (base.m68kLo(), areg))
+             baseRegister = areg
+-        index = operand.index.m68kPinned()
++        index = operand.index.m68kPinned() or operand.index.m68kData()
+         if not index:
+             emit("move.l %s,%s" % (operand.index.m68kLo(), ireg))
+             index = ireg
+@@ -203,7 +222,7 @@ def m68kAddress(operand, extra=0, areg="a0", ireg="d7"):
+ 
+ 
+ # Both words of a 64-bit memory operand, computing the base only once.
+-def m68kAddressPair(operand, areg="a0", ireg="d7"):
++def m68kAddressPair(operand, areg="a0", ireg=M68K_INDEX_SCRATCH):
+     hi = m68kAddress(operand, 0, areg, ireg)
+     if isinstance(operand, Address):
+         lo = re.sub(r"\A(-?\d+)", lambda m: "%d" % (int(m.group(1)) + 4), hi, count=1)
+@@ -227,7 +246,7 @@ def m68kSource32(operand, scratch="d1"):
+     elif isinstance(operand, Immediate):
+         return operand.m68kLo()
+     elif isinstance(operand, (Address, BaseIndex, AbsoluteAddress)):
+-        emit("move.l %s,%s" % (m68kAddress(operand, 0, "a1", "d6"), scratch))
++        emit("move.l %s,%s" % (m68kAddress(operand, 0, "a1"), scratch))
+         return scratch
+     elif isinstance(operand, (LabelReference, LocalLabelReference)):
+         return "#%s" % operand.m68kSymbol()
+@@ -251,7 +270,7 @@ def m68kLoad64(operand, hi, lo):
+         emit("move.l #%s,%s" % (operand.m68kSymbol(), lo))
+         emit("moveq #0,%s" % hi)
+     elif isinstance(operand, (Address, BaseIndex, AbsoluteAddress)):
+-        hiAddress, loAddress = m68kAddressPair(operand, "a1", "d6")
++        hiAddress, loAddress = m68kAddressPair(operand, "a1")
+         emit("move.l %s,%s" % (hiAddress, hi))
+         emit("move.l %s,%s" % (loAddress, lo))
+     else:
+@@ -291,10 +310,11 @@ def m68kStore32Signed(value, operand):
+     if operand.m68kPinned():
+         emit("move.l %s,%s" % (value, operand.m68kPinned()))
+     else:
++        scratch = "d2" if value == "d1" else "d1"
+         emit("move.l %s,%s" % (value, operand.m68kLo()))
+-        emit("smi d5")
+-        emit("extb.l d5")
+-        emit("move.l d5,%s" % operand.m68kHi())
++        emit("smi %s" % scratch)
++        emit("extb.l %s" % scratch)
++        emit("move.l %s,%s" % (scratch, operand.m68kHi()))
+ 
+ 
+ _JCC = {
+@@ -371,6 +391,19 @@ class _M68KInstruction:
+     # dst = a op b (three operands) or dst = dst op src (two).
+     def m68kBinary32(self, opcode, signExtendResult=False):
+         a, b, dst = self.m68kOperands3()
++        if not signExtendResult and isinstance(dst, RegisterID) and dst.m68kData():
++            # Straight into the data register (J1); the high word is cleared.
++            register = dst.m68kData()
++            if a is dst:
++                emit("%s %s,%s" % (opcode, m68kSource32(b, "d1"), register))
++                emit("clr.l %s" % dst.m68kHi())
++                return
++            if not (isinstance(b, RegisterID) and b is dst):
++                source = m68kSource32(b, "d1")
++                emit("move.l %s,%s" % (m68kSource32(a, "d0"), register))
++                emit("%s %s,%s" % (opcode, source, register))
++                emit("clr.l %s" % dst.m68kHi())
++                return
+         emit("move.l %s,d0" % m68kSource32(a, "d0"))
+         emit("%s %s,d0" % (opcode, m68kSource32(b, "d1")))
+         if signExtendResult:
+@@ -418,13 +451,11 @@ class _M68KInstruction:
+             return
+         m68kLoad64(a, "d0", "d1")
+         m68kLoad64(b, "d2", "d3")
+-        emit("move.l d0,d4")
+-        emit("muls.l d3,d4")          # a.hi * b.lo, low word
+-        emit("move.l d2,d5")
+-        emit("muls.l d1,d5")          # b.hi * a.lo, low word
+-        emit("add.l d5,d4")
+-        emit("mulu.l d3,d0:d1")       # a.lo * b.lo, 64 bits
+-        emit("add.l d4,d0")
++        emit("muls.l d3,d0")          # a.hi * b.lo, low word
++        emit("muls.l d1,d2")          # b.hi * a.lo, low word
++        emit("add.l d2,d0")
++        emit("mulu.l d3,d2:d1")       # a.lo * b.lo, 64 bits
++        emit("add.l d2,d0")
+         m68kStore64("d0", "d1", dst)
+ 
+     def m68kShiftLeft64Constant(self, shift, hi, lo):
+@@ -436,10 +467,10 @@ class _M68KInstruction:
+             self.m68kShift32Constant("lsl.l", shift - 32, hi)
+             emit("moveq #0,%s" % lo)
+         else:
+-            emit("move.l %s,d4" % lo)
++            emit("move.l %s,d2" % lo)
+             self.m68kShift32Constant("lsl.l", shift, hi)
+-            self.m68kShift32Constant("lsr.l", 32 - shift, "d4")
+-            emit("or.l d4,%s" % hi)
++            self.m68kShift32Constant("lsr.l", 32 - shift, "d2")
++            emit("or.l d2,%s" % hi)
+             self.m68kShift32Constant("lsl.l", shift, lo)
+ 
+     def m68kShift32Constant(self, opcode, shift, register):
+@@ -480,10 +511,10 @@ class _M68KInstruction:
+                     else:
+                         emit("moveq #0,d0")
+                 elif shift > 0:
+-                    emit("move.l d0,d4")
++                    emit("move.l d0,d2")
+                     self.m68kShift32Constant("lsr.l", shift, "d1")
+-                    self.m68kShift32Constant("lsl.l", 32 - shift, "d4")
+-                    emit("or.l d4,d1")
++                    self.m68kShift32Constant("lsl.l", 32 - shift, "d2")
++                    emit("or.l d2,d1")
+                     self.m68kShift32Constant(hiShift, shift, "d0")
+             m68kStore64("d0", "d1", dst)
+             return
+@@ -497,16 +528,18 @@ class _M68KInstruction:
+         emit("moveq #32,d3")
+         emit("sub.l d2,d3")
+         if kind == "left":
+-            emit("move.l d1,d4")
+-            emit("lsr.l d3,d4")
++            emit("move.l d1,a0")
++            emit("lsr.l d3,d1")
+             emit("lsl.l d2,d0")
+-            emit("or.l d4,d0")
++            emit("or.l d1,d0")
++            emit("move.l a0,d1")
+             emit("lsl.l d2,d1")
+         else:
+-            emit("move.l d0,d4")
+-            emit("lsl.l d3,d4")
++            emit("move.l d0,a0")
++            emit("lsl.l d3,d0")
+             emit("lsr.l d2,d1")
+-            emit("or.l d4,d1")
++            emit("or.l d0,d1")
++            emit("move.l a0,d0")
+             emit("%s d2,d0" % ("asr.l" if kind == "right" else "lsr.l"))
+         emit("jra %s" % done)
+         emit("%s:" % big)
+@@ -595,6 +628,9 @@ class _M68KInstruction:
+     # 32-bit compare of a against b: sets the flags for a - b.
+     def m68kCompare32(self, a, b, size="l"):
+         if size == "l":
++            if isinstance(a, RegisterID) and a.m68kData():
++                emit("cmp.l %s,%s" % (m68kSource32(b, "d1"), a.m68kData()))
++                return
+             emit("move.l %s,d0" % m68kSource32(a, "d0"))
+             emit("cmp.l %s,d0" % m68kSource32(b, "d1"))
+         else:
+@@ -608,10 +644,12 @@ class _M68KInstruction:
+         elif isinstance(operand, RegisterID):
+             if operand.m68kPinned():
+                 emit("move.l %s,%s" % (operand.m68kPinned(), register))
++            elif operand.m68kData():
++                emit("move.b %s,%s" % (operand.m68kData(), register))
+             else:
+                 emit("move.b %s+%d,%s" % (M68K_VRF, operand.m68kSlot() + 7, register))
+         else:
+-            emit("move.b %s,%s" % (m68kAddress(operand, 0, "a1", "d6"), register))
++            emit("move.b %s,%s" % (m68kAddress(operand, 0, "a1"), register))
+ 
+     # 64-bit compare and branch to target when a <condition> b holds.
+     def m68kBranch64(self, condition, a, b, target):
+@@ -686,6 +724,9 @@ class _M68KInstruction:
+             else:
+                 emit("tst.b d0")
+         elif kind in ("int", "ptr"):
++            if mask is None and isinstance(value, RegisterID) and value.m68kData():
++                emit("tst.l %s" % value.m68kData())
++                return
+             emit("move.l %s,d0" % m68kSource32(value, "d0"))
+             if mask is not None:
+                 emit("and.l %s,d0" % m68kSource32(mask, "d1"))
+@@ -697,12 +738,12 @@ class _M68KInstruction:
+                 m68kLoad64(mask, "d2", "d3")
+                 emit("and.l d2,d0")
+                 emit("and.l d3,d1")
+-            # N from the high word, Z from both.
+-            emit("move.l d0,d4")
+-            emit("or.l d1,d4")
+-            emit("seq d4")
++            # N from the high word (into d3), Z from both (into d2).
++            emit("move.l d0,d2")
++            emit("or.l d1,d2")
++            emit("seq d2")
+             emit("tst.l d0")
+-            emit("smi d5")
++            emit("smi d3")
+ 
+     def m68kBranchTest(self, kind, condition):
+         if len(self.operands) == 3:
+@@ -714,13 +755,13 @@ class _M68KInstruction:
+         self.m68kTest(kind, value, mask)
+         if kind == "quad":
+             if condition == "s":
+-                emit("tst.b d5")
++                emit("tst.b d3")
+                 emit("jne %s" % target)
+             elif condition == "z":
+-                emit("tst.b d4")
++                emit("tst.b d2")
+                 emit("jne %s" % target)
+             elif condition == "nz":
+-                emit("tst.b d4")
++                emit("tst.b d2")
+                 emit("jeq %s" % target)
+         else:
+             emit("%s %s" % ({"s": "jmi", "z": "jeq", "nz": "jne"}[condition], target))
+@@ -734,11 +775,11 @@ class _M68KInstruction:
+         self.m68kTest(kind, value, mask)
+         if kind == "quad":
+             if condition == "s":
+-                emit("move.b d5,d0")
++                emit("move.b d3,d0")
+             elif condition == "z":
+-                emit("move.b d4,d0")
++                emit("move.b d2,d0")
+             elif condition == "nz":
+-                emit("move.b d4,d0")
++                emit("move.b d2,d0")
+                 emit("not.b d0")
+         else:
+             emit("%s d0" % {"s": "smi", "z": "seq", "nz": "sne"}[condition])
+@@ -763,10 +804,10 @@ class _M68KInstruction:
+             else:
+                 emit("sub.l d3,d1")
+                 emit("subx.l d2,d0")
+-            emit("svs d6")
++            emit("svs d2")
+             m68kStore64("d0", "d1", dst)
+             if condition == "o":
+-                emit("tst.b d6")
++                emit("tst.b d2")
+                 emit("jne %s" % target)
+             elif condition == "s":
+                 emit("tst.l d0")
+@@ -787,9 +828,9 @@ class _M68KInstruction:
+             emit("or.l %s,d0" % source)
+         # The store must not change the flags: move to a data register
+         # register keeps V and C clear, so save the condition first.
+-        emit("%s d6" % {"o": "svs", "s": "smi", "z": "seq", "nz": "sne"}[condition])
++        emit("%s d1" % {"o": "svs", "s": "smi", "z": "seq", "nz": "sne"}[condition])
+         m68kStore32("d0", dst)
+-        emit("tst.b d6")
++        emit("tst.b d1")
+         emit("jne %s" % target)
+ 
+     # Pointer-sized slots on the C loop's JavaScript stack.
+@@ -1090,6 +1131,10 @@ def _(self):
+         emit("move.l %s,%s" % (source.m68kPinned(), dst.m68kPinned()))
+     elif dst.m68kPinned():
+         emit("move.l %s,%s" % (m68kSource32(source, "d1"), dst.m68kPinned()))
++    elif isinstance(source, Immediate) and -128 <= source.value <= 127 and dst.m68kData():
++        emit("moveq #%d,%s" % (source.value, dst.m68kData()))
++        emit("moveq #-1,d0" if source.value < 0 else "moveq #0,d0")
++        emit("move.l d0,%s" % dst.m68kHi())
+     elif isinstance(source, Immediate) and -128 <= source.value <= 127:
+         emit("moveq #%d,d1" % source.value)
+         emit("move.l d1,%s" % dst.m68kLo())
+@@ -1218,16 +1263,16 @@ def _(self):
+ 
+ @handles("transferi", "transferp")
+ def _(self):
+-    emit("move.l %s,d0" % m68kAddress(self.operands[0], 0, "a0", "d7"))
+-    emit("move.l d0,%s" % m68kAddress(self.operands[1], 0, "a1", "d6"))
++    emit("move.l %s,d0" % m68kAddress(self.operands[0], 0, "a0"))
++    emit("move.l d0,%s" % m68kAddress(self.operands[1], 0, "a1"))
+ 
+ 
+ @handles("transferq")
+ def _(self):
+-    hi, lo = m68kAddressPair(self.operands[0], "a0", "d7")
++    hi, lo = m68kAddressPair(self.operands[0], "a0")
+     emit("move.l %s,d0" % hi)
+     emit("move.l %s,d1" % lo)
+-    hi, lo = m68kAddressPair(self.operands[1], "a1", "d6")
++    hi, lo = m68kAddressPair(self.operands[1], "a1")
+     emit("move.l d0,%s" % hi)
+     emit("move.l d1,%s" % lo)
+ 
+-- 
+2.53.0
+

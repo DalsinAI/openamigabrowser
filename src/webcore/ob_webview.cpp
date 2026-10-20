@@ -219,7 +219,7 @@ void ob_webcore_stop_threads(void)
 void ob_webcore_shutdown(void)
 {
     // The network thread ends first: the program cannot exit while it runs,
-    // and it uses the sockets and AmiSSL that are closed below.
+    // and it uses the sockets that are closed below.
     stopAmigaNetwork();
     ob_webcore_stop_threads();
     cookieJar() = nullptr;
@@ -289,6 +289,11 @@ void ob_webview_paint(OBWebView* handle, unsigned char* argb, int stride, int x,
     handle->view->paint(argb, stride, IntRect(x, y, width, height));
 }
 
+unsigned long ob_webview_bytes_received(OBWebView* handle)
+{
+    return static_cast<unsigned long>(handle->view->bytesReceived());
+}
+
 int ob_webview_text(OBWebView* handle, char* buffer, int size)
 {
     auto* frame = handle->view->mainFrame();
@@ -320,6 +325,29 @@ void ob_webview_dirty(OBWebView* handle, int* x, int* y, int* width, int* height
     *y = dirty.y();
     *width = dirty.width();
     *height = dirty.height();
+}
+
+int ob_webview_dirty_rects(OBWebView* handle, int* rects, int max)
+{
+    IntRect dirty[8];
+    unsigned count = handle->view->takeDirtyRects(dirty, static_cast<unsigned>(std::clamp(max, 0, 8)));
+    for (unsigned i = 0; i < count; i++) {
+        rects[i * 4] = dirty[i].x();
+        rects[i * 4 + 1] = dirty[i].y();
+        rects[i * 4 + 2] = dirty[i].width();
+        rects[i * 4 + 3] = dirty[i].height();
+    }
+    return static_cast<int>(count);
+}
+
+int ob_webview_paint_laid_out(OBWebView* handle, unsigned char* argb, int stride, int x, int y, int width, int height)
+{
+    return handle->view->paint(argb, stride, IntRect(x, y, width, height), false);
+}
+
+int ob_webview_rendering_pending(OBWebView* handle)
+{
+    return handle->view->renderingUpdatePending();
 }
 
 static OptionSet<PlatformEvent::Modifier> modifiersFrom(int qualifiers)

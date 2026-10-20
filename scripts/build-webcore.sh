@@ -8,7 +8,7 @@
 #   the engine   WebKit's WebCore, JavaScriptCore, WTF, PAL and bmalloc.
 #                Built only when an input in its fingerprint changes: the
 #                WebKit tree and its patches, the compiler, the headers of
-#                ICU, the OpenAmiga libraries and AmiSSL, the build options.
+#                ICU, the OpenAmiga libraries and OpenTLS, the build options.
 #   the browser  OpenBrowser's own code (src/webcore): the page layer library
 #                OBCore and the programs
 #                  OpenBrowser   the launcher: a title window, then it loads
@@ -30,9 +30,18 @@
 #                   (cairo and pixman, FreeType, HarfBuzz, fontconfig, Expat,
 #                   SQLite, curl, libpsl, zlib, libpng) in one prefix, with
 #                   OXP, the XML parser (openamigaxml's oxp/build-amiga.sh with
-#                   OUT set to that prefix; WebKit patch 0018)
-#   AMISSL_SDK      the AmiSSL 5 SDK's Developer folder           (required)
-#   RUBY            Ruby >= 2.5 for WebKit's offlineasm (default: ruby on PATH)
+#                   OUT set to that prefix; WebKit patch 0030).
+#                   Its curl must be openamigacurl's main branch, built on
+#                   OpenTLS (opentls.library): WebCore links no OpenSSL and no
+#                   AmiSSL SDK is used (WebKit patch 0022). openamigacurl
+#                   builds curl's HTTP/2 with nghttp2: copy its libnghttp2.a
+#                   into m68k-amigaos/lib beside libcurl.a, and the programs
+#                   link it after curl (WebKit patch 0023). At run time the
+#                   Amiga needs opentls.library 1.2 or newer in LIBS: and its
+#                   CA bundle in S:OpenTLS/ca-bundle.pem for https://.
+#
+# No Ruby: WebKit's Ruby generators run as Python ports (patches 0019 and
+# 0021), with the python3 CMake finds.
 #   JOBS            parallel compile jobs (default: one per CPU thread, but
 #                   no more than one per 2 GB of free memory, since WebCore's
 #                   largest files take up to 2 GB each to compile)
@@ -51,6 +60,10 @@
 #                   JOBS then defaults to their sum. Needs ccache and distcc.
 #   OB_TEST_DIR     folder to stage the test programs and pages in
 #                   (test-browser)
+#   OB_FONTS        folder holding the TrueType fonts the engine draws with
+#                   (the Liberation and DejaVu .ttf files); test-browser copies
+#                   them to Fonts/, which fontconfig reads as PROGDIR:Fonts.
+#                   The engine stops at its first page without them.
 #
 # usage: build-webcore.sh [COMMAND]
 #   configure-engine     make the build folder; for an existing folder, only
@@ -90,7 +103,6 @@ ENGINE_LIBRARIES="libWebCore.a libJavaScriptCore.a libWTF.a libPAL.a libbmalloc.
 
 need_sources() {
     : "${WEBKIT_SOURCE:?set WEBKIT_SOURCE to the patched WebKit tree}"
-    : "${AMISSL_SDK:?set AMISSL_SDK to the AmiSSL 5 SDK Developer folder}"
     : "${OAB_DEPS:?set OAB_DEPS to the folder with icu78-m68k-amigaos and m68k-amigaos}"
     [ -d "$WEBKIT_SOURCE/Source/WebCore" ] || die "WebKit source with Source/WebCore missing: $WEBKIT_SOURCE"
     export OAB_DEPS
@@ -141,7 +153,7 @@ generator() {
 # The engine's options from the build folder's cache: what the compiler is
 # told, and which WebKit features are built.
 engine_options() {
-    grep -E '^(CMAKE_BUILD_TYPE|CMAKE_TOOLCHAIN_FILE|PORT|DEVELOPER_MODE|ENABLE_[A-Z0-9_]+|USE_[A-Z0-9_]+|CMAKE_(C|CXX)_FLAGS[A-Z_]*|CMAKE_(C|CXX)_STANDARD_LIBRARIES|OPENSSL_[A-Z_]+|Ruby_EXECUTABLE)(:[A-Z]+)?=' \
+    grep -E '^(CMAKE_BUILD_TYPE|CMAKE_TOOLCHAIN_FILE|PORT|DEVELOPER_MODE|ENABLE_[A-Z0-9_]+|USE_[A-Z0-9_]+|CMAKE_(C|CXX)_FLAGS[A-Z_]*|CMAKE_(C|CXX)_STANDARD_LIBRARIES|Ruby_EXECUTABLE)(:[A-Z]+)?=' \
         "$BUILD/CMakeCache.txt" | LC_ALL=C sort
 }
 
@@ -157,7 +169,9 @@ engine_inputs() {
     echo "toolchain-file $(sha256 < "$ROOT/toolchain/amigaos3-gcc16.cmake")"
     echo "icu-headers $(tree_hash "$OAB_DEPS/icu78-m68k-amigaos/include")"
     echo "openamiga-headers $(tree_hash "$OAB_DEPS/m68k-amigaos/include")"
-    echo "amissl-headers $(tree_hash "$AMISSL_SDK/include")"
+    # opentls.library's API, as curl's OpenTLS backend was built against it
+    # (curl's own headers are in openamiga-headers).
+    echo "opentls-headers $(tree_hash "$ROOT/third_party/opentls/include")"
     echo "options $(engine_options | sha256)"
 }
 
@@ -251,19 +265,12 @@ configure_engine() {
         cmake "$BUILD" "$@"
         return
     fi
-    RUBY=${RUBY:-$(command -v ruby || true)}
-    [ -n "$RUBY" ] || die "Ruby not found; set RUBY"
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "$(generator)" "$@" \
       -DPORT=Amiga \
       -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain/amigaos3-gcc16.cmake" \
       -DCMAKE_BUILD_TYPE=MinSizeRel \
       -DENABLE_WEBCORE=ON \
-      -DJSC_M68K_LLINT=ON \
-      -DOPENBROWSER_WEBCORE_DIR="$ROOT/src/webcore" \
-      -DOPENSSL_INCLUDE_DIR="$AMISSL_SDK/include" \
-      -DOPENSSL_SSL_LIBRARY="$AMISSL_SDK/lib/AmigaOS3/libamisslstubs.a" \
-      -DOPENSSL_CRYPTO_LIBRARY="$AMISSL_SDK/lib/AmigaOS3/libamisslstubs.a" \
-      -DRuby_EXECUTABLE="$RUBY"
+      -DOPENBROWSER_WEBCORE_DIR="$ROOT/src/webcore"
 }
 
 ccache_counts() {
@@ -348,6 +355,24 @@ check_engine() {
     fi
 }
 
+# curl built with HTTP/2 needs nghttp2, which the programs link only when
+# libnghttp2.a is in the prefix (a curl without HTTP/2 links without it):
+# say so here rather than with nghttp2_* undefined at the end of the link,
+# and let CMake look again when libnghttp2.a has come or gone since it last
+# did (src/webcore/CMakeLists.txt keeps what it found as OB_NGHTTP2).
+check_curl() {
+    lib="$OAB_DEPS/m68k-amigaos/lib"
+    [ -f "$lib/libcurl.a" ] || die "no libcurl.a in $lib (openamigacurl's out/lib)"
+    if grep -q nghttp2_session_ "$lib/libcurl.a" && [ ! -f "$lib/libnghttp2.a" ]; then
+        die "$lib/libcurl.a is built with HTTP/2: copy libnghttp2.a from openamigacurl's out/lib beside it"
+    fi
+    want=
+    [ -f "$lib/libnghttp2.a" ] && want=nghttp2
+    if [ "$(sed -n 's/^OB_NGHTTP2:INTERNAL=//p' "$BUILD/CMakeCache.txt")" != "$want" ]; then
+        cmake "$BUILD" > /dev/null
+    fi
+}
+
 # The browser's targets without WebKit's: Ninja knows the engine is up to
 # date; for Makefiles, CMake's "/fast" targets skip the walk through WebKit's
 # targets (after letting CMake regenerate if a CMakeLists.txt changed).
@@ -355,6 +380,7 @@ browser_build() {
     name=$1
     shift
     check_engine
+    check_curl
     if [ "$(generator)" = Ninja ]; then
         run_build "$name" "$JOBS" "$@"
     else
@@ -375,8 +401,12 @@ build_tests() {
 
 test_browser() {
     : "${OB_TEST_DIR:?set OB_TEST_DIR to the folder to stage the tests in}"
+    : "${OB_FONTS:?set OB_FONTS to the folder of the Liberation and DejaVu .ttf files}"
+    set -- "$OB_FONTS"/*.ttf
+    [ -f "$1" ] || { echo "no .ttf files in $OB_FONTS" >&2; exit 1; }
     strip="$GCC16/prefix/bin/m68k-amigaos-strip"
-    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig"
+    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig" "$OB_TEST_DIR/Fonts"
+    cp "$@" "$OB_TEST_DIR/Fonts/"
     for program in OpenBrowser OpenBrowser.engine obcore-view obcore-dump; do
         "$strip" -o "$OB_TEST_DIR/$program" "$BUILD/bin/$program"
     done
@@ -385,8 +415,8 @@ test_browser() {
     cp "$ROOT/src/webcore/blocklist" "$OB_TEST_DIR/"
     {
         echo "; OpenBrowser's test pages through obcore-view, staged by"
-        echo "; scripts/build-webcore.sh test-browser. From this drawer, with the"
-        echo "; fonts in Fonts: \"Execute OBTests\"; the results go to OBTests.log"
+        echo "; scripts/build-webcore.sh test-browser. From this drawer:"
+        echo "; \"Execute OBTests\"; the results go to OBTests.log"
         echo "; (expected results: tests/pages/README.md)."
         echo "FailAt 1000"
         echo "Stack 400000"

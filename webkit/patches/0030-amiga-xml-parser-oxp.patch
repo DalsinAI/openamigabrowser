@@ -34,7 +34,7 @@ on its own against libxml2's events.
  create mode 100644 Source/cmake/FindOXP.cmake
 
 diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
-index 81deb8e..2b1fb01 100644
+index 7437ec8..39590d3 100644
 --- a/Source/WebCore/CMakeLists.txt
 +++ b/Source/WebCore/CMakeLists.txt
 @@ -2248,10 +2248,14 @@ set(WebCore_USER_AGENT_STYLE_SHEETS
@@ -54,10 +54,10 @@ index 81deb8e..2b1fb01 100644
      JavaScriptCore
      PAL
 diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
-index ed29f82..0276325 100644
+index be2f0fc..935faac 100644
 --- a/Source/WebCore/PlatformAmiga.cmake
 +++ b/Source/WebCore/PlatformAmiga.cmake
-@@ -67,6 +67,9 @@ list(APPEND WebCore_SOURCES
+@@ -81,6 +81,9 @@ list(APPEND WebCore_SOURCES
      platform/text/LocaleICU.cpp
  
      platform/unix/LoggingUnix.cpp
@@ -1693,7 +1693,7 @@ index 0000000..ae6074a
 +    set(OXP_INCLUDE_DIRS ${OXP_INCLUDE_DIR})
 +endif ()
 diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
-index 5defbaf..2e28b16 100644
+index 420b957..164ac82 100644
 --- a/Source/cmake/OptionsAmiga.cmake
 +++ b/Source/cmake/OptionsAmiga.cmake
 @@ -35,7 +35,7 @@ if (ENABLE_WEBCORE)
@@ -1702,19 +1702,19 @@ index 5defbaf..2e28b16 100644
      find_package(LibPSL 0.20.2 REQUIRED)
 -    find_package(LibXml2 2.9.7 REQUIRED)
 +    find_package(OXP 0.1 REQUIRED)
-     find_package(OpenSSL REQUIRED)
      find_package(PNG REQUIRED)
      find_package(SQLite3 3.23.1 REQUIRED)
-@@ -106,6 +106,8 @@ SET_AND_EXPOSE_TO_BUILD(USE_FREETYPE ON)
- SET_AND_EXPOSE_TO_BUILD(USE_HARFBUZZ ON)
- SET_AND_EXPOSE_TO_BUILD(USE_OPENSSL ON)
+     if (NOT TARGET SQLite3::SQLite3) # CMake < 4.3
+@@ -107,6 +107,8 @@ SET_AND_EXPOSE_TO_BUILD(USE_HARFBUZZ ON)
+ # does not see. WebCrypto has no backend (crypto/amiga/CryptoAmiga.cpp).
+ SET_AND_EXPOSE_TO_BUILD(USE_OPENSSL OFF)
  SET_AND_EXPOSE_TO_BUILD(USE_THEME_ADWAITA ON)
 +# XML through OXP (DalsinAI/openamigaxml), not libxml2: XMLDocumentParserOXP.cpp
 +SET_AND_EXPOSE_TO_BUILD(USE_OXP ON)
  
  SET_AND_EXPOSE_TO_BUILD(HAVE_PTHREAD_SETNAME_NP OFF)
  SET_AND_EXPOSE_TO_BUILD(HAVE_MAP_ALIGNED OFF)
-@@ -113,3 +115,9 @@ SET_AND_EXPOSE_TO_BUILD(HAVE_MAP_ALIGNED OFF)
+@@ -114,3 +116,9 @@ SET_AND_EXPOSE_TO_BUILD(HAVE_MAP_ALIGNED OFF)
  if (USE_LIBBACKTRACE)
      message(FATAL_ERROR "USE_LIBBACKTRACE is not available on the Amiga port")
  endif ()

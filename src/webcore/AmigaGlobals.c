@@ -1,17 +1,13 @@
 /*
  * Library bases that the static libraries call through: curl reaches
- * bsdsocket.library through SocketBase, and OpenSSL calls go through
- * AmiSSL's stub library to AmiSSLBase and AmiSSLExtBase. Each task that uses
- * the network opens its own (see the network code); programs without a
- * network leave them empty.
+ * bsdsocket.library through SocketBase. Each task that uses the network
+ * opens its own (see the network code); programs without a network leave it
+ * empty. (curl keeps its own opentls.library base.)
  * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <exec/libraries.h>
 
 struct Library *SocketBase;
-struct Library *AmiSSLMasterBase;
-struct Library *AmiSSLBase;
-struct Library *AmiSSLExtBase;
 
 #include <dos/dosextens.h>
 #include <proto/exec.h>

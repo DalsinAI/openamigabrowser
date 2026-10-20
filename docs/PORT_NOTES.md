@@ -25,7 +25,9 @@ JIT) on AmigaOS 3.2.3 on a 68040, 4 Oct 2026. Upstream WebKit is pinned at
   `FLAGS_FOR_TARGET`.
 - A compat library (`stove/compat`, MIT) supplies what libnix lacks:
   `aligned_alloc`/`memalign`/`posix_memalign` (malloc and free are wrapped with
-  `-Wl,--wrap`, so `free()` takes aligned blocks), long double maths through
+  `-Wl,--wrap`, so `free()` takes aligned blocks), a size-class allocator
+  for blocks up to 4 KB in front of libnix's malloc (whose cost grows as its
+  heap fragments; `tools/mallocbench.c` times the two), long double maths through
   double, `log2f`, a C++ `clock_gettime` shim, `statvfs`, and
   `__xpg_strerror_r`. It also adds `fenv.h` (68881 FPCR/FPSR) and a
   minimal `uchar.h`.

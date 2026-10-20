@@ -4,11 +4,6 @@
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 
 set(OB_THIRD_PARTY "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/openmail")
-set(OB_AMISSL_SDK "$ENV{AMISSL_SDK}")
-if (NOT EXISTS "${OB_AMISSL_SDK}/include/proto/amissl.h")
-    set(OB_AMISSL_SDK "$ENV{HOME}/ACNet-compat-lab/toolchain/amiga/AmiSSL/Developer")
-endif ()
-set(OB_AMISSL_STUBS "${OB_AMISSL_SDK}/lib/AmigaOS3/libamisslstubs.a")
 
 # The page layer: WebCore's clients, the view and its C interface, built
 # once as the static library OBCore and linked into each program. A change
@@ -33,21 +28,17 @@ set(OB_PROGRAM_SOURCES
     ${OB_THIRD_PARTY}/oam_stack.c
 )
 
-# opentls (DalsinAI/openamigaservice, checked out beside this repository, or
-# OPENSERVICE_DIR): AmiSSL hands TLS key maths to openservice.device's
-# opentls.key/1 when a board or a paired Cradle offers it.
+# openservice.device (DalsinAI/openamigaservice, checked out beside this
+# repository, or OPENSERVICE_DIR): page pictures decoded by a board or a
+# paired Cradle when one offers it (ob_media.c). Its TLS key provider was for
+# AmiSSL, which the browser no longer uses: curl does TLS through OpenTLS.
 set(OB_OPENSERVICE_DIR "$ENV{OPENSERVICE_DIR}")
-if (NOT EXISTS "${OB_OPENSERVICE_DIR}/opentls/opentls_provider.c")
+if (NOT EXISTS "${OB_OPENSERVICE_DIR}/include/devices/openservice.h")
     set(OB_OPENSERVICE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../openamigaservice")
 endif ()
-if (EXISTS "${OB_OPENSERVICE_DIR}/opentls/opentls_provider.c")
-    list(APPEND OB_CORE_SOURCES
-        ${OB_OPENSERVICE_DIR}/opentls/opentls_provider.c
-        ${OB_OPENSERVICE_DIR}/opentls/opentls_amiga.c
-        ${OB_OPENSERVICE_DIR}/host/opentls_key.c
-        ob_media.c
-    )
-    set(OB_OPENTLS 1)
+if (EXISTS "${OB_OPENSERVICE_DIR}/include/devices/openservice.h")
+    list(APPEND OB_CORE_SOURCES ob_media.c)
+    set(OB_OPENSERVICE 1)
 endif ()
 
 set(OB_FRAMEWORKS
@@ -64,9 +55,8 @@ set(OB_PRIVATE_INCLUDE_DIRECTORIES
     # AmigaNetwork.h: the Amiga network layer's hooks (not a public header)
     ${WEBCORE_DIR}/platform/network/amiga
 )
-if (OB_OPENTLS)
-    list(APPEND OB_PRIVATE_INCLUDE_DIRECTORIES
-        ${OB_OPENSERVICE_DIR}/opentls ${OB_OPENSERVICE_DIR}/host ${OB_OPENSERVICE_DIR}/include)
+if (OB_OPENSERVICE)
+    list(APPEND OB_PRIVATE_INCLUDE_DIRECTORIES ${OB_OPENSERVICE_DIR}/include)
 endif ()
 set(OB_SYSTEM_INCLUDE_DIRECTORIES
     ${AC_WEBCORE_DEPS}/include
@@ -74,12 +64,22 @@ set(OB_SYSTEM_INCLUDE_DIRECTORIES
     ${AC_WEBCORE_DEPS}/include/freetype2
     ${AC_WEBCORE_DEPS}/include/harfbuzz
     ${AC_WEBCORE_DEPS}/include/pixman-1
-    ${OB_AMISSL_SDK}/include
 )
 
 # Static archives that depend on each other (WebCore, JavaScriptCore, WTF,
 # cairo, fontconfig...) are linked as one group, so their order does not
-# matter, followed by what libnix programs need.
+# matter, followed by what libnix programs need. curl (openamigacurl, on
+# OpenTLS) opens opentls.library itself: there is no TLS library to link.
+# openamigacurl builds curl's HTTP/2 with nghttp2 (libnghttp2.a beside
+# libcurl.a); a curl built before that has none, and links without it. A new
+# libcurl.a makes CMake look again; build-webcore.sh also does when
+# libnghttp2.a comes or goes (it reads OB_NGHTTP2 from the cache).
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${AC_WEBCORE_DEPS}/lib/libcurl.a")
+if (EXISTS "${AC_WEBCORE_DEPS}/lib/libnghttp2.a")
+    set(OB_NGHTTP2 nghttp2 CACHE INTERNAL "nghttp2 linked after curl")
+else ()
+    set(OB_NGHTTP2 "" CACHE INTERNAL "nghttp2 linked after curl")
+endif ()
 macro(OB_LINK _target)
     target_link_directories(${_target} PRIVATE ${AC_WEBCORE_DEPS}/lib ${AC_WEBKIT_DEPS}/lib)
     # A link map beside each program (bin/NAME.map): which object every
@@ -89,9 +89,8 @@ macro(OB_LINK _target)
     target_link_libraries(${_target} PRIVATE
         -Wl,--start-group
         OBCore WebCore PAL JavaScriptCore WTF bmalloc
-        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z oxp sqlite3 curl psl
+        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z oxp sqlite3 curl ${OB_NGHTTP2} psl
         icui18n icuuc icudata
-        ${OB_AMISSL_STUBS}
         amiga pthread atomic stdc++ m
         -Wl,--end-group
     )
@@ -109,8 +108,8 @@ set(OBCore_PRIVATE_LIBRARIES WebKit::WebCore WebKit::PAL WebKit::JavaScriptCore 
 set(OBCore_DEPENDENCIES WebCore)
 WEBKIT_LIBRARY_DECLARE(OBCore)
 WEBKIT_LIBRARY(OBCore)
-if (OB_OPENTLS)
-    target_compile_definitions(OBCore PRIVATE OB_OPENTLS=1)
+if (OB_OPENSERVICE)
+    target_compile_definitions(OBCore PRIVATE OB_OPENSERVICE=1)
 endif ()
 
 # obcore-dump: load a local HTML file, print its render tree (milestone 2a)
