@@ -1,0 +1,242 @@
+From c4dd8dcffcee616cfd43f9f9b2eb918fa78a3da2 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 11:50:15 +0000
+Subject: [PATCH] WebCore (Amiga): an HTTP disk cache hook in ResourceHandle
+
+The Amiga port has no network process, so WebKit's NetworkCache never
+runs and every repeat visit fetched every file again. AmigaNetwork.h
+gains setAmigaHttpCache(): the browser makes an AmigaHttpCacheRequest
+for each request that may use its cache, before the request goes out.
+A fresh stored copy answers from the run loop, as a file load does; a
+stale one is asked about with If-None-Match or If-Modified-Since, and a
+304 answers with the stored copy (if that copy has gone, the request is
+made again without them). Other responses, their data and their end go
+to the cache to keep if HTTP allows; a failed or cancelled load stores
+nothing.
+---
+ .../WebCore/platform/network/ResourceHandle.h |  1 +
+ .../platform/network/ResourceHandleInternal.h |  4 +
+ .../platform/network/amiga/AmigaNetwork.h     | 30 +++++++
+ .../network/amiga/ResourceHandleAmiga.cpp     | 80 ++++++++++++++++++-
+ 4 files changed, 112 insertions(+), 3 deletions(-)
+
+diff --git a/Source/WebCore/platform/network/ResourceHandle.h b/Source/WebCore/platform/network/ResourceHandle.h
+index 8da2e54cd4..7277675e1e 100644
+--- a/Source/WebCore/platform/network/ResourceHandle.h
++++ b/Source/WebCore/platform/network/ResourceHandle.h
+@@ -196,6 +196,7 @@ private:
+     friend class ResourceHandleCurlDelegate;
+     void amigaStartCurlRequest(ResourceRequest&&);
+     void amigaLoadFile();
++    void amigaLoadFromHttpCache();
+     void amigaDidReceiveResponse(CurlRequest&, CurlResponse&&);
+ #endif
+     static void platformLoadResourceSynchronously(NetworkingContext*, const ResourceRequest&, StoredCredentialsPolicy, SecurityOrigin*, ResourceError&, ResourceResponse&, Vector<uint8_t>& data);
+diff --git a/Source/WebCore/platform/network/ResourceHandleInternal.h b/Source/WebCore/platform/network/ResourceHandleInternal.h
+index 29f73c2232..571a527cbe 100644
+--- a/Source/WebCore/platform/network/ResourceHandleInternal.h
++++ b/Source/WebCore/platform/network/ResourceHandleInternal.h
+@@ -47,6 +47,7 @@ typedef const struct __CFURLStorageSession* CFURLStorageSessionRef;
+ // WebCoreResourceLoaderImp which avoids doing work in dealloc).
+ 
+ #if PLATFORM(AMIGA)
++#include "amiga/AmigaNetwork.h"
+ #include "CurlRequest.h"
+ #include "CurlRequestClient.h"
+ #endif
+@@ -109,6 +110,9 @@ public:
+     // A ResourceHandleCurlDelegate (ResourceHandleAmiga.cpp), kept by its base
+     // so this header needs no complete type for it.
+     RefPtr<CurlRequestClient> m_curlDelegate;
++    // The disk cache's part in the current request (AmigaNetwork.h).
++    std::unique_ptr<AmigaHttpCacheRequest> m_httpCache;
++    bool m_skipHttpCache { false };
+ #endif
+     Box<NetworkLoadMetrics> m_networkLoadMetrics;
+     MonotonicTime m_startTime;
+diff --git a/Source/WebCore/platform/network/amiga/AmigaNetwork.h b/Source/WebCore/platform/network/amiga/AmigaNetwork.h
+index cdfa040e83..19db7881cd 100644
+--- a/Source/WebCore/platform/network/amiga/AmigaNetwork.h
++++ b/Source/WebCore/platform/network/amiga/AmigaNetwork.h
+@@ -25,12 +25,18 @@
+ 
+ #pragma once
+ 
++#include <memory>
+ #include <wtf/Function.h>
++#include <wtf/RefPtr.h>
+ #include <wtf/URL.h>
+ #include <wtf/text/WTFString.h>
+ 
+ namespace WebCore {
+ 
++class ResourceRequest;
++class ResourceResponse;
++class SharedBuffer;
++
+ // The browser's cookie jar, as the network layer sees it: the Cookie header
+ // for a request, and each Set-Cookie header of a response.
+ struct AmigaCookieHooks {
+@@ -52,6 +58,30 @@ WEBCORE_EXPORT void setAmigaNetworkThreadHooks(const AmigaNetworkThreadHooks&);
+ void amigaNetworkThreadStarted();
+ void amigaNetworkThreadFinished();
+ 
++// The browser's HTTP disk cache, as the network layer sees it: the browser
++// makes one of these for each http request that may use the cache, on the
++// main thread, before the request goes out; it may add If-None-Match or
++// If-Modified-Since to the request then. Destroyed unfinished, it stores
++// nothing.
++class AmigaHttpCacheRequest {
++public:
++    virtual ~AmigaHttpCacheRequest() = default;
++    // A stored copy answers the request without the network.
++    virtual bool isFresh() const = 0;
++    // That copy (when isFresh(), or after notModified() said yes).
++    virtual ResourceResponse cachedResponse() = 0;
++    virtual RefPtr<SharedBuffer> cachedBody() = 0;
++    // The server's 304: true if the stored copy is there to answer instead.
++    virtual bool notModified(const ResourceResponse&) = 0;
++    // The server's response, its body and its end: kept if HTTP allows it.
++    virtual void willStore(const ResourceResponse&) = 0;
++    virtual void storeData(const SharedBuffer&) = 0;
++    virtual void storeFinished() = 0;
++};
++
++using AmigaHttpCacheHook = Function<std::unique_ptr<AmigaHttpCacheRequest>(ResourceRequest&)>;
++WEBCORE_EXPORT void setAmigaHttpCache(AmigaHttpCacheHook&&);
++
+ // Stops the network thread, whatever it is loading; the browser calls this
+ // before it exits, as an AmigaOS program does not end while a thread runs.
+ WEBCORE_EXPORT void stopAmigaNetwork();
+diff --git a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+index 480201fa3b..8461ff0396 100644
+--- a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
++++ b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+@@ -63,6 +63,17 @@ void setAmigaCookieHooks(AmigaCookieHooks&& hooks)
+     cookieHooks() = WTF::move(hooks);
+ }
+ 
++static AmigaHttpCacheHook& httpCacheHook()
++{
++    static NeverDestroyed<AmigaHttpCacheHook> hook;
++    return hook;
++}
++
++void setAmigaHttpCache(AmigaHttpCacheHook&& hook)
++{
++    httpCacheHook() = WTF::move(hook);
++}
++
+ static AmigaNetworkThreadHooks networkThreadHooks;
+ 
+ void setAmigaNetworkThreadHooks(const AmigaNetworkThreadHooks& hooks)
+@@ -111,19 +122,33 @@ public:
+ 
+     void curlDidReceiveData(CurlRequest&, Ref<SharedBuffer>&& buffer) final
+     {
+-        if (RefPtr handle = m_handle; handle && handle->client())
++        RefPtr handle = m_handle;
++        if (!handle)
++            return;
++        if (auto& cache = handle->d->m_httpCache)
++            cache->storeData(buffer.get());
++        if (handle->client())
+             handle->client()->didReceiveBuffer(handle.get(), buffer.get(), buffer->size());
+     }
+ 
+     void curlDidComplete(CurlRequest&, NetworkLoadMetrics&& metrics) final
+     {
+-        if (RefPtr handle = m_handle; handle && handle->client())
++        RefPtr handle = m_handle;
++        if (!handle)
++            return;
++        if (auto cache = std::exchange(handle->d->m_httpCache, nullptr))
++            cache->storeFinished();
++        if (handle->client())
+             handle->client()->didFinishLoading(handle.get(), metrics);
+     }
+ 
+     void curlDidFailWithError(CurlRequest&, ResourceError&& error, CertificateInfo&&) final
+     {
+-        if (RefPtr handle = m_handle; handle && handle->client())
++        RefPtr handle = m_handle;
++        if (!handle)
++            return;
++        handle->d->m_httpCache = nullptr;
++        if (handle->client())
+             handle->client()->didFail(handle.get(), error);
+     }
+ 
+@@ -158,6 +183,13 @@ static void appendCookieHeader(ResourceRequest& request)
+ void ResourceHandle::amigaStartCurlRequest(ResourceRequest&& request)
+ {
+     appendCookieHeader(request);
++    d->m_httpCache = nullptr;
++    if (!std::exchange(d->m_skipHttpCache, false) && httpCacheHook())
++        d->m_httpCache = httpCacheHook()(request);
++    if (d->m_httpCache && d->m_httpCache->isFresh()) {
++        amigaLoadFromHttpCache();
++        return;
++    }
+     if (!d->m_curlDelegate)
+         d->m_curlDelegate = ResourceHandleCurlDelegate::create(*this);
+     d->m_curlRequest = CurlRequest::create(request, *d->m_curlDelegate);
+@@ -202,6 +234,28 @@ void ResourceHandle::amigaLoadFile()
+     });
+ }
+ 
++// A response from the disk cache, handed over from the run loop as a network
++// load would be.
++void ResourceHandle::amigaLoadFromHttpCache()
++{
++    RunLoop::mainSingleton().dispatch([protectedThis = Ref { *this }] {
++        auto& handle = protectedThis.get();
++        auto cache = std::exchange(handle.d->m_httpCache, nullptr);
++        if (!cache || !handle.client())
++            return;
++        RefPtr body = cache->cachedBody();
++        handle.client()->didReceiveResponseAsync(&handle, cache->cachedResponse(), [protectedThis = Ref { handle }, body = WTF::move(body)] {
++            auto& handle = protectedThis.get();
++            if (!handle.client())
++                return;
++            if (body && body->size())
++                handle.client()->didReceiveBuffer(&handle, *body, body->size());
++            if (handle.client())
++                handle.client()->didFinishLoading(&handle, NetworkLoadMetrics { });
++        });
++    });
++}
++
+ bool ResourceHandle::start()
+ {
+     if (d->m_context && !d->m_context->isValid())
+@@ -267,6 +321,26 @@ void ResourceHandle::amigaDidReceiveResponse(CurlRequest& curlRequest, CurlRespo
+ 
+     ResourceResponse response(curlResponse);
+ 
++    if (auto& cache = d->m_httpCache) {
++        if (response.httpStatusCode() == 304) {
++            if (cache->notModified(response)) {
++                d->m_curlRequest->cancel();
++                amigaLoadFromHttpCache();
++                return;
++            }
++            // The stored copy went missing: ask again, without validators.
++            ResourceRequest request = curlRequest.resourceRequest();
++            request.removeHTTPHeaderField(HTTPHeaderName::IfNoneMatch);
++            request.removeHTTPHeaderField(HTTPHeaderName::IfModifiedSince);
++            request.removeHTTPHeaderField(HTTPHeaderName::Cookie);
++            d->m_curlRequest->cancel();
++            d->m_skipHttpCache = true;
++            amigaStartCurlRequest(WTF::move(request));
++            return;
++        }
++        cache->willStore(response);
++    }
++
+     if (shouldStartHTTPRedirection(response)) {
+         static constexpr unsigned maxRedirects = 20;
+         if (d->m_redirectCount++ > maxRedirects) {
+-- 
+2.43.0
+

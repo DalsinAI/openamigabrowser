@@ -1,0 +1,195 @@
+From 7de9fe4eb575a544bd66b736951d83505eee905d Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 11:37:00 +0000
+Subject: [PATCH] WTF (AmigaOS): MonotonicTime from the E-clock; integer
+ next-timer time
+
+MonotonicTime::now() on AmigaOS 3 read libnix's clock_gettime(), which is
+dos.library's DateStamp(): the wall clock in 50ths of a second, which a
+clock change moves. The generic code then divided the nanoseconds by 1e9
+and compared the result with the last time it returned, on every call;
+a guest profile's hottest single instruction was a floating-point
+comparison in the timer code. The time now comes from timer.device's
+E-clock (ReadEClock, opened once with its own library base): monotonic,
+about 1.4 microseconds a tick, two words to a double and one
+multiplication, with no division and no comparison.
+
+amigaMonotonicMicroseconds() gives the same clock in whole microseconds.
+RunLoop::cycle() keeps the next timer on it as a plain 64-bit integer:
+the std::atomic<double> it replaces is not lock-free on the 68k (each
+load and store was a libatomic call), and only the main thread uses it.
+amigaRunLoopNextFireTime() becomes amigaRunLoopNextFireMicroseconds().
+---
+ Source/WTF/wtf/CurrentTime.cpp            | 85 +++++++++++++++++++++++
+ Source/WTF/wtf/generic/RunLoopGeneric.cpp | 26 ++++---
+ 2 files changed, 100 insertions(+), 11 deletions(-)
+
+diff --git a/Source/WTF/wtf/CurrentTime.cpp b/Source/WTF/wtf/CurrentTime.cpp
+index f4b97e5614..9baa24f4af 100644
+--- a/Source/WTF/wtf/CurrentTime.cpp
++++ b/Source/WTF/wtf/CurrentTime.cpp
+@@ -64,6 +64,17 @@
+ #include <glib.h>
+ #endif
+ 
++#if OS(AMIGAOS3)
++#include <stdlib.h>
++#include <devices/timer.h>
++#include <proto/exec.h>
++// The timer.device base is this file's own: the program may have one called
++// TimerBase too.
++#define __NOLIBBASE__
++#define TIMER_BASE_NAME amigaClockTimerBase
++#include <proto/timer.h>
++#endif
++
+ namespace WTF {
+ 
+ #if OS(WINDOWS)
+@@ -232,6 +243,53 @@ WallTime WallTime::now()
+     return fromRawSeconds(currentTime());
+ }
+ 
++#if OS(AMIGAOS3)
++// The monotonic clock on AmigaOS 3: timer.device's E-clock, a 64-bit count
++// of the CIA timers' ticks (709379 a second on PAL machines, 715909 on NTSC)
++// since the system started. It never goes back, and reading it is a library
++// call with no I/O. libnix's clock_gettime() is dos.library's DateStamp(),
++// the wall clock in 50ths of a second, which a clock change moves; the
++// generic MonotonicTime::now() below then needs a floating-point division
++// and a comparison with the last time it returned, on every call.
++static struct Device* amigaClockTimerBase;
++static struct timerequest amigaClockRequest;
++static uint32_t amigaClockRate;
++static double amigaClockSecondsPerTick;
++
++static void amigaCloseClock()
++{
++    // The device stays in ROM: a late reader still finds a working base.
++    CloseDevice(reinterpret_cast<struct IORequest*>(&amigaClockRequest));
++}
++
++static ALWAYS_INLINE bool amigaClockOpen()
++{
++    static bool opened = [] {
++        if (OpenDevice(reinterpret_cast<CONST_STRPTR>(TIMERNAME), UNIT_ECLOCK, reinterpret_cast<struct IORequest*>(&amigaClockRequest), 0))
++            return false;
++        amigaClockTimerBase = amigaClockRequest.tr_node.io_Device;
++        struct EClockVal ticks;
++        amigaClockRate = ReadEClock(&ticks);
++        if (!amigaClockRate) {
++            CloseDevice(reinterpret_cast<struct IORequest*>(&amigaClockRequest));
++            amigaClockTimerBase = nullptr;
++            return false;
++        }
++        amigaClockSecondsPerTick = 1.0 / amigaClockRate;
++        atexit(amigaCloseClock);
++        return true;
++    }();
++    return opened;
++}
++
++static inline uint64_t amigaClockTicks()
++{
++    struct EClockVal ticks;
++    ReadEClock(&ticks);
++    return (static_cast<uint64_t>(ticks.ev_hi) << 32) | ticks.ev_lo;
++}
++#endif
++
+ #if OS(DARWIN)
+ static mach_timebase_info_data_t& machTimebaseInfo()
+ {
+@@ -310,6 +368,14 @@ MonotonicTime MonotonicTime::now()
+ #elif OS(HAIKU)
+     return fromRawSeconds(static_cast<double>(system_time_nsecs() / 1.0e9));
+ #else
++#if OS(AMIGAOS3)
++    if (amigaClockOpen()) {
++        // Two words to a double, then one multiplication: no division.
++        struct EClockVal ticks;
++        ReadEClock(&ticks);
++        return fromRawSeconds((ticks.ev_hi * 4294967296.0 + ticks.ev_lo) * amigaClockSecondsPerTick);
++    }
++#endif
+     static double lastTime = 0;
+     double currentTimeNow = currentTime();
+     if (currentTimeNow < lastTime)
+@@ -319,6 +385,25 @@ MonotonicTime MonotonicTime::now()
+ #endif
+ }
+ 
++#if OS(AMIGA)
++// The monotonic clock in whole microseconds, for the program's own waits:
++// the next timer and the time left until it are integers there, and only
++// the times handed to WebKit are doubles.
++WTF_EXPORT_PRIVATE uint64_t amigaMonotonicMicroseconds();
++uint64_t amigaMonotonicMicroseconds()
++{
++#if OS(AMIGAOS3)
++    if (amigaClockOpen()) {
++        uint64_t ticks = amigaClockTicks();
++        uint64_t seconds = ticks / amigaClockRate;
++        uint64_t rest = ticks - seconds * amigaClockRate; // below 2^20: times 10^6 fits
++        return seconds * 1000000 + rest * 1000000 / amigaClockRate;
++    }
++#endif
++    return static_cast<uint64_t>(MonotonicTime::now().secondsSinceEpoch().value() * 1000000);
++}
++#endif
++
+ ApproximateTime ApproximateTime::now()
+ {
+ #if USE(HARDWARE_UNBARRIERED_MONOTONIC_TIME)
+diff --git a/Source/WTF/wtf/generic/RunLoopGeneric.cpp b/Source/WTF/wtf/generic/RunLoopGeneric.cpp
+index 16a2825fc2..c52b994b85 100644
+--- a/Source/WTF/wtf/generic/RunLoopGeneric.cpp
++++ b/Source/WTF/wtf/generic/RunLoopGeneric.cpp
+@@ -345,12 +345,16 @@ void RunLoop::wakeUp()
+ #if OS(AMIGA)
+ // OpenBrowser drives the main run loop from its Intuition event loop: it calls
+ // RunLoop::cycle(), then waits on its signals until the next timer is due.
+-// The embedder declares this function itself; no WebKit header carries it.
+-static std::atomic<double> amigaNextFireTime { std::numeric_limits<double>::infinity() };
+-
+-double amigaRunLoopNextFireTime()
++// The embedder declares these functions itself; no WebKit header carries them.
++// The time is amigaMonotonicMicroseconds()'s (CurrentTime.cpp): -1 when no
++// timer is set, 0 when work is already waiting. Only the main thread runs
++// cycle() and asks, so this is a plain integer: a 64-bit std::atomic is not
++// lock-free on the 68k, and each load and store was a libatomic call.
++static int64_t amigaNextFireMicroseconds { -1 };
++
++int64_t amigaRunLoopNextFireMicroseconds()
+ {
+-    return amigaNextFireTime.load();
++    return amigaNextFireMicroseconds;
+ }
+ #endif
+ 
+@@ -359,16 +363,16 @@ RunLoop::CycleResult RunLoop::cycle(RunLoopMode)
+     auto& runLoop = RunLoop::currentSingleton();
+     runLoop.runImpl(RunMode::Iterate);
+ #if OS(AMIGA)
+-    {
+-        // MonotonicTime seconds of the earliest timer: 0 when work is already
+-        // waiting, infinity when there is none.
++    if (runLoop.isMain()) {
++        // The earliest timer, rounded up to the next whole microsecond (and
++        // never 0), so the program does not wake before it is due.
+         Locker locker { runLoop.m_loopLock };
+-        double next = std::numeric_limits<double>::infinity();
++        int64_t next = -1;
+         if (runLoop.m_pendingTasks)
+             next = 0;
+         else if (!runLoop.m_schedules.isEmpty())
+-            next = runLoop.m_schedules.first()->scheduledTimePoint().secondsSinceEpoch().value();
+-        amigaNextFireTime = next;
++            next = static_cast<int64_t>(runLoop.m_schedules.first()->scheduledTimePoint().secondsSinceEpoch().value() * 1000000) + 1;
++        amigaNextFireMicroseconds = next;
+     }
+ #endif
+     return CycleResult::Continue;
+-- 
+2.43.0
+

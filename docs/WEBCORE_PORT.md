@@ -79,6 +79,24 @@ curl six requests per host at once (four before): over HTTP/2 they are
 streams, over HTTP/1.1 the ones beyond curl's two connections per host wait
 in curl.
 
+**HTTP disk cache.** WebKit's disk cache (NetworkCache) lives in its network
+process, which this single-process port does not have, so until 20 October
+2026 a second visit fetched every file again. The engine now keeps one of its
+own (`src/webcore/ob_httpcache.c`, joined to WebCore by
+`AmigaHttpCache.cpp` and WebKit patch 0026) in `PROGDIR:Cache`: GET
+responses with status 200, fresh for as long as `Cache-Control: max-age` or
+`Expires` (counted from the server's `Date`) says, then checked with
+`If-None-Match`/`If-Modified-Since`, where a 304 reuses the stored copy.
+`no-store`, a `Vary` other than `Accept-Encoding`, `Authorization`, ranges
+and responses with neither a lifetime nor a validator are not stored; there
+is no heuristic freshness. Each entry is written to a temporary file and
+renamed when complete. The folder holds at most 64 MB (one entry up to an
+eighth of that), and the entries used longest ago go first; an index written
+at quit saves reading the folder at the next start. ENV variables:
+`OB_HTTP_CACHE=0` turns it off, `OB_HTTP_CACHE_DIR` moves it and
+`OB_HTTP_CACHE_MB` sets its size. 64 MB is a starting point to be measured,
+not a tuned value.
+
 **Sockets are not file descriptors.** libcurl's configure finds libnix's
 `fcntl()` and `pipe()`; on bsdsocket sockets they fail. curl is built to use
 `IoctlSocket(FIONBIO)` and a loopback socket pair.
