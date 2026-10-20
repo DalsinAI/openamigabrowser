@@ -134,6 +134,13 @@ The patches, in order:
   fdadd/fdsub/fdmul/fddiv/fdsqrt, which round once to double as
   JavaScript asks.
 
+- `0032-jsc-m68k-jit-loop-registers.patch`: J6. A loop whose body runs on
+  int32s alone (moves, inc/dec, add/sub/mul/and/or/xor, the
+  compare-and-jumps) gets a second copy that keeps its busiest variables in
+  d2-d7. A preheader checks and loads them; every write also goes to the
+  frame, so the copy can leave for the plain code at any point and comes
+  back at the next back edge. `JSC_useM68KRegisterCache=0` turns it off.
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;

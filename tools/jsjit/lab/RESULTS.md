@@ -6,6 +6,30 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 20 Oct 2026, stage J6 (loop variables in registers; patch 0032)
+
+Integer loops get a second copy of their body with up to six variables in
+d2-d7. `lab/correct.js`, `lab/correct2.js` and `lab/correct3.js` (overflow
+of add, sub, mul and inc/dec inside the copy, values turning into doubles
+and back, strings, nested loops, early exits before a variable is written,
+-0, valueOf) print the same with the JIT on and off. 0032 leaves the
+interpreter and its templates as they were.
+
+| jsbench test | J4 (M) | J6 (M) | J6 vs J4 | J6 vs interpreter 0029 |
+|---|---:|---:|---:|---:|
+| int-loop    |   9.9 |   5.9 | 1.68x | 17.3x |
+| properties  |  13.1 |  13.1 | 1.00x |  8.0x |
+| double-loop |   6.5 |   6.5 | 1.00x |  7.9x |
+| calls       |  16.5 |  16.5 | 1.00x |  6.2x |
+| closures    |  10.8 |  10.8 | 1.00x |  1.8x |
+| strings     |   5.7 |   5.7 | 1.00x |  1.6x |
+| array (sort)| 107.9 | 107.9 | 1.00x |  1.4x |
+| regexp      |   7.8 |   7.8 | 1.00x |  1.1x |
+| json        |   3.7 |   3.7 | 1.00x |  1.0x |
+
+Only int-loop's loop qualifies: the others' loops access properties, call
+or work on doubles, which the copy does not cover yet.
+
 ## 20 Oct 2026, stage J4 (whole functions, calls, property access, doubles; patch 0031)
 
 Interpreter columns: as of patch 0029, and with 0031 (it no longer fills

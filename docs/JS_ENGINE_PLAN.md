@@ -102,8 +102,13 @@ prologues, not only from loops), gives op_enter, op_ret, op_call,
 op_construct, get_by_id and put_by_id their own code, runs double arithmetic and compares on the FPU, and
 stops the interpreter filling profiles only optimizing JITs read. Against the
 interpreter before it: int-loop 10.3x fewer instructions, properties 8.0x,
-double-loop 7.9x, calls 6.2x, closures 1.8x. Next: hot values kept in data registers, a run on a real 68040, then 32-bit values
-(`docs/JS_32BIT_VALUES.md`).
+double-loop 7.9x, calls 6.2x, closures 1.8x.
+
+Patch 0032 (J6) keeps the busiest variables of integer loops in data
+registers d2-d7, in a second copy of the loop body: int-loop runs 1.68x
+fewer instructions than with 0031 (17.3x fewer than the interpreter as of
+0029). Next: a run on a real 68040, loop copies that carry on past property
+access and calls, then 32-bit values (`docs/JS_32BIT_VALUES.md`).
 
 The original plan, for reference:
 
