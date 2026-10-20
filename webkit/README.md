@@ -98,6 +98,15 @@ The patches, in order:
   connection, one TLS handshake per server. The programs link
   `libnghttp2.a` after curl.
 
+- `0024-amiga-eclock-monotonic-time.patch`: `MonotonicTime::now()` on
+  AmigaOS 3 reads timer.device's E-clock (`ReadEClock`) instead of libnix's
+  `clock_gettime()`, which is `DateStamp()` (the wall clock in 50ths of a
+  second) followed by a floating-point division and a comparison on every
+  call. `amigaMonotonicMicroseconds()` gives the same clock in whole
+  microseconds, and `RunLoop::cycle()` keeps the next timer on it as a
+  plain integer (`amigaRunLoopNextFireMicroseconds()`), so the programs
+  work out their waits without floating point or libatomic.
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;

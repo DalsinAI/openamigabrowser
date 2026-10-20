@@ -349,20 +349,21 @@ static int handle(struct WBMessage *m)
     return 1;
 }
 
-static void armTimer(double wait)
+/* wait: in microseconds, negative for no timer. */
+static void armTimer(long wait)
 {
     if (timerPending) {
         AbortIO((struct IORequest *)timerRequest);
         WaitIO((struct IORequest *)timerRequest);
         timerPending = 0;
     }
-    if (wait < 0 || wait > 1)
-        wait = 1;                               /* the waits' time limits are checked each second */
-    if (wait < 0.005)
-        wait = 0.005;
+    if (wait < 0 || wait > 1000000)
+        wait = 1000000;                         /* the waits' time limits are checked each second */
+    if (wait < 5000)
+        wait = 5000;
     timerRequest->tr_node.io_Command = TR_ADDREQUEST;
-    timerRequest->tr_time.tv_secs = (ULONG)wait;
-    timerRequest->tr_time.tv_micro = (ULONG)((wait - (ULONG)wait) * 1000000.0);
+    timerRequest->tr_time.tv_secs = (ULONG)wait / 1000000UL;
+    timerRequest->tr_time.tv_micro = (ULONG)wait % 1000000UL;
     SendIO((struct IORequest *)timerRequest);
     timerPending = 1;
 }
@@ -404,7 +405,7 @@ static int serve(int argc, char **argv)
 
     while (running) {
         struct WBMessage *m;
-        double next;
+        long next;
         ULONG got;
         ob_webcore_cycle();
         while ((m = (struct WBMessage *)GetMsg(port))) {
@@ -424,7 +425,7 @@ static int serve(int argc, char **argv)
         obb_update();
         if (!running)
             break;
-        next = ob_webcore_next_timer();
+        next = ob_webcore_next_timer_micros();
         if (next == 0)
             continue;
         armTimer(next);
