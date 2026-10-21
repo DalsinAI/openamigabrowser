@@ -239,6 +239,9 @@ The patches, in order:
   SQL (`ENABLE_WEB_DATABASE`) and the page text extraction behind element
   targeting (`ENABLE_TEXT_EXTRACTION`) get build flags, on by default; the
   Amiga port turns them off. `openDatabase` was already off by setting.
+- `0042-jsc-m68k-typed-array-sort-shared.patch`: on 68k, TypedArray
+  `sort` and `toSorted` share one out-of-line sort per array type (they
+  were each inlining it, in different files): 467 KB less code.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
