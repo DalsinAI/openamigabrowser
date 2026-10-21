@@ -6,6 +6,41 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 21 Oct 2026, compares, new objects, polymorphic calls, scopes (patch 0035)
+
+A real-page benchmark (`page/`: virtual DOM diff, HTML templating, JSON,
+a tokenizer, an event store) showed where pages spend their time, by
+opcode (a lab-only map from JIT code addresses to bytecodes): compares and
+true/false tests on non-int32 values in the interpreter's copied code,
+new properties on objects (cached transitions), calls whose site had gone
+polymorphic or whose result is unused, and global and closure variables.
+0035 gives all of those their own code. It also fixes a bug from 0031:
+after a JIT call the interpreter's sp stayed at the callee's frame, so a
+garbage collection cleared the caller's slots below it (`lab/correct8.js`
+crashed). `lab/correct6.js` (every kind of value through ===, ==, <,
+truthiness, == null), `lab/correct7.js` (polymorphic and closure calls,
+.call, constructors, literals, setters on prototypes, late setters) and
+`lab/correct8.js` (globals, let/const and TDZ, closures, eval injection,
+with, read-only globals, gc()) print what node prints with the JIT on and
+off; so do the page tests and correct3-5.
+
+| test | interpreter (M) | 0034 (M) | 0035 (M) | 0035 vs 0034 | vs interpreter |
+|---|---:|---:|---:|---:|---:|
+| page-lexer    |  80.5 |  49.2 |  28.3 | 1.74x | 2.8x |
+| page-events   | 264.4 | 134.6 |  95.6 | 1.41x | 2.8x |
+| page-vdom     | 157.0 |  96.5 |  74.4 | 1.30x | 2.1x |
+| page-json     |  48.8 |  40.0 |  36.5 | 1.09x | 1.3x |
+| page-template |  97.3 |  83.0 |  79.7 | 1.04x | 1.2x |
+| closures      |       |  10.2 |   7.2 | 1.42x | 2.6x |
+| strings       |       |   5.8 |   5.4 | 1.08x |      |
+| calls         |       |  11.7 |  11.9 | 0.98x |      |
+
+calls pays two instructions per call for the sp fix. What the page tests
+still spend: regular expressions (Yarr's interpreter) and JSON in C++,
+array builtins written in JavaScript (`in` and put_by_val_direct),
+for-in enumeration, get_by_id misses on objects of several shapes, and
+the C++ slow paths' fixed cost.
+
 ## 21 Oct 2026, arrays and calls in loops (patch 0034)
 
 get_by_val, put_by_val and get_length get their own code for int32 and
