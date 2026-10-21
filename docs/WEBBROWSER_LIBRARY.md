@@ -45,7 +45,7 @@ bench); later launches, while it is in memory, open in about 2 s. Closing
 the window leaves the engine resident for a minute, so reopening stays
 quick; after 60 s with no view, window or waiting request it quits and
 gives its memory back, and the next call starts it again.
-`ENV:WebBrowser/IdleQuit` sets those seconds (0 keeps it resident), and
+`ENV:WebBrowserIdleQuit` sets those seconds (0 keeps it resident), and
 `WB_Shutdown()` ends it at once.
 
 ## Installing

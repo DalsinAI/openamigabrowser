@@ -4,7 +4,7 @@
  * any number of programs, each with its own views, until WBC_SHUTDOWN,
  * Ctrl-C, or IDLE_QUIT seconds with no view, browser window or waiting
  * request (its memory goes back; the next program starts it again).
- * ENV:WebBrowser/IdleQuit sets those seconds, 0 for never. Between
+ * ENV:WebBrowserIdleQuit sets those seconds, 0 for never. Between
  * messages it runs WebCore (its timers, the network's answers), so pages
  * go on loading while programs do other things.
  * MIT, Copyright (c) 2026 AmigaChrome Team.
@@ -124,7 +124,7 @@ static ULONG idleQuitSeconds(void)
 {
     char text[16];
     long value;
-    if (GetVar((CONST_STRPTR)"WebBrowser/IdleQuit", (STRPTR)text, sizeof text, GVF_GLOBAL_ONLY) <= 0)
+    if (GetVar((CONST_STRPTR)"WebBrowserIdleQuit", (STRPTR)text, sizeof text, GVF_GLOBAL_ONLY) <= 0)
         return IDLE_QUIT;
     if (sscanf(text, "%ld", &value) != 1 || value < 0)
         return IDLE_QUIT;
