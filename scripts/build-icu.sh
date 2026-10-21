@@ -3,7 +3,7 @@
 # Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 #
 # ICU 78.3 for AmigaOS 3.x with the os32-gcc16 stove: static libraries with the
-# data linked in.
+# data linked in, and the same data as a file (share/icudt78b.dat).
 #
 #   ICU_SRC         extracted icu4c-78.3 sources ("icu" folder), with
 #                   icu/patches/0001-icu78-amigaos3.patch applied
@@ -66,4 +66,8 @@ _icudt78_dat:
 S
 (cd "$D" && "$P/bin/m68k-amigaos-as" -m68040 icudt78_dat.s -o icudt78_dat.o && rm -f libicudata.a && "$P/bin/m68k-amigaos-ar" rcs libicudata.a icudt78_dat.o)
 cp "$D/libicudata.a" "$OUT/icu78-m68k-amigaos/lib/libicudata.a"
+# The same data as a file, for programs that read it at start
+# (scripts/build-webcore.sh, OB_ICU_DATA=file).
+mkdir -p "$OUT/icu78-m68k-amigaos/share"
+cp "$D/icudt78b.dat" "$OUT/icu78-m68k-amigaos/share/icudt78b.dat"
 echo "ICU_OK $OUT/icu78-m68k-amigaos"
