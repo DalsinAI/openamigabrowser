@@ -109,7 +109,11 @@ registers d2-d7, in a second copy of the loop body: int-loop runs 1.68x
 fewer instructions than with 0031 (17.3x fewer than the interpreter as of
 0029). It also makes calls into JavaScript from C++ cheaper (sort with a
 comparator: 1.41x) and calls from compiled code to compiled functions
-(calls test: 1.37x). Next: a run on a real 68040, loop copies that carry on past property
+(calls test: 1.37x).
+
+Patch 0034 gives array reads, writes and lengths their own code, and lets
+the loop register copies run array access and calls: an array loop runs
+3.5x fewer instructions than with 0032 (8.5x fewer than the interpreter). Next: a run on a real 68040, loop copies that carry on past property
 access and calls, then 32-bit values (`docs/JS_32BIT_VALUES.md`).
 
 The original plan, for reference:
