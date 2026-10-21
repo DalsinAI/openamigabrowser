@@ -41,6 +41,7 @@
 #include <WebCore/EventNames.h>
 #include <WebCore/KeyboardEvent.h>
 #include <WebCore/LocalFrame.h>
+#include <WebCore/LocalFrameInlines.h>
 #include <WebCore/Node.h>
 #include <WebCore/PlatformKeyboardEvent.h>
 #include <WebCore/TextCheckerClient.h>
