@@ -211,6 +211,12 @@ The patches, in order:
   `charCodeAt` get their own code (`VM.cpp` keeps charCodeAt's intrinsic
   on the 68k C loop), and loop register copies keep doubles in fp2-fp6.
 
+- `0037-webcore-webgpu-only-when-enabled.patch`: WebGPU's bindings,
+  module and inspector paths build only with `ENABLE(WEBGPU)`, which the
+  Amiga port leaves off (its IDLs had no Conditional, so about 1.5 MB of
+  unused code was in the engine). `getContext("webgpu")` returns null and
+  `navigator.gpu` is absent, as before at run time.
+
 - `0038-jsc-m68k-jit-inline-small-functions.patch`: call sites whose
   call link holds a small JavaScript function (64 bytecode bytes or less,
   `m68kTemplateJITMaximumInlineSize`) get its code in line, behind a guard
