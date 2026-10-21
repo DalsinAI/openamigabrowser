@@ -1,36 +1,38 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
 Date: Wed, 21 Oct 2026 15:30:00 +0100
-Subject: [PATCH] WebCore: five unused web APIs only when enabled
+Subject: [PATCH] WebCore: six unused web APIs only when enabled
 
 WebCore always built WebTransport, the Cookie Store API, Web Locks, the
-Screen Wake Lock API and the Shape Detection API: they had no build flag,
-only run-time settings, so their bindings and classes were in the Amiga
-engine although nothing on the Amiga can use them (no HTTP/3, no wake
-lock, no detectors) and their settings are off. This patch gives each one
-a feature flag, on by default as before, and the Amiga port turns all
-five off:
+Screen Wake Lock API, the Shape Detection API and speech recognition:
+they had no build flag, only run-time settings, so their bindings and
+classes were in the Amiga engine although nothing on the Amiga can use
+them (no HTTP/3, no wake lock, no detectors, no speech service) and their
+settings are off. This patch gives each one a feature flag, on by default
+as before, and the Amiga port turns all six off:
 
 - ENABLE_WEB_TRANSPORT, ENABLE_COOKIE_STORE_API, ENABLE_WEB_LOCKS,
-  ENABLE_SCREEN_WAKE_LOCK and ENABLE_SHAPE_DETECTION (WebKitFeatures.cmake
-  and PlatformEnable.h, both default on; OptionsAmiga.cmake sets them off).
+  ENABLE_SCREEN_WAKE_LOCK, ENABLE_SHAPE_DETECTION and
+  ENABLE_SPEECH_RECOGNITION (WebKitFeatures.cmake and PlatformEnable.h,
+  both default on; OptionsAmiga.cmake sets them off).
 - Every IDL in Modules/webtransport, cookie-store, web-locks,
-  screen-wake-lock and ShapeDetection carries its Conditional, as do the
-  ServiceWorkerGlobalScope cookieStore and ServiceWorkerRegistration
-  cookies attributes, and the event target and event interface lists.
-- Those modules' sources build only with their flag, except
-  WebTransportSession.cpp, which the empty socket provider still needs.
+  screen-wake-lock and ShapeDetection, and each SpeechRecognition IDL,
+  carries its Conditional, as do the ServiceWorkerGlobalScope cookieStore
+  and ServiceWorkerRegistration cookies attributes, and the event target
+  and event interface lists.
+- Those sources build only with their flag, except WebTransportSession.cpp,
+  which the empty socket provider still needs.
 - Window and ServiceWorkerGlobalScope keep no CookieStore, a service worker
   registration no CookieStoreManager (nor its cookie change subscription
-  calls), a navigator no WebLockManager and a document no WakeLockManager
-  without the flag; WebTransportError's heap cell type goes with
-  WebTransport.
+  calls), a navigator no WebLockManager, and a document no WakeLockManager
+  or active speech recognition without the flag; WebTransportError's heap
+  cell type goes with WebTransport.
 
 diff --git a/Source/WTF/wtf/PlatformEnable.h b/Source/WTF/wtf/PlatformEnable.h
-index 9c73a375b32..27611564301 100644
+index 9c73a375b32..317bfb6c7fa 100644
 --- a/Source/WTF/wtf/PlatformEnable.h
 +++ b/Source/WTF/wtf/PlatformEnable.h
-@@ -637,6 +637,26 @@
+@@ -637,6 +637,30 @@
  #define ENABLE_WEBXR_WEBGPU_BY_DEFAULT 0
  #endif
  
@@ -44,6 +46,10 @@ index 9c73a375b32..27611564301 100644
 +
 +#if !defined(ENABLE_SHAPE_DETECTION)
 +#define ENABLE_SHAPE_DETECTION 1
++#endif
++
++#if !defined(ENABLE_SPEECH_RECOGNITION)
++#define ENABLE_SPEECH_RECOGNITION 1
 +#endif
 +
 +#if !defined(ENABLE_WEB_LOCKS)
@@ -600,6 +606,315 @@ index 52d941d94b0..32dfefb46d2 100644
  
 +[Conditional=SCREEN_WAKE_LOCK]
  enum WakeLockType { "screen" };
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognition.cpp b/Source/WebCore/Modules/speech/SpeechRecognition.cpp
+index c71255ef5a5..c6c597866b4 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognition.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognition.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognition.h"
+ 
+ #include "ClientOrigin.h"
+@@ -237,3 +239,5 @@ bool SpeechRecognition::virtualHasPendingActivity() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognition.idl b/Source/WebCore/Modules/speech/SpeechRecognition.idl
+index 1c0eb5510bd..44b24f61f93 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognition.idl
++++ b/Source/WebCore/Modules/speech/SpeechRecognition.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=SPEECH_RECOGNITION,
+     ActiveDOMObject,
+     EnabledBySetting=SpeechRecognitionEnabled,
+     InterfaceName=webkitSpeechRecognition,
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionAlternative.cpp b/Source/WebCore/Modules/speech/SpeechRecognitionAlternative.cpp
+index e715af3d224..4f16c97fbb9 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionAlternative.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionAlternative.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognitionAlternative.h"
+ 
+ #include <wtf/TZoneMallocInlines.h>
+@@ -44,3 +46,5 @@ SpeechRecognitionAlternative::SpeechRecognitionAlternative(String&& transcript,
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionAlternative.idl b/Source/WebCore/Modules/speech/SpeechRecognitionAlternative.idl
+index 9cfa716ed65..e5cae33a3bd 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionAlternative.idl
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionAlternative.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=SPEECH_RECOGNITION,
+     EnabledBySetting=SpeechRecognitionEnabled,
+     SecureContext,
+     Exposed=Window
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionCaptureSource.cpp b/Source/WebCore/Modules/speech/SpeechRecognitionCaptureSource.cpp
+index e7e6269a695..0816942e9b0 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionCaptureSource.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionCaptureSource.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognitionCaptureSource.h"
+ #include <wtf/TZoneMallocInlines.h>
+ 
+@@ -78,3 +80,5 @@ SpeechRecognitionCaptureSource::SpeechRecognitionCaptureSource(SpeechRecognition
+ #endif
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionCaptureSourceImpl.cpp b/Source/WebCore/Modules/speech/SpeechRecognitionCaptureSourceImpl.cpp
+index 876de637d41..8efabd2de25 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionCaptureSourceImpl.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionCaptureSourceImpl.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognitionCaptureSourceImpl.h"
+ 
+ #if ENABLE(MEDIA_STREAM)
+@@ -177,3 +179,5 @@ void SpeechRecognitionCaptureSourceImpl::mute()
+ } // namespace WebCore
+ 
+ #endif
++
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionErrorCode.idl b/Source/WebCore/Modules/speech/SpeechRecognitionErrorCode.idl
+index 3c71b94285d..09ac2c543a5 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionErrorCode.idl
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionErrorCode.idl
+@@ -23,6 +23,7 @@
+  * THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++[Conditional=SPEECH_RECOGNITION]
+ enum SpeechRecognitionErrorCode {
+     "no-speech",
+     "aborted",
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionErrorEvent.cpp b/Source/WebCore/Modules/speech/SpeechRecognitionErrorEvent.cpp
+index 0b94087a618..2d0239b71da 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionErrorEvent.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionErrorEvent.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognitionErrorEvent.h"
+ 
+ #include "ScriptExecutionContext.h"
+@@ -58,3 +60,5 @@ SpeechRecognitionErrorEvent::SpeechRecognitionErrorEvent(const AtomString& type,
+ }
+ 
+ }; // namespace WebCore
++
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionErrorEvent.idl b/Source/WebCore/Modules/speech/SpeechRecognitionErrorEvent.idl
+index 95d2c96577f..70dfab619cf 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionErrorEvent.idl
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionErrorEvent.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=SPEECH_RECOGNITION,
+     EnabledBySetting=SpeechRecognitionEnabled,
+     SecureContext,
+     Exposed=Window
+@@ -33,6 +34,7 @@
+     readonly attribute DOMString message;
+ };
+ 
++[Conditional=SPEECH_RECOGNITION]
+ dictionary SpeechRecognitionErrorEventInit : EventInit {
+     required SpeechRecognitionErrorCode error;
+     DOMString message = "";
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionEvent.cpp b/Source/WebCore/Modules/speech/SpeechRecognitionEvent.cpp
+index 5bb77948837..60ff363a37d 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionEvent.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionEvent.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognitionEvent.h"
+ 
+ #include "SpeechRecognitionResultList.h"
+@@ -60,3 +62,5 @@ SpeechRecognitionEvent::SpeechRecognitionEvent(const AtomString& type, uint32_t
+ SpeechRecognitionEvent::~SpeechRecognitionEvent() = default;
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionEvent.idl b/Source/WebCore/Modules/speech/SpeechRecognitionEvent.idl
+index 007d34edc8d..383b4fb7a04 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionEvent.idl
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionEvent.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://webaudio.github.io/web-speech-api/#speechrecognitionevent
+ [
++    Conditional=SPEECH_RECOGNITION,
+     EnabledBySetting=SpeechRecognitionEnabled,
+     SecureContext,
+     Exposed=Window
+@@ -35,6 +36,7 @@
+     readonly attribute SpeechRecognitionResultList? results;
+ };
+ 
++[Conditional=SPEECH_RECOGNITION]
+ dictionary SpeechRecognitionEventInit : EventInit {
+     unsigned long resultIndex = 0;
+     required SpeechRecognitionResultList results;
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionRequest.cpp b/Source/WebCore/Modules/speech/SpeechRecognitionRequest.cpp
+index e733ab82c5e..0ad2a84ba92 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionRequest.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionRequest.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognitionRequest.h"
+ #include <wtf/TZoneMallocInlines.h>
+ 
+@@ -45,4 +47,4 @@ SpeechRecognitionRequest::~SpeechRecognitionRequest() = default;
+ 
+ } // namespace WebCore
+ 
+-
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionResult.cpp b/Source/WebCore/Modules/speech/SpeechRecognitionResult.cpp
+index 095ddea5fcf..073da11b931 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionResult.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionResult.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognitionResult.h"
+ 
+ #include <wtf/TZoneMallocInlines.h>
+@@ -49,3 +51,5 @@ SpeechRecognitionAlternative* SpeechRecognitionResult::item(uint64_t index) cons
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionResult.idl b/Source/WebCore/Modules/speech/SpeechRecognitionResult.idl
+index 8ec5d3e6ad2..33b687063a0 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionResult.idl
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionResult.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=SPEECH_RECOGNITION,
+     EnabledBySetting=SpeechRecognitionEnabled,
+     SecureContext,
+     Exposed=Window
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionResultList.cpp b/Source/WebCore/Modules/speech/SpeechRecognitionResultList.cpp
+index f6a08e93220..41f66211260 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionResultList.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionResultList.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognitionResultList.h"
+ 
+ #include "SpeechRecognitionResult.h"
+@@ -59,3 +61,5 @@ SpeechRecognitionResultList::SpeechRecognitionResultList(Vector<Ref<SpeechRecogn
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionResultList.idl b/Source/WebCore/Modules/speech/SpeechRecognitionResultList.idl
+index ad4d4f64980..fe35994c5d0 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionResultList.idl
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionResultList.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=SPEECH_RECOGNITION,
+     EnabledBySetting=SpeechRecognitionEnabled,
+     Exposed=Window
+ ] interface SpeechRecognitionResultList {
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognitionUpdate.cpp b/Source/WebCore/Modules/speech/SpeechRecognitionUpdate.cpp
+index 51d80e22e31..ea6b248ea54 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognitionUpdate.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognitionUpdate.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognitionUpdate.h"
+ 
+ #include <wtf/NeverDestroyed.h>
+@@ -99,3 +101,5 @@ Vector<SpeechRecognitionResultData> SpeechRecognitionUpdate::result() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognizer.cpp b/Source/WebCore/Modules/speech/SpeechRecognizer.cpp
+index f81e5ccc3d4..eb638135878 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognizer.cpp
++++ b/Source/WebCore/Modules/speech/SpeechRecognizer.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognizer.h"
+ 
+ #include "SpeechRecognitionRequest.h"
+@@ -155,3 +157,5 @@ void SpeechRecognizer::stopRecognition()
+ #endif
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SPEECH_RECOGNITION)
 diff --git a/Source/WebCore/Modules/web-locks/NavigatorLocks.idl b/Source/WebCore/Modules/web-locks/NavigatorLocks.idl
 index 62d235a5b14..99a53000a50 100644
 --- a/Source/WebCore/Modules/web-locks/NavigatorLocks.idl
@@ -1387,10 +1702,20 @@ index 178c4e29beb..a18bb479789 100644
  private:
      JSC::IsoSubspace m_domBuiltinConstructorSpace;
 diff --git a/Source/WebCore/dom/Document.cpp b/Source/WebCore/dom/Document.cpp
-index f3d35be1b59..88455a3aba9 100644
+index f3d35be1b59..2b12d1d81bd 100644
 --- a/Source/WebCore/dom/Document.cpp
 +++ b/Source/WebCore/dom/Document.cpp
-@@ -362,7 +362,9 @@
+@@ -311,7 +311,9 @@
+ #include "SocketProvider.h"
+ #include "SpeculationRules.h"
+ #include "SpeculationRulesMatcher.h"
++#if ENABLE(SPEECH_RECOGNITION)
+ #include "SpeechRecognition.h"
++#endif
+ #include "StartViewTransitionOptions.h"
+ #include "StaticNodeList.h"
+ #include "StorageEvent.h"
+@@ -362,7 +364,9 @@
  #include "VisibilityState.h"
  #include "VisitedLinkState.h"
  #include "VisualViewport.h"
@@ -1400,7 +1725,7 @@ index f3d35be1b59..88455a3aba9 100644
  #include "WebAnimation.h"
  #include "WebAnimationUtilities.h"
  #include "WebRTCProvider.h"
-@@ -2709,12 +2711,14 @@ String Document::nodeName() const
+@@ -2709,12 +2713,14 @@ String Document::nodeName() const
      return "#document"_s;
  }
  
@@ -1415,7 +1740,7 @@ index f3d35be1b59..88455a3aba9 100644
  
  FormController& Document::formController()
  {
-@@ -3839,9 +3843,11 @@ void Document::stopActiveDOMObjects()
+@@ -3839,9 +3845,11 @@ void Document::stopActiveDOMObjects()
      if (RefPtr eventLoop = m_eventLoop)
          eventLoop->removeMutationObserversForContext(*this);
  
@@ -1427,8 +1752,35 @@ index f3d35be1b59..88455a3aba9 100644
  }
  
  bool Document::isEventLoopGroupStoppedPermanently() const
+@@ -6104,6 +6112,7 @@ void Document::removeAudioProducer(MediaProducer& audioProducer)
+     updateIsPlayingMedia();
+ }
+ 
++#if ENABLE(SPEECH_RECOGNITION)
+ void Document::setActiveSpeechRecognition(SpeechRecognition* speechRecognition)
+ {
+     if (m_activeSpeechRecognition == speechRecognition)
+@@ -6112,6 +6121,7 @@ void Document::setActiveSpeechRecognition(SpeechRecognition* speechRecognition)
+     m_activeSpeechRecognition = speechRecognition;
+     updateIsPlayingMedia();
+ }
++#endif
+ 
+ void Document::noteUserInteractionWithMediaElement()
+ {
+@@ -6150,8 +6160,10 @@ void Document::updateIsPlayingMedia()
+ 
+ #if ENABLE(MEDIA_STREAM)
+     state.add(computeCaptureState());
++#if ENABLE(SPEECH_RECOGNITION)
+     if (m_activeSpeechRecognition)
+         state.add(MediaProducerMediaState::HasActiveAudioCaptureDevice);
++#endif
+ 
+     m_activeMediaElementsWithMediaStreamCount = 0;
+     forEachMediaElement([&](auto& element) {
 diff --git a/Source/WebCore/dom/Document.h b/Source/WebCore/dom/Document.h
-index c9bb4606e70..7d622dd770a 100644
+index c9bb4606e70..dc4ca675f2a 100644
 --- a/Source/WebCore/dom/Document.h
 +++ b/Source/WebCore/dom/Document.h
 @@ -673,7 +673,9 @@ public:
@@ -1441,7 +1793,27 @@ index c9bb4606e70..7d622dd770a 100644
  
      // Other methods (not part of DOM)
      bool isSynthesized() const { return m_isSynthesized; }
-@@ -2685,7 +2687,9 @@ private:
+@@ -1739,7 +1741,9 @@ public:
+ 
+     WEBCORE_EXPORT void addAudioProducer(MediaProducer&);
+     WEBCORE_EXPORT void removeAudioProducer(MediaProducer&);
++#if ENABLE(SPEECH_RECOGNITION)
+     void setActiveSpeechRecognition(SpeechRecognition*);
++#endif
+     MediaProducerMediaStateFlags mediaState() const { return m_mediaState; }
+     void noteUserInteractionWithMediaElement();
+     bool NODELETE isCapturing() const;
+@@ -2589,7 +2593,9 @@ private:
+     const std::unique_ptr<DocumentFontLoader> m_fontLoader;
+ 
+     WeakHashSet<MediaProducer> m_audioProducers;
++#if ENABLE(SPEECH_RECOGNITION)
+     WeakPtr<SpeechRecognition> m_activeSpeechRecognition;
++#endif
+ 
+     WeakListHashSet<ShadowRoot, WeakPtrImplWithEventTargetData> m_inDocumentShadowRoots;
+ 
+@@ -2685,7 +2691,9 @@ private:
  
      const RefPtr<ReportingScope> m_reportingScope;
  
@@ -1452,7 +1824,7 @@ index c9bb4606e70..7d622dd770a 100644
  
  #if ENABLE(MEDIA_STREAM)
 diff --git a/Source/WebCore/dom/EventInterfaces.in b/Source/WebCore/dom/EventInterfaces.in
-index 677f2e8a4fb..28e7eb3159c 100644
+index 677f2e8a4fb..0db28bdf88c 100644
 --- a/Source/WebCore/dom/EventInterfaces.in
 +++ b/Source/WebCore/dom/EventInterfaces.in
 @@ -15,12 +15,12 @@ ClipboardEvent
@@ -1470,8 +1842,19 @@ index 677f2e8a4fb..28e7eb3159c 100644
  ExtendableEvent
  ExtendableMessageEvent
  ErrorEvent
+@@ -79,8 +79,8 @@ RTCDTMFToneChangeEvent conditional=WEB_RTC
+ RTCRtpSFrameTransformErrorEvent conditional=WEB_RTC
+ RTCTrackEvent conditional=WEB_RTC
+ RTCTransformEvent conditional=WEB_RTC
+-SpeechRecognitionErrorEvent
+-SpeechRecognitionEvent
++SpeechRecognitionErrorEvent conditional=SPEECH_RECOGNITION
++SpeechRecognitionEvent conditional=SPEECH_RECOGNITION
+ SpeechSynthesisErrorEvent conditional=SPEECH_SYNTHESIS
+ SpeechSynthesisEvent conditional=SPEECH_SYNTHESIS
+ WebGLContextEvent conditional=WEBGL
 diff --git a/Source/WebCore/dom/EventTargetFactory.in b/Source/WebCore/dom/EventTargetFactory.in
-index d823788946a..d82eb141c6b 100644
+index d823788946a..0e055d97905 100644
 --- a/Source/WebCore/dom/EventTargetFactory.in
 +++ b/Source/WebCore/dom/EventTargetFactory.in
 @@ -12,7 +12,7 @@ BaseAudioContext conditional=WEB_AUDIO
@@ -1483,6 +1866,15 @@ index d823788946a..d82eb141c6b 100644
  DedicatedWorkerGlobalScope
  DevicePosture
  DOMAudioSession conditional=DOM_AUDIO_SESSION
+@@ -63,7 +63,7 @@ SharedWorkerGlobalScope
+ SourceBuffer conditional=MEDIA_SOURCE
+ SourceBufferList conditional=MEDIA_SOURCE
+ ScreenOrientation
+-SpeechRecognition
++SpeechRecognition conditional=SPEECH_RECOGNITION
+ SpeechSynthesis conditional=SPEECH_SYNTHESIS
+ SpeechSynthesisUtterance conditional=SPEECH_SYNTHESIS
+ TextTrack conditional=VIDEO
 @@ -72,7 +72,7 @@ TextTrackCueGeneric conditional=VIDEO
  TextTrackList conditional=VIDEO
  VideoTrackList conditional=VIDEO
@@ -1805,7 +2197,7 @@ index ae50d6e6ba3..150bc282c32 100644
      [NewObject] Promise<ServiceWorkerRegistration> update();
      [NewObject] Promise<boolean> unregister();
 diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
-index 164ac8258d9..4358ada8c81 100644
+index 164ac8258d9..5fada34f47c 100644
 --- a/Source/cmake/OptionsAmiga.cmake
 +++ b/Source/cmake/OptionsAmiga.cmake
 @@ -61,6 +61,7 @@ WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SYSTEM_MALLOC PRIVATE ON)
@@ -1816,13 +2208,14 @@ index 164ac8258d9..4358ada8c81 100644
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FULLSCREEN_API PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_GAMEPAD PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_GEOLOCATION PRIVATE OFF)
-@@ -70,11 +71,15 @@ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_JAVASCRIPT_SHELL PRIVATE OFF)
+@@ -70,11 +71,16 @@ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_JAVASCRIPT_SHELL PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_MATHML PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_NOTIFICATIONS PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_REMOTE_INSPECTOR PRIVATE OFF)
 +WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SCREEN_WAKE_LOCK PRIVATE OFF)
 +WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SHAPE_DETECTION PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SMOOTH_SCROLLING PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SPEECH_RECOGNITION PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_USER_MESSAGE_HANDLERS PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_VIDEO PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_VIDEO_USES_ELEMENT_FULLSCREEN PRIVATE OFF)
@@ -1833,7 +2226,7 @@ index 164ac8258d9..4358ada8c81 100644
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_XSLT PRIVATE OFF)
  WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_AVIF PRIVATE OFF)
 diff --git a/Source/cmake/WebKitFeatures.cmake b/Source/cmake/WebKitFeatures.cmake
-index 277025b5974..d599cd9133a 100644
+index 277025b5974..a1e0e7b2d0a 100644
 --- a/Source/cmake/WebKitFeatures.cmake
 +++ b/Source/cmake/WebKitFeatures.cmake
 @@ -224,6 +224,7 @@ macro(WEBKIT_OPTION_BEGIN)
@@ -1853,7 +2246,15 @@ index 277025b5974..d599cd9133a 100644
      WEBKIT_OPTION_DEFINE(ENABLE_UNIFIED_PDF "Toggle unified PDF support" PRIVATE OFF)
      WEBKIT_OPTION_DEFINE(ENABLE_PERIODIC_MEMORY_MONITOR "Toggle periodical memory monitor support" PRIVATE OFF)
      WEBKIT_OPTION_DEFINE(ENABLE_UIPROCESS_PERIODIC_MEMORY_MONITOR "Toggle UIProcess periodic memory monitor support" PRIVATE OFF)
-@@ -331,7 +334,9 @@ macro(WEBKIT_OPTION_BEGIN)
+@@ -296,6 +299,7 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_SHAREABLE_RESOURCE "Toggle network shareable resources support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_SMOOTH_SCROLLING "Toggle smooth scrolling" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_SPATIAL_PORTAL "Toggle Spatial CSS Portal support" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_SPEECH_RECOGNITION "Toggle Speech Recognition API support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_SPEECH_SYNTHESIS "Toggle Speech Synthesis API support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_SPELLCHECK "Toggle Spellchecking support (requires Enchant)" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_STREAMING_IPC_IN_LOG_FORWARDING "Toggle streaming connection in WebKit::LogStream" PRIVATE OFF)
+@@ -331,7 +335,9 @@ macro(WEBKIT_OPTION_BEGIN)
      WEBKIT_OPTION_DEFINE(ENABLE_WEB_AUDIO "Toggle Web Audio support" PRIVATE ON)
      WEBKIT_OPTION_DEFINE(ENABLE_WEB_AUTHN "Toggle Web AuthN support" PRIVATE OFF)
      WEBKIT_OPTION_DEFINE(ENABLE_WEB_CODECS "Toggle WebCodecs support" PRIVATE OFF)
