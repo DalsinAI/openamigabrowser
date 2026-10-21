@@ -1,0 +1,1216 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 07:43:11 +0000
+Subject: [PATCH] JavaScriptCore: property shape tables, getters, strings and
+ loop doubles in the 68k template JIT
+
+- get_by_id: each site gets a four-entry structure table after the
+  code, filled after the slow path (fillGetByIdTable). An entry holds an
+  own value, a getter (own, or on the prototype while the prototype keeps
+  its structure; called as op_call calls, with a frame below this one)
+  or a missing property (undefined while the prototype, the last on the
+  chain, keeps its structure). At the end of a garbage collection,
+  M68KTemplateJIT::reconcileCaches (from
+  CodeBlock::reconcileLLIntInlineCachesAtGCEnd) clears the entries whose
+  structures died. The prototype-load and unset cache modes run out of
+  line instead of in the template.
+- Strings: s[i] on a flat string (out of line, after the array path)
+  gives the single-character string for codes below 256; .length of
+  flat strings and ropes; String.prototype.charCodeAt at call sites whose
+  call link holds it, checked at run time by its native function. VM.cpp
+  keeps charCodeAt's intrinsic on C_LOOP M68K so the call site can see
+  it.
+- Loop register copies keep doubles in fp2-fp6: slots computed from a
+  double constant or another double. Every write still goes to the
+  frame, boxed; a double that an int-only instruction also uses stays in
+  the frame only.
+- op_check_traps gets a plain fast path.
+
+The AmigaChrome Team.
+---
+ Source/JavaScriptCore/bytecode/CodeBlock.cpp  |   4 +
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 803 +++++++++++++++++-
+ Source/JavaScriptCore/llint/M68KTemplateJIT.h |   5 +
+ Source/JavaScriptCore/runtime/VM.cpp          |  12 +
+ 4 files changed, 796 insertions(+), 28 deletions(-)
+
+diff --git a/Source/JavaScriptCore/bytecode/CodeBlock.cpp b/Source/JavaScriptCore/bytecode/CodeBlock.cpp
+index 87b856ceb3c..433450833cd 100644
+--- a/Source/JavaScriptCore/bytecode/CodeBlock.cpp
++++ b/Source/JavaScriptCore/bytecode/CodeBlock.cpp
+@@ -1542,6 +1542,10 @@ void CodeBlock::reconcileLLIntInlineCachesAtGCEnd()
+ {
+     VM& vm = *m_vm;
+ 
++#if CPU(M68K) && ENABLE(C_LOOP)
++    M68KTemplateJIT::reconcileCaches(this, vm);
++#endif
++
+     if (m_metadata) {
+         // FIXME: https://bugs.webkit.org/show_bug.cgi?id=166418
+         // We need to add optimizations for op_resolve_scope_for_hoisting_func_decl_in_eval to do link time scope resolution.
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index d0c8974b497..198d364961e 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -36,6 +36,14 @@
+ #include "JSCallee.h"
+ #include "FunctionRareData.h"
+ #include "GetPutInfo.h"
++#include "GetterSetter.h"
++#include "JSString.h"
++#include "NativeExecutable.h"
++#include "SmallStrings.h"
++#include "JSCellInlines.h"
++#include "JSObjectInlines.h"
++#include "StructureInlines.h"
++#include "FunctionExecutable.h"
+ #include "JSFunction.h"
+ #include "JSLexicalEnvironment.h"
+ #include "LLIntData.h"
+@@ -65,6 +73,7 @@
+ #undef M68K_TEMPLATE
+ 
+ extern "C" uint64_t jsc_m68k_vrf[];
++extern "C" void* jsc_m68k_cloop_sp_field;
+ // The interpreter's prologues, for the cases the compiled one leaves to them.
+ extern "C" void jsc_m68k_llint_function_for_call_prologue() __asm__("_llint_function_for_call_prologue");
+ extern "C" void jsc_m68k_llint_function_for_construct_prologue() __asm__("_llint_function_for_construct_prologue");
+@@ -269,6 +278,7 @@ public:
+ 
+     // op_enter (stage J5).
+     void clrFrame(int disp) { word(0x42ad); word(disp); } // clr.l d16(a5)
++    void tstByte(unsigned dn) { word(0x4a00 | dn); } // tst.b dn
+     void moveq(int8_t imm, unsigned dn) { word(0x7000 | (dn << 9) | static_cast<uint8_t>(imm)); }
+     void moveByteAbs(const void* address, unsigned dn) { word(0x1039 | (dn << 9)); longWord(reinterpret_cast<uintptr_t>(address)); } // move.b (abs).l,dn
+     void moveLongAbs(const void* address, unsigned dn) { word(0x2039 | (dn << 9)); longWord(reinterpret_cast<uintptr_t>(address)); } // move.l (abs).l,dn
+@@ -301,6 +311,26 @@ public:
+         return fixups.size() - 1;
+     }
+     void bindAbsolute(size_t fixup) { fixups[fixup].targetBuffer = size(); }
++    // movea.l #(this code's address at a buffer position),an; the position
++    // is set later through the returned fixup.
++    size_t moveaCodeAddress(unsigned an)
++    {
++        word(0x207c | (an << 9));
++        return codeAddress();
++    }
++    // pea (code address).l
++    size_t peaCodeAddress()
++    {
++        word(0x4879);
++        return codeAddress();
++    }
++    size_t codeAddress()
++    {
++        size_t at = size();
++        longWord(0);
++        fixups.append({ at, 0, false, 0, 0, false });
++        return fixups.size() - 1;
++    }
+ 
+     // Doubles (stage J4), on the 68040's FPU. fp0 and fp1 are scratch, as in
+     // the interpreter's handlers; C keeps fp2-fp7.
+@@ -314,8 +344,9 @@ public:
+     void fmoveDoublePop(unsigned fpn) { word(0xf21f); word(0x5400 | (fpn << 7)); } // fmove.d (sp)+,fpn
+     void fmoveDoublePush(unsigned fpn) { word(0xf227); word(0x7400 | (fpn << 7)); } // fmove.d fpn,-(sp)
+     // fdadd, fdsub, fdmul (68040): one rounding, to double, as JavaScript asks.
+-    enum FPOperation { FPAdd = 0x66, FPSub = 0x6c, FPMul = 0x67, FPCompare = 0x38, FPTest = 0x3a };
++    enum FPOperation { FPMove = 0x00, FPAdd = 0x66, FPSub = 0x6c, FPMul = 0x67, FPCompare = 0x38, FPTest = 0x3a };
+     void fop(FPOperation op, unsigned src, unsigned dst) { word(0xf200); word((src << 10) | (dst << 7) | op); }
++    void fopLong(FPOperation op, unsigned dn, unsigned fpn) { word(0xf200 | dn); word(0x4000 | (fpn << 7) | op); } // f<op>.l dn,fpn
+ 
+     enum Condition { Always = 0, Higher = 2, LowerSame = 3, CarryClear = 4, CarrySet = 5, NotEqual = 6, Equal = 7, OverflowSet = 9, GreaterEqual = 12, Less = 13, Greater = 14, LessEqual = 15 };
+     // b<cc>.b within a fast path: branchShort, then bindShort at the target.
+@@ -356,6 +387,16 @@ public:
+         fixups.append({ at, from, true, 0, offset, true });
+     }
+ 
++    // fb<cc>.l to a buffer position.
++    void fbranchToBuffer(FPCondition cc, size_t target)
++    {
++        size_t from = size() + 2;
++        word(0xf2c0 | cc);
++        size_t at = size();
++        longWord(0);
++        fixups.append({ at, from, true, target, 0, false });
++    }
++
+     // b<cc>.l (68020+): a 32-bit displacement from the opcode word + 2.
+     size_t branch(Condition cc)
+     {
+@@ -438,8 +479,115 @@ struct FloatPath {
+     Operand rhs;
+     unsigned target { 0 }; // a compare's jump target, as a bytecode offset
+     Vector<size_t> branches; // to the float code
++    // get_by_id's out-of-line code instead: the cache modes other than the
++    // one the hot code is written for.
++    GetByIdModeMetadata* getById { nullptr };
++    GetByIdMode getByIdMode { GetByIdMode::Default };
++    unsigned getByIdTable { 0 }; // its structure table (getByIdTable)
++    unsigned site { 0 }; // the instruction's bytecode offset
++    // get_by_val's and get_length's out-of-line code instead: strings.
++    enum class String : uint8_t { None, Character, Length };
++    String string { String::None };
++    Vector<size_t> tableBranches; // to the table, on another structure
+ };
+ 
++// get_by_id's structure tables, after the code: for a site that sees more
++// than one structure, the last few structures it saw and where the property
++// is for each, which the interpreter's cache (one structure, and no
++// getters) would otherwise keep looking up. Each table is the index of the
++// entry to fill next, then its entries; the garbage collector clears the
++// entries of structures that die (reconcileCaches).
++static constexpr unsigned getByIdTableEntries = 4;
++struct GetByIdTable {
++    uint32_t next; // byte offset of the entry to fill next
++    struct Entry {
++        uint32_t structureID;
++        int32_t offset;
++        // Where the property is: 0, the object's own value; 1, the
++        // object's own getter; else the getter of this object (the
++        // prototype), while it has the structure holderStructureID; or,
++        // with getByIdTableMissing added, nowhere: the object is the
++        // prototype, the last on the chain.
++        uintptr_t holder;
++        uint32_t holderStructureID;
++    } entries[getByIdTableEntries];
++};
++static_assert(sizeof(GetByIdTable::Entry) == 16);
++static constexpr uintptr_t getByIdTableOwnGetter = 1;
++static constexpr uintptr_t getByIdTableMissing = 2;
++// The region after the code: the number of tables, then the tables.
++struct GetByIdTables {
++    uint32_t count;
++    GetByIdTable tables[1];
++};
++
++// Called after get_by_id's slow path, from its code: the object's structure
++// and where the property is for it go into the site's table, when that can
++// be cached: an own value the interpreter's cache now holds, or a getter of
++// the object's own or of its prototype (which the interpreter never caches).
++static void fillGetByIdTable(CallFrame* callFrame, CodeBlock* codeBlock, const JSInstruction* instruction, GetByIdTable* table)
++{
++    auto bytecode = instruction->as<OpGetById>();
++    JSValue base = callFrame->uncheckedR(bytecode.m_base).jsValue();
++    if (!base.isObject())
++        return;
++    JSObject* object = asObject(base);
++    Structure* structure = object->structure();
++    StructureID structureID = object->structureID();
++    for (auto& entry : table->entries) {
++        if (entry.structureID == structureID.bits())
++            return;
++    }
++    auto cacheable = [](Structure* structure) {
++        return structure->propertyAccessesAreCacheable() && !structure->isDictionary() && !structure->hasPolyProto()
++            && !structure->typeInfo().overridesGetOwnPropertySlot() && !structure->needImpurePropertyWatchpoint()
++            && !structure->hasNonReifiedStaticProperties();
++    };
++    GetByIdTable::Entry newEntry { structureID.bits(), 0, 0, 0 };
++    auto insert = [&] {
++        table->entries[table->next / sizeof(GetByIdTable::Entry)] = newEntry;
++        table->next = (table->next + sizeof(GetByIdTable::Entry)) % sizeof(table->entries);
++    };
++    auto& modeMetadata = bytecode.metadata(codeBlock).m_modeMetadata;
++    if (modeMetadata.mode == GetByIdMode::Default && modeMetadata.defaultMode.structureID == structureID)
++        newEntry.offset = modeMetadata.defaultMode.cachedOffset;
++    else {
++        if (!cacheable(structure))
++            return;
++        UniquedStringImpl* uid = codeBlock->identifier(bytecode.m_property).impl();
++        unsigned attributes = 0;
++        PropertyOffset offset = structure->getConcurrently(uid, attributes);
++        JSObject* holder = object;
++        if (!isValidOffset(offset)) {
++            JSValue prototype = structure->storedPrototype(object);
++            if (!prototype.isObject())
++                return;
++            holder = asObject(prototype);
++            Structure* holderStructure = holder->structure();
++            if (!cacheable(holderStructure))
++                return;
++            offset = holderStructure->getConcurrently(uid, attributes);
++            newEntry.holder = reinterpret_cast<uintptr_t>(holder);
++            newEntry.holderStructureID = holder->structureID().bits();
++            if (!isValidOffset(offset)) {
++                if (!holderStructure->storedPrototype(holder).isNull())
++                    return;
++                newEntry.holder += getByIdTableMissing;
++                insert();
++                return;
++            }
++        } else
++            newEntry.holder = getByIdTableOwnGetter;
++        if (!(attributes & PropertyAttribute::Accessor) || (attributes & PropertyAttribute::CustomAccessorOrValue))
++            return;
++        JSValue accessor = holder->getDirect(offset);
++        if (!accessor.isCell() || accessor.asCell()->type() != GetterSetterType)
++            return;
++        newEntry.offset = offset;
++    }
++    insert();
++}
++
+ class FastPaths {
+ public:
+     FastPaths(CodeBlock* codeBlock, Builder& hot)
+@@ -459,6 +607,7 @@ public:
+         m_float = &floatPath;
+         m_bail = m_slow;
+         bool ok = emitImpl(instruction, offset);
++        floatPath.site = offset;
+         if (!ok) {
+             m_hot.bytes.shrink(start);
+             m_hot.fixups.shrink(fixups);
+@@ -473,7 +622,13 @@ public:
+     void emitFloatPath(const FloatPath& floatPath, unsigned nextOffset, Vector<size_t>& slowBranches)
+     {
+         m_slow = &slowBranches;
+-        if (isCompare(floatPath.opcode))
++        if (floatPath.string == FloatPath::String::Character)
++            stringCharacterValue(floatPath.dst);
++        else if (floatPath.string == FloatPath::String::Length)
++            stringLengthValue(floatPath.dst);
++        else if (floatPath.getById)
++            getByIdOtherModes(floatPath);
++        else if (isCompare(floatPath.opcode))
+             floatCompare(floatPath.opcode, floatPath.lhs, floatPath.rhs, floatPath.target);
+         else
+             floatArith(floatPath.opcode, floatPath.dst, floatPath.lhs, floatPath.rhs);
+@@ -690,6 +845,203 @@ private:
+         m_hot.bindShort(done);
+     }
+ 
++    // get_by_id for one cache mode, a0 the object and a1 the cache.
++    void getByIdMode(GetByIdMode mode, const Operand& dst)
++    {
++        auto load = [&](int d8) {
++            m_hot.copyIndexedToFrame(0, 1, d8, dst.hi);
++            m_hot.copyIndexedToFrame(0, 1, d8 + 4, dst.lo);
++        };
++        m_hot.loadDisp(0, JSCell::structureIDOffset(), 1);
++        m_hot.cmpDisp(1, OBJECT_OFFSETOF(GetByIdModeMetadata, defaultMode), 1);
++        m_tableMiss->append(m_hot.branch(Builder::NotEqual));
++        switch (mode) {
++        case GetByIdMode::Default:
++            m_hot.loadDisp(1, OBJECT_OFFSETOF(GetByIdModeMetadata, defaultMode) + OBJECT_OFFSETOF(GetByIdModeMetadataDefault, cachedOffset), 1);
++            withProperty(load);
++            break;
++        case GetByIdMode::ProtoLoad:
++            // The property of the object the cache holds (the slot's first
++            // word, on a big-endian CPU with 32-bit pointers).
++            m_hot.loadDisp(1, OBJECT_OFFSETOF(GetByIdModeMetadata, protoLoadMode) + OBJECT_OFFSETOF(GetByIdModeMetadataProtoLoad, cachedOffset), 1);
++            m_hot.moveaDisp(1, OBJECT_OFFSETOF(GetByIdModeMetadata, protoLoadMode) + OBJECT_OFFSETOF(GetByIdModeMetadataProtoLoad, cachedSlot), 0);
++            withProperty(load);
++            break;
++        default: {
++            uint64_t undefined = JSValue::encode(jsUndefined());
++            m_hot.storeFrameImm(static_cast<uint32_t>(undefined >> 32), dst.hi);
++            m_hot.storeFrameImm(static_cast<uint32_t>(undefined), dst.lo);
++            break;
++        }
++        }
++    }
++    // The out-of-line part: the other modes, a0 and a1 as the hot code left
++    // them; then on to the next instruction (emitFloatPath).
++    void getByIdOtherModes(const FloatPath& floatPath)
++    {
++        Vector<size_t> tableMiss = floatPath.tableBranches;
++        m_tableMiss = &tableMiss;
++        Vector<size_t, 3> done;
++        for (GetByIdMode mode : { GetByIdMode::Default, GetByIdMode::ProtoLoad, GetByIdMode::Unset }) {
++            if (mode == floatPath.getByIdMode)
++                continue;
++            m_hot.cmpByteImmDisp(static_cast<uint8_t>(mode), 1, GetByIdModeMetadata::offsetOfMode());
++            size_t next = m_hot.branch(Builder::NotEqual);
++            getByIdMode(mode, floatPath.dst);
++            done.append(m_hot.branch(Builder::Always));
++            m_hot.bindBranch(next);
++        }
++        slowUnless(Builder::Always);
++        // Another structure: the table (d1 the structure ID, a0 the object).
++        for (size_t i : tableMiss)
++            m_hot.bindBranch(i);
++        m_tableFixups.append({ m_hot.moveaCodeAddress(1), floatPath.getByIdTable, OBJECT_OFFSETOF(GetByIdTable, entries) });
++        Vector<size_t, getByIdTableEntries> hits;
++        for (unsigned i = 0; i < getByIdTableEntries; ++i) {
++            m_hot.word(0xb299); // cmp.l (a1)+,d1
++            hits.append(m_hot.branchShort(Builder::Equal));
++            if (i + 1 < getByIdTableEntries) {
++                m_hot.word(0x43e9); m_hot.word(sizeof(GetByIdTable::Entry) - 4); // lea 12(a1),a1
++            }
++        }
++        slowUnless(Builder::Always);
++        for (size_t i : hits)
++            m_hot.bindShort(i);
++        // a1 at the entry's offset: a value, or a getter to call.
++        m_hot.word(0x4aa9); m_hot.word(OBJECT_OFFSETOF(GetByIdTable::Entry, holder) - 4); // tst.l holder(a1)
++        size_t getter = m_hot.branch(Builder::NotEqual);
++        m_hot.word(0x2211); // move.l (a1),d1: the offset
++        withProperty([&](int d8) {
++            m_hot.copyIndexedToFrame(0, 1, d8, floatPath.dst.hi);
++            m_hot.copyIndexedToFrame(0, 1, d8 + 4, floatPath.dst.lo);
++        });
++        done.append(m_hot.branch(Builder::Always));
++        m_hot.bindBranch(getter);
++        done.append(getterCall(floatPath));
++        for (size_t i : done)
++            m_hot.bindBranch(i);
++    }
++
++    // A getter from the table (a0 the object, a1 at the entry's offset):
++    // called as op_call calls (call), when it is a function with compiled
++    // code, with a frame below this one's; anything else is the slow path.
++    // Returns a branch to the end, for a missing property.
++    size_t getterCall(const FloatPath& floatPath)
++    {
++        constexpr int slot = sizeof(Register);
++        int frameSize = static_cast<int>(m_codeBlock->numCalleeLocals()) * slot + static_cast<int>(maxFrameExtentForSlowPathCall);
++        int frame = -frameSize - static_cast<int>(roundUpToMultipleOf(stackAlignmentBytes(), (static_cast<unsigned>(CallFrameSlot::thisArgument) + 1) * slot));
++        RELEASE_ASSERT(frame >= -32768);
++        uint32_t* lr = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotLR]);
++        uint32_t* sp = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotSP]);
++        uint32_t* t0High = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotT0]);
++        constexpr int holder = OBJECT_OFFSETOF(GetByIdTable::Entry, holder) - 4;
++        constexpr int holderStructureID = OBJECT_OFFSETOF(GetByIdTable::Entry, holderStructureID) - 4;
++        // The object with the getter: this one, or the prototype, while its
++        // structure is the one the table saw.
++        m_hot.loadDisp(1, holder, 0);
++        // Or no property at all, while the prototype (the last object on
++        // the chain) has the structure the table saw: undefined.
++        static_assert(getByIdTableMissing == 2);
++        m_hot.btstImm(1, 0);
++        size_t present = m_hot.branchShort(Builder::Equal);
++        m_hot.moveaFromData(0, 0);
++        m_hot.loadDisp(1, holderStructureID, 0);
++        m_hot.cmpDisp(0, JSCell::structureIDOffset() - static_cast<int>(getByIdTableMissing), 0);
++        slowUnless(Builder::NotEqual);
++        uint64_t undefined = JSValue::encode(jsUndefined());
++        m_hot.storeFrameImm(static_cast<uint32_t>(undefined >> 32), floatPath.dst.hi);
++        m_hot.storeFrameImm(static_cast<uint32_t>(undefined), floatPath.dst.lo);
++        size_t missing = m_hot.branch(Builder::Always);
++        m_hot.bindShort(present);
++        m_hot.cmpImm(getByIdTableOwnGetter, 0);
++        size_t own = m_hot.branchShort(Builder::Equal);
++        m_hot.moveaFromData(0, 0);
++        m_hot.loadDisp(1, holderStructureID, 0);
++        m_hot.cmpDisp(0, JSCell::structureIDOffset(), 0);
++        slowUnless(Builder::NotEqual);
++        m_hot.bindShort(own);
++        // Its GetterSetter, then the getter function.
++        m_hot.word(0x2211); // move.l (a1),d1: the offset
++        withProperty([&](int d8) { m_hot.loadIndexed(0, 1, d8 + 4, 0); });
++        m_hot.moveaFromData(0, 0);
++        m_hot.moveaDisp(0, GetterSetter::offsetOfGetter(), 0);
++        m_hot.cmpByteImmDisp(JSFunctionType, 0, JSCell::typeInfoTypeOffset());
++        slowUnless(Builder::NotEqual);
++        m_hot.loadDisp(0, JSFunction::offsetOfExecutableOrRareData(), 1);
++        m_hot.btstImm(0, 1);
++        size_t executable = m_hot.branchShort(Builder::Equal);
++        m_hot.moveaFromData(1, 6);
++        m_hot.loadDisp(6, FunctionRareData::offsetOfExecutable() - static_cast<int>(JSFunction::rareDataTag), 1);
++        m_hot.bindShort(executable);
++        m_hot.moveaFromData(1, 6);
++        m_hot.cmpByteImmDisp(FunctionExecutableType, 6, JSCell::typeInfoTypeOffset());
++        slowUnless(Builder::NotEqual);
++        m_hot.loadDisp(6, FunctionExecutable::offsetOfCodeBlockForCall(), 1);
++        slowUnless(Builder::Equal);
++        m_hot.moveaFromData(1, 6);
++        m_hot.word(0x4aae); m_hot.word(OBJECT_OFFSETOF(CodeBlock, m_m68kTemplateCode)); // tst.l code(a6)
++        slowUnless(Builder::Equal);
++        // The frame: one argument (this, the object), the getter, its
++        // CodeBlock (d1); this frame's call site; sp and lr as call sets them.
++        m_hot.storeFrameImm(1, frame + static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot + 4);
++        m_hot.storeFrameImm(floatPath.site, static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot);
++        m_hot.clrFrame(frame + static_cast<int>(CallFrameSlot::callee) * slot);
++        m_hot.storeAddressFrame(0, frame + static_cast<int>(CallFrameSlot::callee) * slot + 4);
++        m_hot.storeFrame(1, frame + static_cast<int>(CallFrameSlot::codeBlock) * slot + 4);
++        m_hot.copyFrame(floatPath.lhs.hi, frame + static_cast<int>(CallFrameSlot::thisArgument) * slot);
++        m_hot.copyFrame(floatPath.lhs.lo, frame + static_cast<int>(CallFrameSlot::thisArgument) * slot + 4);
++        m_hot.leaFrame(frame + static_cast<int>(sizeof(CallerFrameAndPC)), 1);
++        m_hot.storeAddressAbs(1, sp + 1);
++        m_hot.clrAbs(sp);
++        size_t returnPoint = m_hot.storeCodeAddressAbs(lr + 1);
++        m_hot.clrAbs(lr);
++        m_hot.moveaDisp(6, OBJECT_OFFSETOF(CodeBlock, m_m68kTemplateCode), 0);
++        m_hot.jumpA0();
++        // Back, as from call.
++        m_hot.bindAbsolute(returnPoint);
++        m_hot.leaFrame(-frameSize, 0);
++        m_hot.storeAddressAbs(0, sp + 1);
++        m_hot.moveaImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(m_codeBlock->instructionsRawPointer())), 3);
++        m_hot.copyAbsToFrame(t0High, floatPath.dst.hi);
++        m_hot.storeFrame(4, floatPath.dst.lo);
++        return missing;
++    }
++
++public:
++    // For the loop copies' doubles (LoopCopy): a number into fpn, or a
++    // branch added to fails; fpn boxed into dst.
++    void loadNumber(const Operand& op, unsigned fpn, Vector<size_t>& fails)
++    {
++        m_slow = &fails;
++        loadFloat(op, fpn);
++    }
++    void storeNumber(unsigned fpn, const Operand& dst) { boxDouble(fpn, dst); }
++    static Builder::FPCondition floatConditionFor(OpcodeID opcode) { return floatCondition(opcode); }
++
++    // After get_by_id's slow path (the template): when the interpreter's
++    // cache now holds an own property, its pair goes into the site's table.
++    void getByIdFill(const FloatPath& floatPath, const JSInstruction* instruction)
++    {
++        m_hot.loadAddressAbs(&jsc_m68k_cloop_sp_field, 0);
++        m_hot.word(0x20b9); m_hot.longWord(reinterpret_cast<uintptr_t>(&jsc_m68k_vrf[m68kSlotSP]) + 4); // move.l (sp).l,(a0)
++        m_tableFixups.append({ m_hot.peaCodeAddress(), floatPath.getByIdTable, 0 });
++        m_hot.word(0x4879); m_hot.longWord(reinterpret_cast<uintptr_t>(instruction)); // pea instruction
++        m_hot.word(0x4879); m_hot.longWord(reinterpret_cast<uintptr_t>(m_codeBlock)); // pea codeBlock
++        m_hot.word(0x2f0d); // move.l a5,-(sp)
++        m_hot.word(0x4eb9); m_hot.longWord(reinterpret_cast<uintptr_t>(&fillGetByIdTable)); // jsr
++        m_hot.word(0x4fef); m_hot.word(16); // lea 16(sp),sp
++    }
++    unsigned getByIdTableCount() const { return m_tableCount; }
++    // Points the table addresses in the code at the tables, which start at
++    // the buffer position tables (a GetByIdTables).
++    void bindGetByIdTables(size_t tables)
++    {
++        for (auto [fixup, table, delta] : m_tableFixups)
++            m_hot.fixups[fixup].targetBuffer = tables + OBJECT_OFFSETOF(GetByIdTables, tables) + table * sizeof(GetByIdTable) + delta;
++    }
++private:
++
+     bool getById(const JSInstruction* instruction)
+     {
+         auto bytecode = instruction->as<OpGetById>();
+@@ -698,21 +1050,28 @@ private:
+         if (!dst.valid || dst.isConstant || !base.valid || base.isConstant)
+             return false;
+         auto& metadata = bytecode.metadata(m_codeBlock);
+-        // Only sites whose cache has settled on an own property.
+-        if (metadata.m_modeMetadata.mode != GetByIdMode::Default || !metadata.m_modeMetadata.defaultMode.structureID)
++        // Only sites whose cache has settled: on an own property (Default),
++        // a prototype's (ProtoLoad: method calls) or a missing one (Unset).
++        // The mode is read as the code runs; the structure ID is the first
++        // word in all three.
++        auto& modeMetadata = metadata.m_modeMetadata;
++        if (modeMetadata.mode == GetByIdMode::ArrayLength || (modeMetadata.mode != GetByIdMode::Default && !modeMetadata.defaultMode.structureID))
+             return false;
++        static_assert(!OBJECT_OFFSETOF(GetByIdModeMetadataDefault, structureID) && !OBJECT_OFFSETOF(GetByIdModeMetadataProtoLoad, structureID) && !OBJECT_OFFSETOF(GetByIdModeMetadataUnset, structureID));
+         loadCell(base);
+-        m_hot.moveaImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&metadata.m_modeMetadata)), 1);
+-        m_hot.cmpByteImmDisp(static_cast<uint8_t>(GetByIdMode::Default), 1, GetByIdModeMetadata::offsetOfMode());
+-        slowUnless(Builder::NotEqual);
+-        m_hot.loadDisp(0, JSCell::structureIDOffset(), 1);
+-        m_hot.cmpDisp(1, OBJECT_OFFSETOF(GetByIdModeMetadata, defaultMode) + OBJECT_OFFSETOF(GetByIdModeMetadataDefault, structureID), 1);
+-        slowUnless(Builder::NotEqual);
+-        m_hot.loadDisp(1, OBJECT_OFFSETOF(GetByIdModeMetadata, defaultMode) + OBJECT_OFFSETOF(GetByIdModeMetadataDefault, cachedOffset), 1);
+-        withProperty([&](int d8) {
+-            m_hot.copyIndexedToFrame(0, 1, d8, dst.hi);
+-            m_hot.copyIndexedToFrame(0, 1, d8 + 4, dst.lo);
+-        });
++        m_hot.moveaImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&modeMetadata)), 1);
++        // The mode the cache has now; the others out of line, in case it
++        // changes (ArrayLength: the template).
++        m_float->needed = true;
++        m_float->getById = &modeMetadata;
++        m_float->getByIdMode = modeMetadata.mode;
++        m_float->getByIdTable = m_tableCount++;
++        m_float->dst = dst;
++        m_float->lhs = base;
++        m_tableMiss = &m_float->tableBranches;
++        m_hot.cmpByteImmDisp(static_cast<uint8_t>(modeMetadata.mode), 1, GetByIdModeMetadata::offsetOfMode());
++        m_float->branches.append(m_hot.branch(Builder::NotEqual));
++        getByIdMode(modeMetadata.mode, dst);
+         return true;
+     }
+ 
+@@ -724,9 +1083,48 @@ private:
+         m_hot.andByteImm(IndexingShapeMask | (copyOnWrite ? CopyOnWrite : 0), 0);
+     }
+ 
++    // Strings (item 3). a0 a JSString, d1 an index: the character code
++    // there into d0, or fail(cc) when cc: a rope (not yet flat) or an index
++    // out of range.
++    template<typename Fail>
++    void stringCharacter(const Fail& fail)
++    {
++        m_hot.loadDisp(0, JSString::offsetOfValue(), 0);
++        m_hot.btstImm(0, 0);
++        static_assert(JSString::isRopeInPointer == 1);
++        fail(Builder::NotEqual);
++        m_hot.moveaFromData(0, 0);
++        m_hot.cmpDisp(0, StringImpl::lengthMemoryOffset(), 1);
++        fail(Builder::CarryClear); // index >= length, unsigned (negative too)
++        m_hot.moveaDisp(0, StringImpl::dataOffset(), 1);
++        m_hot.moveq(0, 0);
++        static_assert(StringImpl::flagIs8Bit() == 1 << 2);
++        m_hot.btstImmDisp(2, 0, StringImpl::flagsOffset() + 3);
++        size_t is16Bit = m_hot.branchShort(Builder::Equal);
++        m_hot.word(0x1031); m_hot.word(Builder::index(1, 0)); // move.b 0(a1,d1.l),d0
++        size_t done = m_hot.branchShort(Builder::Always);
++        m_hot.bindShort(is16Bit);
++        m_hot.word(0x3031); m_hot.word(Builder::index(1, 0) | 0x0200); // move.w 0(a1,d1.l*2),d0
++        m_hot.bindShort(done);
++    }
++    // A string's length into d0 (a0 the JSString): a rope's or a flat one's.
++    void stringLength()
++    {
++        m_hot.loadDisp(0, JSString::offsetOfValue(), 0);
++        m_hot.btstImm(0, 0);
++        size_t flat = m_hot.branchShort(Builder::Equal);
++        m_hot.loadDisp(0, JSRopeString::offsetOfLength(), 0);
++        size_t done = m_hot.branchShort(Builder::Always);
++        m_hot.bindShort(flat);
++        m_hot.moveaFromData(0, 1);
++        m_hot.loadDisp(1, StringImpl::lengthMemoryOffset(), 0);
++        m_hot.bindShort(done);
++    }
++
+     // Arrays of int32s or of any values (the interpreter's Int32Shape and
+-    // ContiguousShape), by an int32 index below the length; anything else
+-    // is the template.
++    // ContiguousShape), by an int32 index below the length, and strings'
++    // characters (as the interpreter's single-character strings); anything
++    // else is the template.
+     bool getByVal(const JSInstruction* instruction)
+     {
+         auto bytecode = instruction->as<OpGetByVal>();
+@@ -742,7 +1140,11 @@ private:
+         m_hot.cmpByteImm(Int32Shape, 0);
+         size_t shapeOk = m_hot.branchShort(Builder::Equal);
+         m_hot.cmpByteImm(ContiguousShape, 0);
+-        slowUnless(Builder::NotEqual);
++        // Not an array: perhaps a string, out of line.
++        m_float->needed = true;
++        m_float->string = FloatPath::String::Character;
++        m_float->dst = dst;
++        m_float->branches.append(m_hot.branch(Builder::NotEqual));
+         m_hot.bindShort(shapeOk);
+         m_hot.moveaDisp(0, JSObject::butterflyOffset(), 0);
+         m_hot.cmpDisp(0, Butterfly::offsetOfPublicLength(), 1);
+@@ -758,6 +1160,24 @@ private:
+         m_hot.copyIndexedToFrame(0, 1, 4, dst.lo);
+         return true;
+     }
++    // get_by_val's string (no indexing shape; a0 the cell, d0 its shape,
++    // d1 the index): the character's string, for codes below 256.
++    void stringCharacterValue(const Operand& dst)
++    {
++        m_hot.tstByte(0);
++        slowUnless(Builder::NotEqual);
++        m_hot.cmpByteImmDisp(StringType, 0, JSCell::typeInfoTypeOffset());
++        slowUnless(Builder::NotEqual);
++        stringCharacter([&](Builder::Condition cc) { slowUnless(cc); });
++        m_hot.cmpImm(maxSingleCharacterString + 1, 0);
++        slowUnless(Builder::CarryClear);
++        m_hot.word(0xe588); // lsl.l #2,d0
++        m_hot.moveaImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(m_codeBlock->vm().smallStrings.singleCharacterStrings())), 1);
++        m_hot.word(0x2031); m_hot.word(Builder::index(0, 0)); // move.l 0(a1,d0.l),d0
++        slowUnless(Builder::Equal);
++        m_hot.clrFrame(dst.hi);
++        m_hot.storeFrame(0, dst.lo);
++    }
+ 
+     // As getByVal, in bounds only (the template grows arrays), and not to
+     // copy-on-write arrays. An Int32Shape array only takes int32s.
+@@ -826,7 +1246,11 @@ private:
+         m_hot.loadByteDisp(0, JSCell::indexingTypeAndMiscOffset(), 0);
+         static_assert(IsArray == 1);
+         m_hot.btstImm(0, 0);
+-        slowUnless(Builder::Equal);
++        // Not an array: perhaps a string, out of line.
++        m_float->needed = true;
++        m_float->string = FloatPath::String::Length;
++        m_float->dst = dst;
++        m_float->branches.append(m_hot.branch(Builder::Equal));
+         m_hot.andByteImm(IndexingShapeMask, 0);
+         slowUnless(Builder::Equal);
+         m_hot.moveaDisp(0, JSObject::butterflyOffset(), 0);
+@@ -836,6 +1260,15 @@ private:
+         m_hot.storeFrame(0, dst.lo);
+         return true;
+     }
++    // get_length's string (a0 the cell).
++    void stringLengthValue(const Operand& dst)
++    {
++        m_hot.cmpByteImmDisp(StringType, 0, JSCell::typeInfoTypeOffset());
++        slowUnless(Builder::NotEqual);
++        stringLength();
++        m_hot.storeFrameImm(int32Tag, dst.hi);
++        m_hot.storeFrame(0, dst.lo);
++    }
+ 
+     bool putById(const JSInstruction* instruction)
+     {
+@@ -1042,6 +1475,7 @@ private:
+         m_hot.tstFrame(callee.hi);
+         slowUnless(Builder::NotEqual);
+         m_hot.loadFrame(callee.lo, 0);
++        size_t intrinsicDone = intrinsicCall(linkInfo, frame, bytecode.m_argc, dst, callee);
+         m_hot.cmpLongAbs(linkBase + CallLinkInfo::offsetOfCallee(), 0);
+         size_t notMonomorphic = m_hot.branch(Builder::NotEqual);
+ 
+@@ -1142,9 +1576,70 @@ private:
+             m_hot.copyAbsToFrame(t0High, dst.hi);
+             m_hot.storeFrame(4, dst.lo);
+         }
++        if (intrinsicDone != SIZE_MAX)
++            m_hot.bindBranch(intrinsicDone);
+         return true;
+     }
+ 
++    // Built-in functions done in line (item 3), at a call site whose call
++    // link holds one now: String.prototype.charCodeAt on a flat string and
++    // an int32 index in range. The callee (in d0, kept) is checked by its
++    // native function, so any function object for it will do; anything else
++    // goes on to the call. Returns a branch to after the call, or SIZE_MAX.
++    size_t intrinsicCall(CallLinkInfo& linkInfo, int frame, unsigned argc, const Operand& dst, const Operand& callee)
++    {
++        JSObject* cached = linkInfo.lastSeenCallee();
++        auto* function = cached && cached->type() == JSFunctionType ? static_cast<JSFunction*>(cached) : nullptr;
++        if (!function || !function->isHostFunction() || function->intrinsic() != CharCodeAtIntrinsic || argc != 2)
++            return SIZE_MAX;
++        uintptr_t native = reinterpret_cast<uintptr_t>(function->nativeFunction().taggedPtr());
++        constexpr int slot = sizeof(Register);
++        int thisValue = frame + static_cast<int>(CallFrameSlot::thisArgument) * slot;
++        int index = thisValue + slot;
++        Vector<size_t, 8> notIntrinsic;
++        auto fail = [&](Builder::Condition cc) { notIntrinsic.append(m_hot.branch(cc)); };
++        m_hot.btst1(0);
++        fail(Builder::NotEqual);
++        m_hot.tst(0);
++        fail(Builder::Equal);
++        m_hot.moveaFromData(0, 0);
++        m_hot.cmpByteImmDisp(JSFunctionType, 0, JSCell::typeInfoTypeOffset());
++        fail(Builder::NotEqual);
++        m_hot.loadDisp(0, JSFunction::offsetOfExecutableOrRareData(), 1);
++        m_hot.btstImm(0, 1);
++        size_t executable = m_hot.branchShort(Builder::Equal);
++        m_hot.moveaFromData(1, 1);
++        m_hot.loadDisp(1, FunctionRareData::offsetOfExecutable() - static_cast<int>(JSFunction::rareDataTag), 1);
++        m_hot.bindShort(executable);
++        m_hot.moveaFromData(1, 1);
++        m_hot.cmpByteImmDisp(NativeExecutableType, 1, JSCell::typeInfoTypeOffset());
++        fail(Builder::NotEqual);
++        m_hot.word(0x0ca9); m_hot.longWord(native); m_hot.word(NativeExecutable::offsetOfNativeFunctionFor(CodeSpecializationKind::CodeForCall)); // cmpi.l #native,d16(a1)
++        fail(Builder::NotEqual);
++        // this: a flat string; the index: an int32.
++        m_hot.tstFrame(thisValue);
++        fail(Builder::NotEqual);
++        m_hot.loadFrame(thisValue + 4, 1);
++        m_hot.btstImm(1, 1);
++        fail(Builder::NotEqual);
++        m_hot.moveaFromData(1, 0);
++        m_hot.cmpByteImmDisp(StringType, 0, JSCell::typeInfoTypeOffset());
++        fail(Builder::NotEqual);
++        m_hot.cmpFrameImm(int32Tag, index);
++        fail(Builder::NotEqual);
++        m_hot.loadFrame(index + 4, 1);
++        stringCharacter(fail);
++        if (dst.valid) {
++            m_hot.storeFrameImm(int32Tag, dst.hi);
++            m_hot.storeFrame(0, dst.lo);
++        }
++        size_t done = m_hot.branch(Builder::Always);
++        for (size_t i : notIntrinsic)
++            m_hot.bindBranch(i);
++        m_hot.loadFrame(callee.lo, 0);
++        return done;
++    }
++
+     // Comparisons and tests on any value (stage J7), not only int32s: what
+     // the interpreter's handlers do with 64-bit operations, done with the
+     // high and low words. Doubles, strings compared by their contents and
+@@ -1822,6 +2317,11 @@ private:
+         switch (instruction->opcodeID()) {
+         case op_enter:
+             return enter();
++        case op_check_traps:
++            // A trap (a debugger, a watchdog, a termination) is the template's.
++            m_hot.loadAbsoluteMasked(m_codeBlock->vm().traps().trapBitsAddress(), VMTraps::AsyncEvents);
++            slowUnless(Builder::NotEqual);
++            return true;
+         case op_call:
+             return call<OpCall>(instruction, offset);
+         case op_construct:
+@@ -1981,6 +2481,9 @@ private:
+     Vector<size_t>* m_slow { nullptr };
+     Vector<size_t>* m_bail { nullptr };
+     FloatPath* m_float { nullptr };
++    Vector<size_t>* m_tableMiss { nullptr };
++    unsigned m_tableCount { 0 };
++    Vector<std::tuple<size_t, unsigned, size_t>> m_tableFixups;
+ };
+ 
+ // Register caching (stage J6). A loop's body gets a second copy that keeps
+@@ -2026,6 +2529,10 @@ public:
+             m_code.branchToBuffer(Builder::NotEqual, m_plainStart[m_head]);
+             m_code.loadFrame(slot + 4, reg);
+         }
++        for (unsigned i = 0; i < m_doubles.size(); ++i) {
++            if (m_doubleLiveIn[i])
++                loadDoubles(i, m_plainStart[m_head]);
++        }
+         m_loop = m_code.size();
+         const JSInstruction* instruction = head;
+         while (true) {
+@@ -2054,6 +2561,10 @@ private:
+         bool isConstant { false };
+         int32_t constant { 0 };
+         int reg { -1 }; // a cached variable's register
++        int fp { -1 }; // a double's FPU register
++        bool isDouble { false }; // a double constant
++        bool isDoubleSlot { false }; // a double, in an FPU register or only in the frame
++        double doubleConstant { 0 };
+         bool liveIn { false }; // cached, and its frame tag checked by the preheader
+         int hi { 0 };
+         int lo { 0 };
+@@ -2088,6 +2599,13 @@ private:
+                 int32Constants = false;
+             uses.append(reg);
+         };
++        // add, sub, mul and the compares also take double constants: the
++        // copy does them on the FPU (doubles in loops, item 5).
++        auto addNumber = [&](VirtualRegister reg) {
++            if (reg.isConstant() && !m_codeBlock->getConstant(reg).isNumber())
++                int32Constants = false;
++            uses.append(reg);
++        };
+         auto result = [&](bool handled) { return handled && int32Constants; };
+         switch (instruction->opcodeID()) {
+         case op_loop_hint:
+@@ -2096,6 +2614,10 @@ private:
+             return true;
+         case op_mov: {
+             auto bytecode = instruction->as<OpMov>();
++            if (bytecode.m_src.isConstant() && m_codeBlock->getConstant(bytecode.m_src).isDouble()) {
++                add(bytecode.m_dst);
++                return !bytecode.m_dst.isConstant();
++            }
+             if (bytecode.m_src.isConstant() && !m_codeBlock->getConstant(bytecode.m_src).isInt32()) {
+                 // Another constant (undefined for a call's this, say): its
+                 // slot stays out of the registers.
+@@ -2182,14 +2704,16 @@ private:
+         case op_inc: add(instruction->as<OpInc>().m_srcDst); return true;
+         case op_dec: add(instruction->as<OpDec>().m_srcDst); return true;
+ #define M68K_BINARY(name, Op) case name: { auto bytecode = instruction->as<Op>(); add(bytecode.m_dst); add(bytecode.m_lhs); add(bytecode.m_rhs); return result(true); }
+-        M68K_BINARY(op_add, OpAdd)
+-        M68K_BINARY(op_sub, OpSub)
+-        M68K_BINARY(op_mul, OpMul)
++#define M68K_NUMBER_BINARY(name, Op) case name: { auto bytecode = instruction->as<Op>(); add(bytecode.m_dst); addNumber(bytecode.m_lhs); addNumber(bytecode.m_rhs); return result(true); }
++        M68K_NUMBER_BINARY(op_add, OpAdd)
++        M68K_NUMBER_BINARY(op_sub, OpSub)
++        M68K_NUMBER_BINARY(op_mul, OpMul)
++#undef M68K_NUMBER_BINARY
+         M68K_BINARY(op_bitand, OpBitand)
+         M68K_BINARY(op_bitor, OpBitor)
+         M68K_BINARY(op_bitxor, OpBitxor)
+ #undef M68K_BINARY
+-#define M68K_COMPARE(name, Op) case name: { auto bytecode = instruction->as<Op>(); add(bytecode.m_lhs); add(bytecode.m_rhs); return result(true); }
++#define M68K_COMPARE(name, Op) case name: { auto bytecode = instruction->as<Op>(); addNumber(bytecode.m_lhs); addNumber(bytecode.m_rhs); return result(true); }
+         M68K_COMPARE(op_jless, OpJless)
+         M68K_COMPARE(op_jlesseq, OpJlesseq)
+         M68K_COMPARE(op_jgreater, OpJgreater)
+@@ -2249,6 +2773,16 @@ private:
+         HashSet<int, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> cellSlots;
+         Vector<std::pair<int, int>> moves;
+         auto displacement = [](VirtualRegister reg) { return reg.offset() * static_cast<int>(sizeof(Register)); };
++        // For the doubles: what add, sub, mul and mov compute from (their
++        // result first, or none for a compare; a double constant as a
++        // marker), and the slots every other instruction uses.
++        static constexpr int doubleConstant = INT_MIN;
++        struct Flow {
++            std::optional<int> dst;
++            Vector<int, 2> sources;
++        };
++        Vector<Flow> flows;
++        HashSet<int, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> otherUses;
+         unsigned handled = 0;
+         bool backEdge = false;
+         const JSInstruction* instruction = head;
+@@ -2263,6 +2797,29 @@ private:
+                 cellSlots.add(displacement(reg));
+             if (instruction->opcodeID() == op_mov && regs.size() == 2 && !regs[1].isConstant())
+                 moves.append({ displacement(regs[0]), displacement(regs[1]) });
++            {
++                OpcodeID opcode = instruction->opcodeID();
++                bool arith = opcode == op_add || opcode == op_sub || opcode == op_mul || opcode == op_mov;
++                if (arith || isCompareJump(opcode)) {
++                    Flow flow;
++                    for (unsigned i = 0; i < regs.size(); ++i) {
++                        int source = regs[i].isConstant() ? (m_codeBlock->getConstant(regs[i]).isInt32() ? doubleConstant + 1 : doubleConstant) : displacement(regs[i]);
++                        if (arith && !i)
++                            flow.dst = source;
++                        else if (source != doubleConstant + 1)
++                            flow.sources.append(source);
++                    }
++                    // mov of a double constant lists only its result.
++                    if (opcode == op_mov && regs.size() == 1)
++                        flow.sources.append(doubleConstant);
++                    flows.append(WTF::move(flow));
++                } else {
++                    for (auto reg : regs) {
++                        if (!reg.isConstant())
++                            otherUses.add(displacement(reg));
++                    }
++                }
++            }
+             // mov and the arithmetic list their result first; it is written
+             // after the others are read.
+             OpcodeID opcode = instruction->opcodeID();
+@@ -2311,9 +2868,49 @@ private:
+                 }
+             }
+         }
++        // The doubles: results computed from a double constant or another
++        // double. They live in fp2-fp6, for loops that only add, subtract,
++        // multiply, move and compare them.
++        // A slot another instruction uses (an int32 one, say) can still get
++        // a double from these, but only in the frame: it is not a double the
++        // others compute with.
++        HashSet<int, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> doubles;
++        m_frameDoubles.clear();
++        for (bool changed = true; changed;) {
++            changed = false;
++            for (auto& flow : flows) {
++                if (!flow.dst || doubles.contains(*flow.dst) || m_frameDoubles.contains(*flow.dst))
++                    continue;
++                for (int source : flow.sources) {
++                    if (source == doubleConstant || doubles.contains(source)) {
++                        if (otherUses.contains(*flow.dst) || cellSlots.contains(*flow.dst))
++                            m_frameDoubles.add(*flow.dst);
++                        else
++                            doubles.add(*flow.dst);
++                        changed = true;
++                        break;
++                    }
++                }
++            }
++        }
++        // Past the registers, a double stays in the frame too (and out of
++        // the data registers).
++        m_doubles.clear();
++        m_doubleLiveIn.clear();
++        static constexpr unsigned floatRegisters[] = { 2, 3, 4, 5, 6 };
++        Vector<int> sortedDoubles = copyToVector(doubles);
++        std::sort(sortedDoubles.begin(), sortedDoubles.end(), [&](int a, int b) { return uses.get(a) > uses.get(b) || (uses.get(a) == uses.get(b) && a < b); });
++        for (int slot : sortedDoubles) {
++            if (m_doubles.size() == std::size(floatRegisters)) {
++                m_frameDoubles.add(slot);
++                continue;
++            }
++            m_doubles.append({ slot, floatRegisters[m_doubles.size()] });
++            m_doubleLiveIn.append(liveIn.contains(slot));
++        }
+         Vector<std::pair<unsigned, int>> ranked;
+         for (auto& entry : uses) {
+-            if (!cellSlots.contains(entry.key))
++            if (!cellSlots.contains(entry.key) && !doubles.contains(entry.key) && !m_frameDoubles.contains(entry.key))
+                 ranked.append({ entry.value, entry.key });
+         }
+         std::sort(ranked.begin(), ranked.end(), [](auto& a, auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
+@@ -2326,7 +2923,16 @@ private:
+             m_registers.append({ ranked[i].second, registers[m_registers.size()] });
+             m_liveIn.append(liveIn.contains(ranked[i].second));
+         }
+-        return !m_registers.isEmpty();
++        return !m_registers.isEmpty() || !m_doubles.isEmpty() || !m_frameDoubles.isEmpty();
++    }
++
++    int floatRegisterFor(int hi) const
++    {
++        for (auto& [slot, fp] : m_doubles) {
++            if (slot == hi)
++                return fp;
++        }
++        return -1;
+     }
+ 
+     bool isTemporary(int hi) const
+@@ -2349,12 +2955,20 @@ private:
+         Value value;
+         if (reg.isConstant()) {
+             value.isConstant = true;
+-            value.constant = m_codeBlock->getConstant(reg).asInt32();
++            JSValue constant = m_codeBlock->getConstant(reg);
++            if (constant.isInt32())
++                value.constant = constant.asInt32();
++            else {
++                value.isDouble = true;
++                value.doubleConstant = constant.asNumber();
++            }
+             return value;
+         }
+         value.hi = reg.offset() * static_cast<int>(sizeof(Register));
+         value.lo = value.hi + 4;
+         value.reg = registerFor(value.hi);
++        value.fp = floatRegisterFor(value.hi);
++        value.isDoubleSlot = value.fp >= 0 || m_frameDoubles.contains(value.hi);
+         for (unsigned i = 0; i < m_registers.size(); ++i) {
+             if (m_registers[i].first == value.hi)
+                 value.liveIn = m_liveIn[i];
+@@ -2401,6 +3015,70 @@ private:
+             m_code.branchToBytecode(cc, target);
+     }
+ 
++    // Doubles (item 5): the frame's number into a double's register, from
++    // the doubles at index first on (one, or all), else on to exit.
++    void loadDoubles(unsigned first, size_t exit, bool all = false)
++    {
++        for (unsigned i = first; i < (all ? m_doubles.size() : first + 1); ++i) {
++            Vector<size_t> fails;
++            Operand slot;
++            slot.valid = true;
++            slot.hi = m_doubles[i].first;
++            slot.lo = slot.hi + 4;
++            m_fastPaths.loadNumber(slot, m_doubles[i].second, fails);
++            for (size_t fixup : fails)
++                m_code.fixups[fixup].targetBuffer = exit;
++        }
++    }
++    // A value into fpn, as a double: a constant, a double's or an int32's
++    // register, or (anything else) a number from the frame.
++    unsigned loadNumber(const Value& value, unsigned fpn)
++    {
++        if (value.fp >= 0)
++            return value.fp;
++        if (value.isDouble)
++            m_code.fmoveDoubleImm(std::bit_cast<uint64_t>(value.doubleConstant), fpn);
++        else if (value.isConstant)
++            m_code.fmoveLongImm(value.constant, fpn);
++        else if (value.reg >= 0)
++            m_code.fopLong(Builder::FPMove, value.reg, fpn);
++        else {
++            Vector<size_t> fails;
++            Operand slot;
++            slot.valid = true;
++            slot.hi = value.hi;
++            slot.lo = value.lo;
++            m_fastPaths.loadNumber(slot, fpn, fails);
++            for (size_t fixup : fails)
++                m_code.fixups[fixup].targetBuffer = m_plainStart[m_offset];
++        }
++        return fpn;
++    }
++    // fpn into a double's register, if it has one, and the frame (boxed).
++    void storeDouble(unsigned fpn, const Value& dst)
++    {
++        if (dst.fp >= 0 && static_cast<unsigned>(dst.fp) != fpn) {
++            m_code.fop(Builder::FPMove, fpn, dst.fp);
++            fpn = dst.fp;
++        }
++        Operand slot;
++        slot.valid = true;
++        slot.hi = dst.hi;
++        slot.lo = dst.lo;
++        m_fastPaths.storeNumber(fpn, slot);
++    }
++    Result floatBinary(Builder::FPOperation operation, const Value& dst, const Value& lhs, const Value& rhs)
++    {
++        // Straight into dst's register, unless that is rhs's.
++        unsigned work = dst.fp < 0 || dst.fp == rhs.fp ? 0 : dst.fp;
++        unsigned left = loadNumber(lhs, work);
++        if (left != work)
++            m_code.fop(Builder::FPMove, left, work);
++        m_code.fop(operation, loadNumber(rhs, 1), work);
++        storeDouble(work, dst);
++        return Next;
++    }
++
+     enum class Arith { Add, Sub, Mul, And, Or, Xor };
+     template<typename Op>
+     Result binary(const JSInstruction* instruction, Arith arith)
+@@ -2411,6 +3089,8 @@ private:
+         Value dst = valueFor(bytecode.m_dst);
+         Value lhs = valueFor(bytecode.m_lhs);
+         Value rhs = valueFor(bytecode.m_rhs);
++        if (dst.isDoubleSlot && (arith == Arith::Add || arith == Arith::Sub || arith == Arith::Mul))
++            return floatBinary(arith == Arith::Add ? Builder::FPAdd : arith == Arith::Sub ? Builder::FPSub : Builder::FPMul, dst, lhs, rhs);
+         checkUncached(lhs);
+         checkUncached(rhs);
+         load(lhs, 0);
+@@ -2441,6 +3121,19 @@ private:
+         auto bytecode = instruction->as<Op>();
+         Value lhs = valueFor(bytecode.m_lhs);
+         Value rhs = valueFor(bytecode.m_rhs);
++        if (lhs.isDoubleSlot || rhs.isDoubleSlot || lhs.isDouble || rhs.isDouble) {
++            unsigned left = loadNumber(lhs, 0);
++            m_code.fop(Builder::FPCompare, loadNumber(rhs, 1), left); // left - right
++            unsigned target = jumpTarget(instruction, offset);
++            Builder::FPCondition fcc = FastPaths::floatConditionFor(instruction->opcodeID());
++            if (target == m_head) {
++                m_code.fbranchToBuffer(fcc, m_loop);
++                m_code.jumpToBytecode(offset + instruction->size());
++                return End;
++            }
++            m_code.fbranchToBytecode(fcc, target);
++            return Next;
++        }
+         checkUncached(lhs);
+         checkUncached(rhs);
+         unsigned left = 0;
+@@ -2486,6 +3179,19 @@ private:
+             auto bytecode = instruction->as<OpMov>();
+             if (bytecode.m_dst.isConstant())
+                 return Stop;
++            if (Value dst = valueFor(bytecode.m_dst); dst.isDoubleSlot) {
++                Value src = valueFor(bytecode.m_src);
++                unsigned from = loadNumber(src, dst.fp >= 0 ? dst.fp : 0);
++                if (src.fp >= 0) {
++                    // Boxed in the frame already.
++                    if (dst.fp >= 0)
++                        m_code.fop(Builder::FPMove, from, dst.fp);
++                    m_code.copyFrame(src.hi, dst.hi);
++                    m_code.copyFrame(src.lo, dst.lo);
++                } else
++                    storeDouble(from, dst);
++                return Next;
++            }
+             if (bytecode.m_src.isConstant() && !m_codeBlock->getConstant(bytecode.m_src).isInt32()) {
+                 Value dst = valueFor(bytecode.m_dst);
+                 if (dst.reg >= 0)
+@@ -2541,6 +3247,8 @@ private:
+                 m_code.branchToBuffer(Builder::NotEqual, m_plainStart[next]);
+                 m_code.loadFrame(slot + 4, reg);
+             }
++            if (!m_doubles.isEmpty())
++                loadDoubles(0, m_plainStart[next], true);
+             return Next;
+         }
+         case op_jstricteq: case op_jnstricteq: case op_jtrue: case op_jfalse:
+@@ -2579,9 +3287,14 @@ private:
+             FloatPath floatPath;
+             if (!m_fastPaths.emit(instruction, offset, branches, floatPath))
+                 return Stop;
+-            // Its slow cases run the plain code's instruction.
++            // Its slow cases (and get_by_id's other cache modes) run the
++            // plain code's instruction.
+             for (size_t i : branches)
+                 m_code.fixups[i].targetBuffer = m_plainStart[offset];
++            for (size_t i : floatPath.branches)
++                m_code.fixups[i].targetBuffer = m_plainStart[offset];
++            for (size_t i : floatPath.tableBranches)
++                m_code.fixups[i].targetBuffer = m_plainStart[offset];
+             std::optional<VirtualRegister> result;
+             if (instruction->opcodeID() == op_get_by_id)
+                 result = instruction->as<OpGetById>().m_dst;
+@@ -2625,6 +3338,9 @@ private:
+     const Vector<unsigned>& m_plainStart;
+     Vector<std::pair<int, unsigned>> m_registers; // frame slot (high word) -> data register
+     Vector<bool> m_liveIn; // per register: its value comes in from before the loop
++    Vector<std::pair<int, unsigned>> m_doubles; // frame slot (high word) -> FPU register
++    Vector<bool> m_doubleLiveIn;
++    HashSet<int, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> m_frameDoubles;
+     unsigned m_head { 0 };
+     unsigned m_offset { 0 };
+     size_t m_loop { 0 };
+@@ -2745,14 +3461,27 @@ bool compile(CodeBlock* codeBlock)
+         for (size_t i : slow.branches)
+             code.fixups[i].targetBuffer = start;
+         copyTemplate(slow.instruction, slow.offset);
++        if (slow.floatPath.getById)
++            fastPaths.getByIdFill(slow.floatPath, slow.instruction);
+         // Back to the fast code of the next instruction.
+         code.jumpToBytecode(next);
+     }
+ 
++    // The structure tables (zeroed: empty), and the map's last entry points
++    // at them.
++    while (code.size() % 4)
++        code.bytes.append(0);
++    size_t tables = code.size();
++    unsigned tableCount = fastPaths.getByIdTableCount();
++    code.longWord(tableCount);
++    code.bytes.grow(code.size() + tableCount * sizeof(GetByIdTable));
++    zeroSpan(code.bytes.mutableSpan().subspan(tables + 4));
++    fastPaths.bindGetByIdTables(tables);
++
+     size_t codeSize = code.size();
+     uint8_t* memory = allocateCode(codeSize);
+     void** map = nullptr;
+-    if (!memory || !tryFastZeroedMalloc(bytecodeSize * sizeof(void*)).getValue(map)) {
++    if (!memory || !tryFastZeroedMalloc((bytecodeSize + 1) * sizeof(void*)).getValue(map)) {
+         fastFree(memory);
+         fastFree(map);
+         return false;
+@@ -2773,6 +3502,7 @@ bool compile(CodeBlock* codeBlock)
+     flushInstructionCache(memory, codeSize);
+     for (const auto& instruction : instructions)
+         map[instruction.offset()] = memory + hotStart[instruction.offset()];
++    map[bytecodeSize] = memory + tables;
+ 
+     codeBlock->m_m68kTemplateCode = memory;
+     codeBlock->m_m68kTemplateMap = map;
+@@ -2801,6 +3531,23 @@ void* entryFor(CodeBlock* codeBlock, const JSInstruction* pc)
+     return codeBlock->m_m68kTemplateMap[bytecodeOffset];
+ }
+ 
++void reconcileCaches(CodeBlock* codeBlock, VM& vm)
++{
++    if (!codeBlock->m_m68kTemplateMap)
++        return;
++    auto* tables = static_cast<GetByIdTables*>(codeBlock->m_m68kTemplateMap[codeBlock->m_m68kTemplateMapSize]);
++    for (unsigned i = 0; i < tables->count; ++i) {
++        for (auto& entry : tables->tables[i].entries) {
++            if (!entry.structureID)
++                continue;
++            auto isLive = [&](uint32_t structureID) { return vm.heap.isMarked(std::bit_cast<StructureID>(structureID).decode()); };
++            if (isLive(entry.structureID) && (entry.holder <= getByIdTableOwnGetter || isLive(entry.holderStructureID)))
++                continue;
++            entry = { };
++        }
++    }
++}
++
+ void release(CodeBlock* codeBlock)
+ {
+     fastFree(codeBlock->m_m68kTemplateCode);
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.h b/Source/JavaScriptCore/llint/M68KTemplateJIT.h
+index d9df759b72c..0336074427f 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.h
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.h
+@@ -39,6 +39,7 @@
+ namespace JSC {
+ 
+ class CodeBlock;
++class VM;
+ 
+ namespace M68KTemplateJIT {
+ 
+@@ -51,6 +52,10 @@ void* entryFor(CodeBlock*, const JSInstruction* pc);
+ // then runs the code from the function's next call on.
+ void compileIfNeeded(CodeBlock*);
+ 
++// At the end of a garbage collection: forgets the structures that died
++// (from CodeBlock::reconcileLLIntInlineCachesAtGCEnd).
++void reconcileCaches(CodeBlock*, VM&);
++
+ // Frees a CodeBlock's code and map (from ~CodeBlock).
+ void release(CodeBlock*);
+ 
+diff --git a/Source/JavaScriptCore/runtime/VM.cpp b/Source/JavaScriptCore/runtime/VM.cpp
+index 8bf00539bca..d19b8ecf125 100644
+--- a/Source/JavaScriptCore/runtime/VM.cpp
++++ b/Source/JavaScriptCore/runtime/VM.cpp
+@@ -885,6 +885,18 @@ static Ref<NativeJITCode> jitCodeForCallTrampoline(Intrinsic intrinsic)
+         });
+         return result.get();
+     }
++#endif
++#if CPU(M68K) && ENABLE(C_LOOP)
++    // The 68k template JIT does these in line (M68KTemplateJIT::intrinsicCall),
++    // so their functions keep their intrinsic.
++    case CharCodeAtIntrinsic: {
++        static LazyNeverDestroyed<Ref<NativeJITCode>> result;
++        static std::once_flag onceKey;
++        std::call_once(onceKey, [&] {
++            result.construct(adoptRef(*new NativeJITCode(LLInt::getCodeRef<JSEntryPtrTag>(llint_native_call_trampoline), JITType::HostCallThunk, intrinsic)));
++        });
++        return result.get();
++    }
+ #endif
+     default: {
+         static LazyNeverDestroyed<Ref<NativeJITCode>> result;
+-- 
+2.43.0
+

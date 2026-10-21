@@ -203,6 +203,14 @@ The patches, in order:
   and put_to_scope for globals, global let/const and closure variables.
   `StructureChain.h` gains `offsetOfVector()` for the chain check.
 
+- `0036-jsc-m68k-jit-shapes-strings-doubles.patch`: get_by_id sites keep a
+  four-entry structure table (own values, getters on the object or an
+  unchanged prototype, missing properties), cleared of dead structures at
+  the end of a garbage collection (`CodeBlock.cpp` calls
+  `M68KTemplateJIT::reconcileCaches`). `s[i]`, string `.length` and
+  `charCodeAt` get their own code (`VM.cpp` keeps charCodeAt's intrinsic
+  on the 68k C loop), and loop register copies keep doubles in fp2-fp6.
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;

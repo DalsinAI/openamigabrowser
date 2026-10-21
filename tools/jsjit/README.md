@@ -47,3 +47,33 @@ tools/jsjit/test/run_qemu_test.sh path/to/LLIntAssembly.h
 
 The host test uses m68k Linux's calling convention; the templates themselves
 only use the interpreter's registers, so they are the same on AmigaOS.
+
+## The lab build (jsc for m68k Linux)
+
+The numbers in `lab/RESULTS.md` come from `jsc` cross-built for m68k Linux
+and run under `qemu-m68k -cpu m68040`, counting 68k instructions
+(`lab/count.sh`), never wall time.
+
+1. `apt-get install g++-14-m68k-linux-gnu qemu-user nodejs`. Build ICU 78.3
+   twice: for the host (`runConfigureICU Linux`), then for m68k
+   (`configure --host=m68k-linux-gnu --with-cross-build=<host build>
+   --enable-static --disable-shared --with-data-packaging=static`).
+2. Check out and patch WebKit as `webkit/README.md` says.
+3. Changes for this build only, never part of a patch: let the build run
+   the Python generators on m68k Linux too (`if (WTF_OS_AMIGA OR
+   WTF_CPU_M68K)` where `Source/cmake/WebKitCommon.cmake` picks the Ruby
+   interpreter and where `Source/JavaScriptCore/CMakeLists.txt` picks
+   offlineasm-py); no ELF `.size` directives in `offlineasm-py/asm.py`
+   (the 68k labels carry an underscore); and skip the `-quiet_NaN`
+   static_assert in `PureNaN.h` for `CPU(M68K)`, as on the Amiga.
+4. CMake with `-G Ninja -DPORT=JSCOnly`, a toolchain file for
+   `m68k-linux-gnu-gcc-14` with `CMAKE_SYSTEM_PROCESSOR m68k`, `-m68040`,
+   `-static`, Release at `-O3`, `-DENABLE_JIT=OFF -DENABLE_DFG_JIT=OFF
+   -DENABLE_FTL_JIT=OFF -DENABLE_WEBASSEMBLY=OFF -DUSE_SYSTEM_MALLOC=ON
+   -DEVENT_LOOP_TYPE=Generic -DENABLE_STATIC_JSC=ON`.
+5. Build `LowLevelInterpreter.cpp.o`, make `defsyms.txt` from it (see
+   `lab/fix_ninja_m68k_linux.py`), run that script, and build `jsc`.
+   Ubuntu's static m68k libm has no `fmod`: link a one-line `fmod.x` shim
+   before `-lm`.
+6. `lab/check.sh path/to/jsc` runs the correctness tests against node;
+   `lab/count.sh` counts a test, and `lab/page/` has the page tests.
