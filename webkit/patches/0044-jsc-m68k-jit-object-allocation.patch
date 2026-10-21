@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 21:46:31 +0000
+Subject: [PATCH] JavaScriptCore: objects made in the 68k template JIT
+
+- new_object and create_this make the object in line, as the baseline
+  JIT's emitAllocateJSObject does: a cell from the LocalAllocator's
+  free-list interval (bump), the header from the structure (structure
+  ID and the indexing type, type, flags and cell state long), no
+  butterfly, and the inline storage empty. An empty interval, a profile
+  without an allocator or structure, and (for create_this) a callee
+  other than the one cached, a function without rare data or a poly
+  proto structure take the template.
+
+Team 3
+---
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 97 +++++++++++++++++++
+ 1 file changed, 97 insertions(+)
+
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index c79e2a47c2f..1cf4095950a 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -36,6 +36,8 @@
+ #include "JSCJSValueInlines.h"
+ #include "JSCallee.h"
+ #include "FunctionRareData.h"
++#include "LocalAllocator.h"
++#include "ObjectAllocationProfile.h"
+ #include "GetPutInfo.h"
+ #include "GetterSetter.h"
+ #include "JSString.h"
+@@ -1187,6 +1189,97 @@ private:
+         m_hot.copyIndexedToFrame(0, 1, 4, dst.lo);
+         return true;
+     }
++    // Objects made in line (the baseline JIT's emitAllocateJSObject): a1 the
++    // LocalAllocator, a6 the Structure, both non-null. A cell from the
++    // free list's current interval, its header from the structure, no
++    // butterfly and its inline storage empty, into dst; an empty interval
++    // is the template's (the allocator's slow case).
++    void allocateObject(const Operand& dst)
++    {
++        constexpr int intervalStart = LocalAllocator::offsetOfFreeList() + FreeList::offsetOfIntervalStart();
++        constexpr int intervalEnd = LocalAllocator::offsetOfFreeList() + FreeList::offsetOfIntervalEnd();
++        static_assert(intervalEnd < 32768 && LocalAllocator::offsetOfCellSize() < 32768);
++        m_hot.moveaDisp(1, intervalStart, 0);
++        m_hot.word(0xb1e9); m_hot.word(intervalEnd); // cmpa.l end(a1),a0
++        slowUnless(Builder::CarryClear);
++        m_hot.loadDisp(1, LocalAllocator::offsetOfCellSize(), 0);
++        m_hot.word(0x2208); // move.l a0,d1
++        m_hot.word(0xd280); // add.l d0,d1
++        m_hot.word(0x2341); m_hot.word(intervalStart); // move.l d1,start(a1)
++        // The header: structure ID (the Structure's address on 32-bit), then
++        // indexing type, type, flags and cell state as one long.
++        static_assert(sizeof(StructureID) == sizeof(uint32_t));
++        m_hot.word(0x200e); // move.l a6,d0
++        m_hot.word(0x2140); m_hot.word(JSCell::structureIDOffset()); // move.l d0,d16(a0)
++        m_hot.loadDisp(6, Structure::indexingModeIncludingHistoryOffset(), 1);
++        m_hot.word(0x2141); m_hot.word(JSCell::indexingTypeAndMiscOffset()); // move.l d1,d16(a0)
++        m_hot.word(0x42a8); m_hot.word(JSObject::butterflyOffset()); // clr.l d16(a0)
++        // The inline slots: the empty value, all zero.
++        m_hot.moveq(0, 1);
++        m_hot.word(0x122e); m_hot.word(Structure::inlineCapacityOffset()); // move.b d16(a6),d1
++        m_hot.word(0x43e8); m_hot.word(JSObject::offsetOfInlineStorage()); // lea d16(a0),a1
++        size_t loop = m_hot.size();
++        m_hot.word(0x5381); // subq.l #1,d1
++        size_t filled = m_hot.branchShort(Builder::CarrySet);
++        m_hot.word(0x4299); // clr.l (a1)+
++        m_hot.word(0x4299);
++        m_hot.branchToBuffer(Builder::Always, loop);
++        m_hot.bindShort(filled);
++        m_hot.clrFrame(dst.hi);
++        m_hot.word(0x2008); // move.l a0,d0
++        m_hot.storeFrame(0, dst.lo);
++    }
++    // {}: the allocation profile's allocator and structure, once it has them.
++    bool newObject(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpNewObject>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        if (!dst.valid || dst.isConstant)
++            return false;
++        auto* profile = reinterpret_cast<uint8_t*>(&bytecode.metadata(m_codeBlock).m_objectAllocationProfile);
++        m_hot.moveLongAbs(profile + ObjectAllocationProfile::offsetOfAllocator(), 0);
++        slowUnless(Builder::Equal);
++        m_hot.moveaFromData(0, 1);
++        m_hot.moveLongAbs(profile + ObjectAllocationProfile::offsetOfStructure(), 0);
++        slowUnless(Builder::Equal);
++        m_hot.moveaFromData(0, 6);
++        allocateObject(dst);
++        return true;
++    }
++    // A constructor's this: while the site has seen only this callee (as
++    // the baseline JIT's emit_op_create_this), from its rare data's
++    // allocation profile; a structure with a poly proto (the prototype in a
++    // slot) is the template's.
++    bool createThis(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpCreateThis>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        Operand callee = operandFor(m_codeBlock, bytecode.m_callee);
++        if (!dst.valid || dst.isConstant || !callee.valid || callee.isConstant)
++            return false;
++        constexpr int profile = FunctionRareData::offsetOfObjectAllocationProfile() - static_cast<int>(JSFunction::rareDataTag);
++        m_hot.loadFrame(callee.lo, 0);
++        m_hot.cmpLongAbs(&bytecode.metadata(m_codeBlock).m_cachedCallee, 0);
++        slowUnless(Builder::NotEqual);
++        m_hot.moveaFromData(0, 0);
++        m_hot.loadDisp(0, JSFunction::offsetOfExecutableOrRareData(), 1);
++        static_assert(JSFunction::rareDataTag == 1);
++        m_hot.btstImm(0, 1);
++        slowUnless(Builder::Equal);
++        m_hot.moveaFromData(1, 0);
++        m_hot.loadDisp(0, profile + ObjectAllocationProfileWithPrototype::offsetOfStructure(), 1);
++        slowUnless(Builder::Equal);
++        m_hot.moveaFromData(1, 6);
++        m_hot.loadDisp(0, profile + ObjectAllocationProfileWithPrototype::offsetOfAllocator(), 1);
++        slowUnless(Builder::Equal);
++        m_hot.moveaFromData(1, 1);
++        // A poly proto structure's prototype is the empty value (all zero).
++        m_hot.loadDisp(6, Structure::prototypeOffset() + 4, 0);
++        slowUnless(Builder::Equal);
++        allocateObject(dst);
++        return true;
++    }
++
+     // `index in array` (the array builtins' hole checks): true for an int32
+     // index below the length of an Int32Shape or ContiguousShape array where
+     // the element is not a hole; anything else is the template.
+@@ -2898,6 +2991,10 @@ private:
+             return Options::useM68KPropertyFastPaths() && inByVal(instruction);
+         case op_enumerator_next:
+             return Options::useM68KPropertyFastPaths() && enumeratorNext(instruction);
++        case op_new_object:
++            return Options::useM68KPropertyFastPaths() && newObject(instruction);
++        case op_create_this:
++            return Options::useM68KPropertyFastPaths() && createThis(instruction);
+         case op_put_by_val:
+             return Options::useM68KPropertyFastPaths() && putByVal(instruction);
+         case op_get_length:
+-- 
+2.43.0
+

@@ -6,6 +6,30 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 21 Oct 2026, objects made in line (patch 0044)
+
+`new_object` and `create_this` now take a cell straight from the
+allocator's free-list interval and fill in the header, as the baseline
+JIT's emitAllocateJSObject does; an empty interval, a profile without an
+allocator, a callee other than the one cached and a poly proto structure
+go to the template. `lab/correct16.js` (object literals, points, classes
+and subclasses, new.target, constructors that return objects, poly proto,
+allocation churn through many GCs, big objects) prints what node prints
+with the JIT on and off, as do correct.js-correct15.js (32/32).
+
+Counts with start-up (5.5 M) left in, 0043 then 0044:
+
+| test | 0043 (M) | 0044 (M) |
+|---|---:|---:|
+| page-vdom | 43.86 | 40.02 |
+| page-lexer | 23.39 | 22.08 |
+| page-events | 61.72 | 60.71 |
+| page-json | 42.08 | 42.05 |
+| page-template | 83.48 | 83.44 |
+
+page-vdom (many small node objects) gains 9 per cent, 10 per cent with
+start-up taken off; the micro tests are unchanged.
+
 ## 21 Oct 2026, virtual calls fixed (patch 0043)
 
 0035's polymorphic call path crashed on a virtual call link: a call
