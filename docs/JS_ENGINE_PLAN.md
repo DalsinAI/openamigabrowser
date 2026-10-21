@@ -113,8 +113,17 @@ comparator: 1.41x) and calls from compiled code to compiled functions
 
 Patch 0034 gives array reads, writes and lengths their own code, and lets
 the loop register copies run array access and calls: an array loop runs
-3.5x fewer instructions than with 0032 (8.5x fewer than the interpreter). Next: a run on a real 68040, loop copies that carry on past property
-access and calls, then 32-bit values (`docs/JS_32BIT_VALUES.md`).
+3.5x fewer instructions than with 0032 (8.5x fewer than the interpreter).
+
+Patch 0035 was aimed by a real-page benchmark (`tools/jsjit/lab/page/`):
+compares and tests on any value, new properties on objects, polymorphic
+calls and global and closure variables get their own code. A tokenizer
+runs 1.7x fewer instructions than with 0034, an event store 1.4x, a
+virtual DOM diff 1.3x. It also fixes a crash on garbage collection after
+JIT calls (since 0031). Next: method calls through prototypes and
+property caches with several shapes, string access, doubles in FPU
+registers in loops, inlining small functions, a run on a real 68040,
+then 32-bit values (`docs/JS_32BIT_VALUES.md`).
 
 The original plan, for reference:
 
