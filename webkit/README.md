@@ -242,6 +242,10 @@ The patches, in order:
 - `0042-jsc-m68k-typed-array-sort-shared.patch`: on 68k, TypedArray
   `sort` and `toSorted` share one out-of-line sort per array type (they
   were each inlining it, in different files): 467 KB less code.
+- `0043-jsc-m68k-jit-virtual-calls.patch`: a fix for 0035's polymorphic
+  calls. A virtual call link (a site with more callees than a polymorphic
+  stub holds, or a construct site whose callees have no call CodeBlock)
+  was taken for a polymorphic stub and crashed; it now takes the template.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
