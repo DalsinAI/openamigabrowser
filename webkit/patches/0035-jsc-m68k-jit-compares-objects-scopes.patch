@@ -1,0 +1,1144 @@
+From 80ab651c9799068053c9e684036df6d56e8ac731 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 01:44:58 +0000
+Subject: [PATCH] JavaScriptCore: compares, tests, new objects, polymorphic
+ calls and scope variables in the 68k template JIT
+
+- Fix: after a call through the JIT's call fast path (since stage J4),
+  the interpreter's sp was left at the callee's frame, not at the
+  caller's frame bottom as restoreStackPointerAfterCall leaves it. A
+  garbage collection then took the caller's slots below that sp for dead
+  and cleared them (sanitizeStack): values became empty and could crash
+  the engine. The return point now restores sp.
+- ===, !==, == null, != null and their jumps, jtrue and jfalse, and
+  <, <=, >, >=, ==, != as values (int32s) get their own code for every
+  kind of value the interpreter handles without a call: int32s,
+  booleans, undefined and null, and cells by identity. Doubles, strings
+  compared by content and objects that act as undefined take the
+  template. jeq_ptr and jneq_ptr compare the whole value.
+- put_by_id gets its own code for cached transitions (a new property on
+  an object, as in object literals and constructors), with the prototype
+  chain check where the cache holds one.
+- Calls: a call site whose cache has gone polymorphic searches the
+  stub's call slots (by callee, or by executable for closures) and
+  enters the callee's compiled code directly; call_ignore_result
+  (a call whose result is unused) gets the same code as call.
+- resolve_scope, get_from_scope and put_to_scope get their own code for
+  global variables and properties, global let and const, and closure
+  variables, for the resolve type the site's cache holds, with the
+  interpreter's checks (var injection, read-only and TDZ checks,
+  watchpoint sets, the write barrier).
+- Loop register copies cover all of these.
+
+Real-page tests (68k instructions, against 0034): a tokenizer runs 1.7x
+fewer, an event/store app 1.4x, a virtual DOM diff 1.3x, JSON handling
+1.1x, HTML templating 1.04x; closures 1.4x. The sp fix costs a plain
+call two instructions (the calls test 2%). Lab tests correct6-8 check every value kind, polymorphic
+calls, transitions, scopes and garbage collection against node.
+---
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 963 +++++++++++++++++-
+ .../JavaScriptCore/runtime/StructureChain.h   |   1 +
+ 2 files changed, 928 insertions(+), 36 deletions(-)
+
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index 6b999621df8..d0c8974b497 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -34,6 +34,13 @@
+ #include "GetByIdMetadata.h"
+ #include "JSCJSValueInlines.h"
+ #include "JSCallee.h"
++#include "FunctionRareData.h"
++#include "GetPutInfo.h"
++#include "JSFunction.h"
++#include "JSLexicalEnvironment.h"
++#include "LLIntData.h"
++#include "PolymorphicCallStubRoutine.h"
++#include "Watchpoint.h"
+ #include "VMTraps.h"
+ #include "M68KTemplateStitch.h"
+ #include "Options.h"
+@@ -224,6 +231,16 @@ public:
+     void andByteImm(uint8_t imm, unsigned dn) { word(0x0200 | dn); word(imm); } // andi.b #imm,dn
+     void cmpByteImm(uint8_t imm, unsigned dn) { word(0x0c00 | dn); word(imm); } // cmpi.b #imm,dn
+     void btstImm(unsigned bit, unsigned dn) { word(0x0800 | dn); word(bit); } // btst #bit,dn
++    void btstImmDisp(unsigned bit, unsigned an, int disp) { word(0x0828 | an); word(bit); word(disp); } // btst #bit,d16(an)
++    void cmpByteImmAbs(uint8_t imm, const void* address) { word(0x0c39); word(imm); longWord(reinterpret_cast<uintptr_t>(address)); } // cmpi.b #imm,(abs).l
++    void cmpLongImmAbs(uint32_t imm, const void* address) { word(0x0cb9); longWord(imm); longWord(reinterpret_cast<uintptr_t>(address)); } // cmpi.l #imm,(abs).l
++    void tstLongAbs(const void* address) { word(0x4ab9); longWord(reinterpret_cast<uintptr_t>(address)); } // tst.l (abs).l
++    void tstByteAbs(const void* address) { word(0x4a39); longWord(reinterpret_cast<uintptr_t>(address)); } // tst.b (abs).l
++    void storeAddressFrame(unsigned an, int disp) { word(0x2b48 | an); word(disp); } // move.l an,d16(a5)
++    void copyDispToFrame(unsigned an, int from, int to) { word(0x2b68 | an); word(from); word(to); } // move.l d16(an),d16(a5)
++    void copyFrameToDisp(int from, unsigned an, int to) { word(0x216d | (an << 9)); word(from); word(to); } // move.l d16(a5),d16(an)
++    void storeImmDisp(uint32_t imm, unsigned an, int disp) { word(0x217c | (an << 9)); longWord(imm); word(disp); } // move.l #imm,d16(an)
++    void moveByteImmAbs(uint8_t imm, const void* address) { word(0x13fc); word(imm); longWord(reinterpret_cast<uintptr_t>(address)); } // move.b #imm,(abs).l
+     void loadIndexed(unsigned an, unsigned index, int d8, unsigned dn) { word(0x2030 | (dn << 9) | an); word(Builder::index(index, d8)); } // move.l d8(an,index.l),dn
+     // An index byte for d8(an,dn.l).
+     static uint16_t index(unsigned dn, int d8)
+@@ -349,6 +366,8 @@ public:
+         fixups.append({ at, from, true, 0, 0, false });
+         return fixups.size() - 1;
+     }
++    // Binds a b<cc>.l from branch to here.
++    void bindBranch(size_t fixup) { fixups[fixup].targetBuffer = size(); }
+     // b<cc>.l to a buffer position.
+     void branchToBuffer(Condition cc, size_t target)
+     {
+@@ -835,20 +854,53 @@ private:
+                 return false;
+         }
+         auto& metadata = bytecode.metadata(m_codeBlock);
+-        // Only sites whose cache holds a replace: no structure transition.
+-        if (!metadata.m_oldStructureID || metadata.m_newStructureID)
++        // Only sites whose cache has settled: on a replace, or on a
++        // transition that needs no new storage (the only kind it caches).
++        if (!metadata.m_oldStructureID)
+             return false;
+         loadCell(base);
+         m_hot.moveaImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&metadata)), 1);
+         m_hot.loadDisp(0, JSCell::structureIDOffset(), 1);
+         m_hot.cmpDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_oldStructureID), 1);
+         slowUnless(Builder::NotEqual);
+-        m_hot.tstLongDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_newStructureID));
++        m_hot.loadDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_newStructureID), 1);
++        size_t replace = m_hot.branch(Builder::Equal);
++        // A transition: the prototype chain, if the cache holds one, still
++        // has the structures it had (no setter for the property has turned
++        // up); then the new structure, after the write barrier check on the
++        // object, which then covers the value too.
++        static_assert(!blackThreshold);
++        m_hot.loadDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_structureChain), 0);
++        size_t noChain = m_hot.branch(Builder::Equal);
++        static_assert(sizeof(StructureID) == 4 && sizeof(void*) == 4);
++        m_hot.moveaFromData(0, 1);
++        m_hot.moveaDisp(1, StructureChain::offsetOfVector(), 1); // a1: the chain's StructureIDs
++        m_hot.moveaDisp(0, JSCell::structureIDOffset(), 0); // a0: the structure (an ID is its address)
++        size_t chainLoop = m_hot.size();
++        m_hot.loadDisp(0, Structure::prototypeOffset() + 4, 0);
++        m_hot.cmpImm(JSValue::ValueNull, 0);
++        size_t chainDone = m_hot.branch(Builder::Equal);
++        m_hot.moveaFromData(0, 0);
++        m_hot.loadDisp(0, JSCell::structureIDOffset(), 0);
++        m_hot.word(0xb099); // cmp.l (a1)+,d0
+         slowUnless(Builder::NotEqual);
++        m_hot.moveaFromData(0, 0);
++        m_hot.branchToBuffer(Builder::Always, chainLoop);
++        m_hot.bindBranch(chainDone);
++        // The object and the metadata again.
++        m_hot.loadFrame(base.lo, 0);
++        m_hot.moveaFromData(0, 0);
++        m_hot.moveaImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&metadata)), 1);
++        m_hot.loadDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_newStructureID), 1);
++        m_hot.bindBranch(noChain);
++        m_hot.tstByteDisp(0, JSCell::cellStateOffset());
++        slowUnless(Builder::Equal);
++        m_hot.word(0x2141); m_hot.word(JSCell::structureIDOffset()); // move.l d1,d16(a0)
++        size_t store = m_hot.branch(Builder::Always);
++        m_hot.bindBranch(replace);
+         // Storing a cell may need the write barrier: the slow path does it,
+         // unless the object is already remembered or new (the interpreter's
+         // skipIfIsRememberedOrInEden).
+-        static_assert(!blackThreshold);
+         if (valueIsConstant) {
+             if (constant.isCell()) {
+                 m_hot.tstByteDisp(0, JSCell::cellStateOffset());
+@@ -868,6 +920,7 @@ private:
+             m_hot.bindShort(notCell2);
+             m_hot.bindShort(notCell3);
+         }
++        m_hot.bindBranch(store);
+         m_hot.loadDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_offset), 1);
+         uint64_t bits = JSValue::encode(constant);
+         withProperty([&](int d8) {
+@@ -963,63 +1016,807 @@ private:
+     bool call(const JSInstruction* instruction, unsigned offset)
+     {
+         auto bytecode = instruction->as<Op>();
+-        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        constexpr bool hasResult = requires { bytecode.m_dst; };
++        Operand dst;
++        if constexpr (hasResult)
++            dst = operandFor(m_codeBlock, bytecode.m_dst);
+         Operand callee = operandFor(m_codeBlock, bytecode.m_callee);
+-        if (!dst.valid || dst.isConstant || !callee.valid || callee.isConstant)
++        if ((hasResult && (!dst.valid || dst.isConstant)) || !callee.valid || callee.isConstant)
+             return false;
+         constexpr int slot = sizeof(Register);
+         int frame = -static_cast<int>(bytecode.m_argv) * slot; // the callee's frame, from cfr
+         int frameEnd = frame + static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot + slot;
+         if (frame < -32768 || frameEnd > 32767)
+             return false;
++        int frameSize = static_cast<int>(m_codeBlock->numCalleeLocals()) * slot + static_cast<int>(maxFrameExtentForSlowPathCall);
++        if (frameSize > 32768)
++            return false;
+         auto& linkInfo = bytecode.metadata(m_codeBlock).m_callLinkInfo;
+         auto* linkBase = reinterpret_cast<uint8_t*>(&linkInfo);
+         uint32_t* lr = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotLR]);
+         uint32_t* sp = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotSP]);
+-        uint32_t* t0High = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotT0]);
++        [[maybe_unused]] uint32_t* t0High = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotT0]);
+ 
+-        // The cached callee, or the template.
++        // The cached callee, a callee in the polymorphic stub's list, or
++        // the template.
+         m_hot.tstFrame(callee.hi);
+         slowUnless(Builder::NotEqual);
+         m_hot.loadFrame(callee.lo, 0);
+         m_hot.cmpLongAbs(linkBase + CallLinkInfo::offsetOfCallee(), 0);
+-        slowUnless(Builder::NotEqual);
++        size_t notMonomorphic = m_hot.branch(Builder::NotEqual);
++
+         // The callee's frame: argument count, callee, CodeBlock; this
+-        // frame's call site; sp past the callee's CallerFrameAndPC.
+-        m_hot.storeFrameImm(bytecode.m_argc, frame + static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot + 4);
+-        m_hot.storeFrameImm(offset, static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot); // storePC: CallSiteIndex
+-        m_hot.clrFrame(frame + static_cast<int>(CallFrameSlot::callee) * slot);
+-        m_hot.storeFrame(0, frame + static_cast<int>(CallFrameSlot::callee) * slot + 4);
+-        m_hot.copyAbsToFrame(linkBase + CallLinkInfo::offsetOfCodeBlock(), frame + static_cast<int>(CallFrameSlot::codeBlock) * slot + 4);
+-        m_hot.leaFrame(frame + static_cast<int>(sizeof(CallerFrameAndPC)), 1);
+-        m_hot.storeAddressAbs(1, sp + 1);
+-        m_hot.clrAbs(sp);
+-        // cloopCallJSFunction: lr is the return point, then jump.
+-        size_t returnPoint = m_hot.storeCodeAddressAbs(lr + 1);
+-        m_hot.clrAbs(lr);
++        // frame's call site; sp past the callee's CallerFrameAndPC; lr is
++        // the return point (cloopCallJSFunction). d0 has the callee.
++        Vector<size_t, 2> returnPoints;
++        auto setUpFrame = [&](auto storeCodeBlock) {
++            m_hot.storeFrameImm(bytecode.m_argc, frame + static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot + 4);
++            m_hot.storeFrameImm(offset, static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot); // storePC: CallSiteIndex
++            m_hot.clrFrame(frame + static_cast<int>(CallFrameSlot::callee) * slot);
++            m_hot.storeFrame(0, frame + static_cast<int>(CallFrameSlot::callee) * slot + 4);
++            storeCodeBlock(frame + static_cast<int>(CallFrameSlot::codeBlock) * slot + 4);
++            m_hot.leaFrame(frame + static_cast<int>(sizeof(CallerFrameAndPC)), 1);
++            m_hot.storeAddressAbs(1, sp + 1);
++            m_hot.clrAbs(sp);
++            returnPoints.append(m_hot.storeCodeAddressAbs(lr + 1));
++            m_hot.clrAbs(lr);
++        };
+         // A callee with compiled code: straight into its compiled prologue,
+-        // at the start of its code. Otherwise (no CodeBlock, as for a native
+-        // callee, or not compiled yet) the call link's destination.
+-        m_hot.word(0x2039); m_hot.longWord(reinterpret_cast<uintptr_t>(linkBase + CallLinkInfo::offsetOfCodeBlock())); // move.l (codeBlock).l,d0
+-        size_t noCodeBlock = m_hot.branchShort(Builder::Equal);
+-        m_hot.word(0x2040); // movea.l d0,a0
+-        m_hot.word(0x2028); m_hot.word(static_cast<uint16_t>(OBJECT_OFFSETOF(CodeBlock, m_m68kTemplateCode))); // move.l d16(a0),d0
+-        size_t notCompiled = m_hot.branchShort(Builder::Equal);
+-        m_hot.word(0x2040); // movea.l d0,a0
+-        m_hot.jumpA0();
+-        m_hot.bindShort(noCodeBlock);
+-        m_hot.bindShort(notCompiled);
++        // at the start of its code. d0 has its CodeBlock, or null (a native
++        // callee); the caller jumps elsewhere when this falls through.
++        auto enterCompiled = [&]() {
++            size_t noCodeBlock = m_hot.branchShort(Builder::Equal);
++            m_hot.moveaFromData(0, 0);
++            m_hot.loadDisp(0, OBJECT_OFFSETOF(CodeBlock, m_m68kTemplateCode), 0);
++            size_t notCompiled = m_hot.branchShort(Builder::Equal);
++            m_hot.moveaFromData(0, 0);
++            m_hot.jumpA0();
++            m_hot.bindShort(noCodeBlock);
++            m_hot.bindShort(notCompiled);
++        };
++
++        setUpFrame([&](int disp) { m_hot.copyAbsToFrame(linkBase + CallLinkInfo::offsetOfCodeBlock(), disp); });
++        m_hot.moveLongAbs(linkBase + CallLinkInfo::offsetOfCodeBlock(), 0);
++        enterCompiled();
+         m_hot.loadAddressAbs(linkBase + CallLinkInfo::offsetOfMonomorphicCallDestination(), 0);
+         m_hot.jumpA0();
++
++        // Polymorphic (the interpreter's polymorphic call trampolines): the
++        // stub's call slots, keyed by the callee or, for closure calls, by
++        // the callee's executable; a6 walks them.
++        m_hot.bindBranch(notMonomorphic);
++        m_hot.word(0x0cb9); m_hot.longWord(CallLinkInfo::polymorphicCalleeMask); m_hot.longWord(reinterpret_cast<uintptr_t>(linkBase + CallLinkInfo::offsetOfCallee())); // cmpi.l #mask,(callee).l
++        slowUnless(Builder::NotEqual);
++        uintptr_t closureTrampoline = reinterpret_cast<uintptr_t>(LLInt::getCodePtr<JSEntryPtrTag>(llint_polymorphic_closure_call_trampoline).taggedPtr());
++        m_hot.loadAddressAbs(linkBase + CallLinkInfo::offsetOfStub(), 6);
++        m_hot.word(0x4dee); m_hot.word(static_cast<uint16_t>(PolymorphicCallStubRoutine::offsetOfTrailingData())); // lea d16(a6),a6
++        m_hot.word(0x0cb9); m_hot.longWord(closureTrampoline); m_hot.longWord(reinterpret_cast<uintptr_t>(linkBase + CallLinkInfo::offsetOfMonomorphicCallDestination())); // cmpi.l #imm,(abs).l
++        size_t byCallee = m_hot.branch(Builder::NotEqual);
++        // Not a cell (its high word is zero, as for undefined, null and the
++        // booleans): the template, which throws.
++        m_hot.btst1(0);
++        slowUnless(Builder::NotEqual);
++        m_hot.tst(0);
++        slowUnless(Builder::Equal);
++        m_hot.moveaFromData(0, 0);
++        m_hot.cmpByteImmDisp(JSFunctionType, 0, JSCell::typeInfoTypeOffset());
++        slowUnless(Builder::NotEqual);
++        m_hot.loadDisp(0, JSFunction::offsetOfExecutableOrRareData(), 1);
++        static_assert(JSFunction::rareDataTag == 1);
++        m_hot.btstImm(0, 1);
++        size_t search = m_hot.branch(Builder::Equal);
++        m_hot.moveaFromData(1, 0);
++        m_hot.loadDisp(0, FunctionRareData::offsetOfExecutable() - static_cast<int>(JSFunction::rareDataTag), 1);
++        size_t search2 = m_hot.branch(Builder::Always);
++        m_hot.bindBranch(byCallee);
++        m_hot.moveReg(0, 1);
++        m_hot.bindBranch(search);
++        m_hot.bindBranch(search2);
++        static_assert(!CallSlot::offsetOfCalleeOrExecutable());
++        size_t searchLoop = m_hot.size();
++        m_hot.word(0xb296); // cmp.l (a6),d1
++        size_t found = m_hot.branch(Builder::Equal);
++        m_hot.word(0x4a96); // tst.l (a6): the list ends with an empty slot
++        slowUnless(Builder::Equal);
++        m_hot.word(0x4dee); m_hot.word(static_cast<uint16_t>(sizeof(CallSlot))); // lea sizeof(CallSlot)(a6),a6
++        m_hot.branchToBuffer(Builder::Always, searchLoop);
++
++        m_hot.bindBranch(found);
++        setUpFrame([&](int disp) { m_hot.word(0x2b6e); m_hot.word(static_cast<uint16_t>(CallSlot::offsetOfCodeBlock())); m_hot.word(static_cast<uint16_t>(disp)); }); // move.l d16(a6),d16(a5)
++        m_hot.loadDisp(6, CallSlot::offsetOfCodeBlock(), 0);
++        enterCompiled();
++        m_hot.moveaDisp(6, CallSlot::offsetOfTarget(), 0);
++        m_hot.jumpA0();
++
+         // Back from the callee (its op_ret restored cfr and metadataTable):
+         // PB, then the result (r0) into dst.
+-        m_hot.bindAbsolute(returnPoint);
++        for (size_t returnPoint : returnPoints)
++            m_hot.bindAbsolute(returnPoint);
++        // sp back to this frame's bottom (restoreStackPointerAfterCall): left
++        // at the callee's frame, the garbage collector would take this
++        // frame's slots below it for dead and clear them (sanitizeStack).
++        m_hot.leaFrame(-frameSize, 0);
++        m_hot.storeAddressAbs(0, sp + 1);
+         m_hot.moveaImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(m_codeBlock->instructionsRawPointer())), 3);
+-        m_hot.copyAbsToFrame(t0High, dst.hi);
+-        m_hot.storeFrame(4, dst.lo);
++        if constexpr (hasResult) {
++            m_hot.copyAbsToFrame(t0High, dst.hi);
++            m_hot.storeFrame(4, dst.lo);
++        }
++        return true;
++    }
++
++    // Comparisons and tests on any value (stage J7), not only int32s: what
++    // the interpreter's handlers do with 64-bit operations, done with the
++    // high and low words. Doubles, strings compared by their contents and
++    // objects that act as undefined take the template.
++
++    // An operand as a whole value: a frame slot, or a constant's bits.
++    struct Value {
++        bool valid { false };
++        bool isConstant { false };
++        uint32_t hi { 0 }; // the constant's words, or the slot's displacements
++        uint32_t lo { 0 };
++        JSValue constant;
++    };
++    Value valueFor(VirtualRegister reg)
++    {
++        Value value;
++        if (reg.isConstant()) {
++            value.constant = m_codeBlock->getConstant(reg);
++            uint64_t bits = JSValue::encode(value.constant);
++            value.valid = true;
++            value.isConstant = true;
++            value.hi = static_cast<uint32_t>(bits >> 32);
++            value.lo = static_cast<uint32_t>(bits);
++            return value;
++        }
++        Operand op = operandFor(m_codeBlock, reg);
++        if (!op.valid)
++            return value;
++        value.valid = true;
++        value.hi = op.hi;
++        value.lo = op.lo;
++        return value;
++    }
++    unsigned jumpTarget(const JSInstruction* instruction, int target)
++    {
++        if (!target)
++            target = m_codeBlock->outOfLineJumpOffset(instruction);
++        return m_codeBlock->bytecodeOffset(instruction) + target;
++    }
++    void loadWord(const Value& value, bool high, unsigned dn)
++    {
++        uint32_t word = high ? value.hi : value.lo;
++        if (value.isConstant)
++            m_hot.moveImm(word, dn);
++        else
++            m_hot.loadFrame(static_cast<int>(word), dn);
++    }
++    // Compares dn with a value's word (dn - word).
++    void compareWord(unsigned dn, const Value& value, bool high)
++    {
++        uint32_t word = high ? value.hi : value.lo;
++        if (value.isConstant)
++            m_hot.cmpImm(word, dn);
++        else
++            m_hot.cmpFrame(static_cast<int>(word), dn);
++    }
++
++    // lhs === rhs: branches to equal or notEqual (lists of b<cc>.l fixups
++    // for the caller to bind), or to the slow path. As the interpreter: no
++    // doubles; equal bits are equal; a non-cell on either side, or a cell
++    // that is not a string or a BigInt, makes them unequal.
++    bool strictEqual(Value lhs, Value rhs, Vector<size_t>& equal, Vector<size_t>& notEqual)
++    {
++        if (lhs.isConstant && rhs.isConstant)
++            return false;
++        if (lhs.isConstant)
++            std::swap(lhs, rhs);
++        if (rhs.isConstant && rhs.constant.isDouble())
++            return false;
++        auto branch = [&](Builder::Condition cc, Vector<size_t>& to) { to.append(m_hot.branch(cc)); };
++        // lhs (a slot) by its high word: int32, not a number, or a double.
++        loadWord(lhs, true, 0);
++        m_hot.cmpImm(int32Tag, 0);
++        size_t lhsInt32 = m_hot.branch(Builder::Equal);
++        m_hot.tst(0);
++        slowUnless(Builder::NotEqual);
++        // lhs is not a number.
++        if (rhs.isConstant) {
++            if (rhs.constant.isInt32()) {
++                branch(Builder::Always, notEqual);
++                m_hot.bindBranch(lhsInt32);
++                m_hot.loadFrame(lhs.lo, 0);
++                m_hot.cmpImm(rhs.lo, 0);
++                branch(Builder::Equal, equal);
++                branch(Builder::Always, notEqual);
++                return true;
++            }
++        } else {
++            m_hot.loadFrame(rhs.hi, 1);
++            size_t bothNotNumbers = m_hot.branch(Builder::Equal); // tst.l via the move
++            m_hot.cmpImm(int32Tag, 1);
++            branch(Builder::Equal, notEqual);
++            slowUnless(Builder::Always);
++            m_hot.bindBranch(bothNotNumbers);
++        }
++        // Neither is a number.
++        m_hot.loadFrame(lhs.lo, 0);
++        compareWord(0, rhs, false);
++        branch(Builder::Equal, equal);
++        m_hot.btst1(0);
++        branch(Builder::NotEqual, notEqual);
++        if (rhs.isConstant) {
++            if (!rhs.constant.isCell() || rhs.constant.asCell()->type() > LastValueCompareCellType) {
++                branch(Builder::Always, notEqual);
++            } else {
++                m_hot.moveaFromData(0, 0);
++                m_hot.cmpByteImmDisp(LastValueCompareCellType, 0, JSCell::typeInfoTypeOffset());
++                branch(Builder::Higher, notEqual);
++                slowUnless(Builder::Always);
++            }
++        } else {
++            m_hot.loadFrame(rhs.lo, 1);
++            m_hot.btst1(1);
++            branch(Builder::NotEqual, notEqual);
++            m_hot.moveaFromData(0, 0);
++            m_hot.cmpByteImmDisp(LastValueCompareCellType, 0, JSCell::typeInfoTypeOffset());
++            branch(Builder::Higher, notEqual);
++            m_hot.moveaFromData(1, 0);
++            m_hot.cmpByteImmDisp(LastValueCompareCellType, 0, JSCell::typeInfoTypeOffset());
++            slowUnless(Builder::LowerSame);
++            branch(Builder::Always, notEqual);
++        }
++        // lhs is an int32: equal to an int32 with the same low word only.
++        m_hot.bindBranch(lhsInt32);
++        if (rhs.isConstant) {
++            branch(Builder::Always, notEqual);
++            return true;
++        }
++        m_hot.cmpFrame(rhs.hi, 0);
++        size_t bothInt32 = m_hot.branch(Builder::Equal);
++        m_hot.tstFrame(rhs.hi);
++        branch(Builder::Equal, notEqual);
++        slowUnless(Builder::Always);
++        m_hot.bindBranch(bothInt32);
++        m_hot.loadFrame(lhs.lo, 0);
++        m_hot.cmpFrame(rhs.lo, 0);
++        branch(Builder::Equal, equal);
++        branch(Builder::Always, notEqual);
+         return true;
+     }
+ 
++    // A boolean result: dst gets true where the branches in yes go, false
++    // where those in no go.
++    void storeBoolean(const Operand& dst, Vector<size_t>& yes, Vector<size_t>& no)
++    {
++        for (size_t i : yes)
++            m_hot.bindBranch(i);
++        m_hot.moveq(static_cast<int8_t>(JSValue::encode(jsBoolean(true))), 0);
++        size_t store = m_hot.branchShort(Builder::Always);
++        for (size_t i : no)
++            m_hot.bindBranch(i);
++        m_hot.moveq(static_cast<int8_t>(JSValue::encode(jsBoolean(false))), 0);
++        m_hot.bindShort(store);
++        m_hot.clrFrame(dst.hi);
++        m_hot.storeFrame(0, dst.lo);
++    }
++    void jumpOn(Vector<size_t>& taken, Vector<size_t>& notTaken, unsigned target)
++    {
++        for (size_t i : taken)
++            m_hot.bindBranch(i);
++        m_hot.branchToBytecode(Builder::Always, target);
++        for (size_t i : notTaken)
++            m_hot.bindBranch(i);
++    }
++
++    template<typename Op>
++    bool strictEqualOp(const JSInstruction* instruction, bool negate)
++    {
++        auto bytecode = instruction->as<Op>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        Value lhs = valueFor(bytecode.m_lhs);
++        Value rhs = valueFor(bytecode.m_rhs);
++        if (!dst.valid || dst.isConstant || !lhs.valid || !rhs.valid)
++            return false;
++        Vector<size_t> equal, notEqual;
++        if (!strictEqual(lhs, rhs, equal, notEqual))
++            return false;
++        if (negate)
++            storeBoolean(dst, notEqual, equal);
++        else
++            storeBoolean(dst, equal, notEqual);
++        return true;
++    }
++    template<typename Op>
++    bool strictEqualJump(const JSInstruction* instruction, bool negate)
++    {
++        auto bytecode = instruction->as<Op>();
++        Value lhs = valueFor(bytecode.m_lhs);
++        Value rhs = valueFor(bytecode.m_rhs);
++        if (!lhs.valid || !rhs.valid)
++            return false;
++        Vector<size_t> equal, notEqual;
++        if (!strictEqual(lhs, rhs, equal, notEqual))
++            return false;
++        unsigned target = jumpTarget(instruction, bytecode.m_targetLabel);
++        if (negate)
++            jumpOn(notEqual, equal, target);
++        else
++            jumpOn(equal, notEqual, target);
++        return true;
++    }
++
++    // Truthiness for jtrue and jfalse: booleans, undefined and null, int32s,
++    // and cells other than strings, BigInts and objects that act as
++    // undefined.
++    template<typename Op>
++    bool truthJump(const JSInstruction* instruction, bool jumpIfTrue)
++    {
++        auto bytecode = instruction->as<Op>();
++        Value value = valueFor(bytecode.m_condition);
++        if (!value.valid || value.isConstant)
++            return false;
++        Vector<size_t> truthy, falsy;
++        m_hot.loadFrame(value.hi, 0);
++        size_t notNumber = m_hot.branch(Builder::Equal);
++        m_hot.cmpImm(int32Tag, 0);
++        slowUnless(Builder::NotEqual);
++        m_hot.tstFrame(value.lo);
++        truthy.append(m_hot.branch(Builder::NotEqual));
++        falsy.append(m_hot.branch(Builder::Always));
++        m_hot.bindBranch(notNumber);
++        m_hot.loadFrame(value.lo, 0);
++        m_hot.btst1(0);
++        size_t cell = m_hot.branch(Builder::Equal);
++        // true is the only other value with bit 0 set.
++        m_hot.btstImm(0, 0);
++        truthy.append(m_hot.branch(Builder::NotEqual));
++        falsy.append(m_hot.branch(Builder::Always));
++        m_hot.bindBranch(cell);
++        m_hot.moveaFromData(0, 0);
++        m_hot.cmpByteImmDisp(LastValueCompareCellType, 0, JSCell::typeInfoTypeOffset());
++        slowUnless(Builder::LowerSame);
++        static_assert(MasqueradesAsUndefined == 1);
++        m_hot.btstImmDisp(0, 0, JSCell::typeInfoFlagsOffset());
++        slowUnless(Builder::NotEqual);
++        truthy.append(m_hot.branch(Builder::Always));
++        unsigned target = jumpTarget(instruction, bytecode.m_targetLabel);
++        if (jumpIfTrue)
++            jumpOn(truthy, falsy, target);
++        else
++            jumpOn(falsy, truthy, target);
++        return true;
++    }
++
++    // value == null (or undefined): branches to yes or no. Cells are not,
++    // unless they act as undefined (the template).
++    bool equalNull(const Value& value, Vector<size_t>& yes, Vector<size_t>& no)
++    {
++        if (!value.valid || value.isConstant)
++            return false;
++        m_hot.tstFrame(value.hi);
++        no.append(m_hot.branch(Builder::NotEqual));
++        m_hot.loadFrame(value.lo, 0);
++        m_hot.btst1(0);
++        size_t cell = m_hot.branch(Builder::Equal);
++        static_assert(JSValue::UndefinedTag == 8 && JSValue::ValueNull == 2);
++        m_hot.andImm(~static_cast<uint32_t>(JSValue::UndefinedTag), 0);
++        m_hot.cmpImm(JSValue::ValueNull, 0);
++        yes.append(m_hot.branch(Builder::Equal));
++        no.append(m_hot.branch(Builder::Always));
++        m_hot.bindBranch(cell);
++        m_hot.moveaFromData(0, 0);
++        m_hot.btstImmDisp(0, 0, JSCell::typeInfoFlagsOffset());
++        slowUnless(Builder::NotEqual);
++        no.append(m_hot.branch(Builder::Always));
++        return true;
++    }
++    template<typename Op>
++    bool equalNullOp(const JSInstruction* instruction, bool negate)
++    {
++        auto bytecode = instruction->as<Op>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        if (!dst.valid || dst.isConstant)
++            return false;
++        Vector<size_t> yes, no;
++        if (!equalNull(valueFor(bytecode.m_operand), yes, no))
++            return false;
++        if (negate)
++            storeBoolean(dst, no, yes);
++        else
++            storeBoolean(dst, yes, no);
++        return true;
++    }
++    template<typename Op>
++    bool equalNullJump(const JSInstruction* instruction, bool negate)
++    {
++        auto bytecode = instruction->as<Op>();
++        Vector<size_t> yes, no;
++        if (!equalNull(valueFor(bytecode.m_value), yes, no))
++            return false;
++        unsigned target = jumpTarget(instruction, bytecode.m_targetLabel);
++        if (negate)
++            jumpOn(no, yes, target);
++        else
++            jumpOn(yes, no, target);
++        return true;
++    }
++    bool isUndefinedOrNull(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpIsUndefinedOrNull>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        Value value = valueFor(bytecode.m_operand);
++        if (!dst.valid || dst.isConstant || !value.valid || value.isConstant)
++            return false;
++        // As the interpreter: no cell check, the bits only.
++        Vector<size_t> yes, no;
++        m_hot.tstFrame(value.hi);
++        no.append(m_hot.branch(Builder::NotEqual));
++        m_hot.loadFrame(value.lo, 0);
++        m_hot.andImm(~static_cast<uint32_t>(JSValue::UndefinedTag), 0);
++        m_hot.cmpImm(JSValue::ValueNull, 0);
++        yes.append(m_hot.branch(Builder::Equal));
++        no.append(m_hot.branch(Builder::Always));
++        storeBoolean(dst, yes, no);
++        return true;
++    }
++
++    // jeq_ptr and jneq_ptr: the whole value against a constant.
++    template<typename Op>
++    bool pointerJump(const JSInstruction* instruction, bool jumpIfEqual)
++    {
++        auto bytecode = instruction->as<Op>();
++        Value value = valueFor(bytecode.m_value);
++        Value pointer = valueFor(bytecode.m_specialPointer);
++        if (!value.valid || value.isConstant || !pointer.isConstant)
++            return false;
++        Vector<size_t> equal, notEqual;
++        m_hot.loadFrame(value.lo, 0);
++        m_hot.cmpImm(pointer.lo, 0);
++        notEqual.append(m_hot.branch(Builder::NotEqual));
++        m_hot.loadFrame(value.hi, 0);
++        m_hot.cmpImm(pointer.hi, 0);
++        notEqual.append(m_hot.branch(Builder::NotEqual));
++        equal.append(m_hot.branch(Builder::Always));
++        unsigned target = jumpTarget(instruction, bytecode.m_targetLabel);
++        if (jumpIfEqual) {
++            jumpOn(equal, notEqual, target);
++            return true;
++        }
++        for (size_t i : notEqual)
++            m_hot.bindBranch(i);
++        if constexpr (requires { bytecode.metadata(m_codeBlock).m_hasJumped; })
++            m_hot.moveByteImmAbs(1, &bytecode.metadata(m_codeBlock).m_hasJumped);
++        m_hot.branchToBytecode(Builder::Always, target);
++        for (size_t i : equal)
++            m_hot.bindBranch(i);
++        return true;
++    }
++
++    // less, greater, eq and the rest as values, and jeq and jneq: int32s.
++    template<typename Op>
++    bool int32Compare(const JSInstruction* instruction, Builder::Condition cc)
++    {
++        auto bytecode = instruction->as<Op>();
++        Operand lhs = operandFor(m_codeBlock, bytecode.m_lhs);
++        Operand rhs = operandFor(m_codeBlock, bytecode.m_rhs);
++        if (!lhs.valid || !rhs.valid || (lhs.isConstant && rhs.isConstant))
++            return false;
++        Operand dst;
++        if constexpr (requires { bytecode.m_dst; }) {
++            dst = operandFor(m_codeBlock, bytecode.m_dst);
++            if (!dst.valid || dst.isConstant)
++                return false;
++        }
++        checkInt32(lhs);
++        checkInt32(rhs);
++        load(lhs, 0);
++        if (rhs.isConstant)
++            m_hot.cmpImm(rhs.constant, 0);
++        else
++            m_hot.cmpFrame(rhs.lo, 0);
++        if constexpr (requires { bytecode.m_dst; }) {
++            Vector<size_t> yes, no;
++            yes.append(m_hot.branch(cc));
++            no.append(m_hot.branch(Builder::Always));
++            storeBoolean(dst, yes, no);
++        } else
++            m_hot.branchToBytecode(cc, jumpTarget(instruction, bytecode.m_targetLabel));
++        return true;
++    }
++
++    // Variables in scopes (stage J7): the interpreter's handlers for the
++    // resolve type the site's cache holds when the code is written, which
++    // the code checks it still holds; anything else takes the template.
++
++    static bool fitsDisplacement(intptr_t disp) { return disp >= -32768 && disp <= 32767 - 4; }
++    // The global object's watchpoint set (var injection, var read-only)
++    // still valid, or false (nothing written) when it is not now.
++    bool checkWatchpointSet(WatchpointSet& set)
++    {
++        if (set.state() == IsInvalidated)
++            return false;
++        m_hot.cmpByteImmAbs(IsInvalidated, reinterpret_cast<uint8_t*>(&set) + WatchpointSet::offsetOfState());
++        slowUnless(Builder::Equal);
++        return true;
++    }
++    // A write to a variable: an inline watchpoint set, if there is one,
++    // already invalidated (else the slow path notifies its watchers).
++    void checkWritable(InlineWatchpointSet* set)
++    {
++        if (!set)
++            return;
++        m_hot.cmpLongImmAbs(InlineWatchpointSet::encodeState(IsInvalidated), reinterpret_cast<uint8_t*>(set) + InlineWatchpointSet::offsetOfData());
++        slowUnless(Builder::NotEqual);
++    }
++    // The write barrier, as put_by_id's: storing a cell into an object the
++    // collector has already visited (cell state 0) takes the slow path.
++    // testTarget emits a test of the object's cell state byte.
++    template<typename TestTarget>
++    void barrierCheck(const Value& value, const TestTarget& testTarget)
++    {
++        static_assert(!blackThreshold);
++        if (value.isConstant) {
++            if (value.constant.isCell()) {
++                testTarget();
++                slowUnless(Builder::Equal);
++            }
++            return;
++        }
++        m_hot.tstFrame(value.hi);
++        size_t notCell1 = m_hot.branchShort(Builder::NotEqual);
++        m_hot.loadFrame(value.lo, 0);
++        m_hot.btst1(0);
++        size_t notCell2 = m_hot.branchShort(Builder::NotEqual);
++        m_hot.tst(0);
++        size_t notCell3 = m_hot.branchShort(Builder::Equal);
++        testTarget();
++        slowUnless(Builder::Equal);
++        m_hot.bindShort(notCell1);
++        m_hot.bindShort(notCell2);
++        m_hot.bindShort(notCell3);
++    }
++    // The value into d16(an).
++    void storeValueDisp(const Value& value, unsigned an, int disp)
++    {
++        if (value.isConstant) {
++            m_hot.storeImmDisp(value.hi, an, disp);
++            m_hot.storeImmDisp(value.lo, an, disp + 4);
++        } else {
++            m_hot.copyFrameToDisp(value.hi, an, disp);
++            m_hot.copyFrameToDisp(value.lo, an, disp + 4);
++        }
++    }
++    // A global property's place: its storage into a0 (from the scope in
++    // a0) and the displacement there; false when it does not fit.
++    bool propertyPlace(PropertyOffset offset, int& disp)
++    {
++        intptr_t d;
++        if (isInlineOffset(offset))
++            d = JSObject::offsetOfInlineStorage() + offsetInInlineStorage(offset) * static_cast<intptr_t>(sizeof(EncodedJSValue));
++        else
++            d = -static_cast<intptr_t>(offset - (firstOutOfLineOffset - 2)) * static_cast<intptr_t>(sizeof(EncodedJSValue));
++        if (!fitsDisplacement(d))
++            return false;
++        if (!isInlineOffset(offset))
++            m_hot.moveaDisp(0, JSObject::butterflyOffset(), 0);
++        disp = static_cast<int>(d);
++        return true;
++    }
++    // A global property site: the scope (in a0) has the cached structure,
++    // and the cache still has the offset the code was written for.
++    template<typename Metadata>
++    bool checkGlobalProperty(Metadata& metadata)
++    {
++        if (!metadata.m_structureID)
++            return false;
++        m_hot.loadDisp(0, JSCell::structureIDOffset(), 1);
++        m_hot.cmpLongAbs(&metadata.m_structureID, 1);
++        slowUnless(Builder::NotEqual);
++        m_hot.cmpLongImmAbs(static_cast<uint32_t>(metadata.m_operand), &metadata.m_operand);
++        slowUnless(Builder::NotEqual);
++        return true;
++    }
++
++    bool resolveScope(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpResolveScope>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        Operand scope = operandFor(m_codeBlock, bytecode.m_scope);
++        if (!dst.valid || dst.isConstant || !scope.valid || scope.isConstant)
++            return false;
++        auto& metadata = bytecode.metadata(m_codeBlock);
++        ResolveType type = metadata.m_resolveType;
++        unsigned depth = 0;
++        switch (type) {
++        case GlobalProperty: case GlobalVar: case GlobalLexicalVar: case ModuleVar:
++        case GlobalPropertyWithVarInjectionChecks: case GlobalVarWithVarInjectionChecks: case GlobalLexicalVarWithVarInjectionChecks:
++            if (!metadata.m_constantScope)
++                return false;
++            break;
++        case ClosureVar: case ClosureVarWithVarInjectionChecks:
++            depth = metadata.m_localScopeDepth;
++            if (depth > 16)
++                return false;
++            break;
++        default:
++            return false;
++        }
++        m_hot.cmpLongImmAbs(type, &metadata.m_resolveType);
++        slowUnless(Builder::NotEqual);
++        if (needsVarInjectionChecks(type) && !checkWatchpointSet(m_codeBlock->globalObject()->varInjectionWatchpointSet()))
++            return false;
++        m_hot.clrFrame(dst.hi);
++        if (type == ClosureVar || type == ClosureVarWithVarInjectionChecks) {
++            m_hot.cmpLongImmAbs(depth, &metadata.m_localScopeDepth);
++            slowUnless(Builder::NotEqual);
++            m_hot.moveaDisp(5, scope.lo, 0);
++            for (unsigned i = 0; i < depth; ++i)
++                m_hot.moveaDisp(0, JSScope::offsetOfNext(), 0);
++            m_hot.storeAddressFrame(0, dst.lo);
++            return true;
++        }
++        if (type == GlobalProperty || type == GlobalPropertyWithVarInjectionChecks) {
++            // The global lexical binding epoch: no new global let or const since.
++            m_hot.moveLongAbs(&metadata.m_globalLexicalBindingEpoch, 0);
++            m_hot.loadAddressAbs(&metadata.m_constantScope, 0);
++            m_hot.cmpDisp(0, JSGlobalObject::offsetOfGlobalLexicalBindingEpoch(), 0);
++            slowUnless(Builder::NotEqual);
++            m_hot.storeAddressFrame(0, dst.lo);
++            return true;
++        }
++        m_hot.copyAbsToFrame(&metadata.m_constantScope, dst.lo);
++        return true;
++    }
++
++    bool getFromScope(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpGetFromScope>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        Operand scope = operandFor(m_codeBlock, bytecode.m_scope);
++        if (!dst.valid || dst.isConstant || !scope.valid || scope.isConstant)
++            return false;
++        auto& metadata = bytecode.metadata(m_codeBlock);
++        GetPutInfo info = metadata.m_getPutInfo;
++        ResolveType type = info.resolveType();
++        switch (type) {
++        case GlobalProperty: case GlobalPropertyWithVarInjectionChecks:
++        case GlobalVar: case GlobalVarWithVarInjectionChecks:
++        case GlobalLexicalVar: case GlobalLexicalVarWithVarInjectionChecks:
++        case ClosureVar: case ClosureVarWithVarInjectionChecks:
++            break;
++        default:
++            return false;
++        }
++        m_hot.cmpLongImmAbs(info.operand(), &metadata.m_getPutInfo);
++        slowUnless(Builder::NotEqual);
++        if (needsVarInjectionChecks(type) && !checkWatchpointSet(m_codeBlock->globalObject()->varInjectionWatchpointSet()))
++            return false;
++        switch (type) {
++        case GlobalVar: case GlobalVarWithVarInjectionChecks:
++        case GlobalLexicalVar: case GlobalLexicalVarWithVarInjectionChecks: {
++            // The variable's storage, fixed for the site's variable.
++            auto* variable = reinterpret_cast<uint32_t*>(metadata.m_operand);
++            if (!variable)
++                return false;
++            if (type == GlobalLexicalVar || type == GlobalLexicalVarWithVarInjectionChecks) {
++                // Not yet initialised (empty, both words 0): the slow path throws.
++                m_hot.tstLongAbs(variable);
++                size_t set = m_hot.branchShort(Builder::NotEqual);
++                m_hot.tstLongAbs(variable + 1);
++                slowUnless(Builder::Equal);
++                m_hot.bindShort(set);
++            }
++            m_hot.copyAbsToFrame(variable, dst.hi);
++            m_hot.copyAbsToFrame(variable + 1, dst.lo);
++            return true;
++        }
++        case ClosureVar: case ClosureVarWithVarInjectionChecks: {
++            intptr_t disp = JSLexicalEnvironment::offsetOfVariables() + static_cast<intptr_t>(metadata.m_operand) * static_cast<intptr_t>(sizeof(EncodedJSValue));
++            if (!fitsDisplacement(disp))
++                return false;
++            m_hot.moveaDisp(5, scope.lo, 0);
++            m_hot.copyDispToFrame(0, static_cast<int>(disp), dst.hi);
++            m_hot.copyDispToFrame(0, static_cast<int>(disp) + 4, dst.lo);
++            return true;
++        }
++        default: {
++            m_hot.moveaDisp(5, scope.lo, 0);
++            if (!checkGlobalProperty(metadata))
++                return false;
++            int disp;
++            if (!propertyPlace(static_cast<PropertyOffset>(metadata.m_operand), disp))
++                return false;
++            m_hot.copyDispToFrame(0, disp, dst.hi);
++            m_hot.copyDispToFrame(0, disp + 4, dst.lo);
++            return true;
++        }
++        }
++    }
++
++    bool putToScope(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpPutToScope>();
++        Operand scope = operandFor(m_codeBlock, bytecode.m_scope);
++        Value value = valueFor(bytecode.m_value);
++        if (!scope.valid || scope.isConstant || !value.valid)
++            return false;
++        auto& metadata = bytecode.metadata(m_codeBlock);
++        GetPutInfo info = metadata.m_getPutInfo;
++        ResolveType type = info.resolveType();
++        JSGlobalObject* globalObject = m_codeBlock->globalObject();
++        switch (type) {
++        case GlobalProperty: case GlobalPropertyWithVarInjectionChecks:
++        case GlobalVar: case GlobalVarWithVarInjectionChecks:
++        case GlobalLexicalVar: case GlobalLexicalVarWithVarInjectionChecks:
++        case ClosureVar: case ClosureVarWithVarInjectionChecks: case ResolvedClosureVar:
++            break;
++        default:
++            return false;
++        }
++        m_hot.cmpLongImmAbs(info.operand(), &metadata.m_getPutInfo);
++        slowUnless(Builder::NotEqual);
++        if (needsVarInjectionChecks(type) && !checkWatchpointSet(globalObject->varInjectionWatchpointSet()))
++            return false;
++        switch (type) {
++        case GlobalVar: case GlobalVarWithVarInjectionChecks:
++        case GlobalLexicalVar: case GlobalLexicalVarWithVarInjectionChecks: {
++            auto* variable = reinterpret_cast<uint32_t*>(metadata.m_operand);
++            if (!variable)
++                return false;
++            JSCell* owner;
++            if (type == GlobalVar || type == GlobalVarWithVarInjectionChecks) {
++                if (!checkWatchpointSet(globalObject->varReadOnlyWatchpointSet()))
++                    return false;
++                owner = globalObject;
++            } else {
++                if (info.initializationMode() == InitializationMode::NotInitialization) {
++                    // An assignment to a let or const not yet initialised: the slow path throws.
++                    m_hot.tstLongAbs(variable);
++                    size_t set = m_hot.branchShort(Builder::NotEqual);
++                    m_hot.tstLongAbs(variable + 1);
++                    slowUnless(Builder::Equal);
++                    m_hot.bindShort(set);
++                }
++                owner = globalObject->globalLexicalEnvironment();
++            }
++            checkWritable(metadata.m_watchpointSet);
++            barrierCheck(value, [&] { m_hot.tstByteAbs(reinterpret_cast<uint8_t*>(owner) + JSCell::cellStateOffset()); });
++            if (value.isConstant) {
++                m_hot.storeImmAbs(value.hi, variable);
++                m_hot.storeImmAbs(value.lo, variable + 1);
++            } else {
++                m_hot.copyFrameToAbs(value.hi, variable);
++                m_hot.copyFrameToAbs(value.lo, variable + 1);
++            }
++            return true;
++        }
++        case ClosureVar: case ClosureVarWithVarInjectionChecks: case ResolvedClosureVar: {
++            intptr_t disp = JSLexicalEnvironment::offsetOfVariables() + static_cast<intptr_t>(metadata.m_operand) * static_cast<intptr_t>(sizeof(EncodedJSValue));
++            if (!fitsDisplacement(disp))
++                return false;
++            if (type == ResolvedClosureVar)
++                checkWritable(metadata.m_watchpointSet);
++            m_hot.moveaDisp(5, scope.lo, 0);
++            barrierCheck(value, [&] { m_hot.tstByteDisp(0, JSCell::cellStateOffset()); });
++            storeValueDisp(value, 0, static_cast<int>(disp));
++            return true;
++        }
++        default: {
++            m_hot.moveaDisp(5, scope.lo, 0);
++            if (!checkGlobalProperty(metadata))
++                return false;
++            barrierCheck(value, [&] { m_hot.tstByteDisp(0, JSCell::cellStateOffset()); });
++            int disp;
++            if (!propertyPlace(static_cast<PropertyOffset>(metadata.m_operand), disp))
++                return false;
++            storeValueDisp(value, 0, disp);
++            return true;
++        }
++        }
++    }
++
+     bool emitImpl(const JSInstruction* instruction, unsigned offset)
+     {
+         switch (instruction->opcodeID()) {
+@@ -1029,6 +1826,8 @@ private:
+             return call<OpCall>(instruction, offset);
+         case op_construct:
+             return call<OpConstruct>(instruction, offset);
++        case op_call_ignore_result:
++            return call<OpCallIgnoreResult>(instruction, offset);
+         case op_ret:
+             return ret(instruction);
+         case op_loop_hint:
+@@ -1138,6 +1937,30 @@ private:
+         case op_jnlesseq: return compareAndJump<OpJnlesseq>(instruction, offset, Builder::Greater);
+         case op_jngreater: return compareAndJump<OpJngreater>(instruction, offset, Builder::LessEqual);
+         case op_jngreatereq: return compareAndJump<OpJngreatereq>(instruction, offset, Builder::Less);
++        case op_stricteq: return strictEqualOp<OpStricteq>(instruction, false);
++        case op_nstricteq: return strictEqualOp<OpNstricteq>(instruction, true);
++        case op_jstricteq: return strictEqualJump<OpJstricteq>(instruction, false);
++        case op_jnstricteq: return strictEqualJump<OpJnstricteq>(instruction, true);
++        case op_jtrue: return truthJump<OpJtrue>(instruction, true);
++        case op_jfalse: return truthJump<OpJfalse>(instruction, false);
++        case op_eq_null: return equalNullOp<OpEqNull>(instruction, false);
++        case op_neq_null: return equalNullOp<OpNeqNull>(instruction, true);
++        case op_jeq_null: return equalNullJump<OpJeqNull>(instruction, false);
++        case op_jneq_null: return equalNullJump<OpJneqNull>(instruction, true);
++        case op_is_undefined_or_null: return isUndefinedOrNull(instruction);
++        case op_jeq_ptr: return pointerJump<OpJeqPtr>(instruction, true);
++        case op_jneq_ptr: return pointerJump<OpJneqPtr>(instruction, false);
++        case op_less: return int32Compare<OpLess>(instruction, Builder::Less);
++        case op_lesseq: return int32Compare<OpLesseq>(instruction, Builder::LessEqual);
++        case op_greater: return int32Compare<OpGreater>(instruction, Builder::Greater);
++        case op_greatereq: return int32Compare<OpGreatereq>(instruction, Builder::GreaterEqual);
++        case op_eq: return int32Compare<OpEq>(instruction, Builder::Equal);
++        case op_neq: return int32Compare<OpNeq>(instruction, Builder::NotEqual);
++        case op_jeq: return int32Compare<OpJeq>(instruction, Builder::Equal);
++        case op_jneq: return int32Compare<OpJneq>(instruction, Builder::NotEqual);
++        case op_resolve_scope: return resolveScope(instruction);
++        case op_get_from_scope: return getFromScope(instruction);
++        case op_put_to_scope: return putToScope(instruction);
+         case op_get_by_id:
+             return Options::useM68KPropertyFastPaths() && getById(instruction);
+         case op_put_by_id:
+@@ -1291,6 +2114,36 @@ private:
+             cell(bytecode.m_callee);
+             return !bytecode.m_dst.isConstant() && !bytecode.m_callee.isConstant();
+         }
++        case op_call_ignore_result: {
++            auto bytecode = instruction->as<OpCallIgnoreResult>();
++            cell(bytecode.m_callee);
++            return !bytecode.m_callee.isConstant();
++        }
++        // Tests on any value and variables in scopes, with the plain code's
++        // fast paths: they read the frame, where every write goes; their
++        // results (booleans, scopes, values of any kind) are never one of
++        // the registers.
++        case op_jstricteq: case op_jnstricteq: case op_jtrue: case op_jfalse:
++        case op_jeq_null: case op_jneq_null: case op_jeq_ptr: case op_jneq_ptr:
++        case op_jeq: case op_jneq:
++            return true;
++#define M68K_BOOLEAN(name, Op) case name: cell(instruction->as<Op>().m_dst); return !instruction->as<Op>().m_dst.isConstant();
++        M68K_BOOLEAN(op_stricteq, OpStricteq)
++        M68K_BOOLEAN(op_nstricteq, OpNstricteq)
++        M68K_BOOLEAN(op_eq_null, OpEqNull)
++        M68K_BOOLEAN(op_neq_null, OpNeqNull)
++        M68K_BOOLEAN(op_is_undefined_or_null, OpIsUndefinedOrNull)
++        M68K_BOOLEAN(op_less, OpLess)
++        M68K_BOOLEAN(op_lesseq, OpLesseq)
++        M68K_BOOLEAN(op_greater, OpGreater)
++        M68K_BOOLEAN(op_greatereq, OpGreatereq)
++        M68K_BOOLEAN(op_eq, OpEq)
++        M68K_BOOLEAN(op_neq, OpNeq)
++        M68K_BOOLEAN(op_resolve_scope, OpResolveScope)
++        M68K_BOOLEAN(op_get_from_scope, OpGetFromScope)
++#undef M68K_BOOLEAN
++        case op_put_to_scope:
++            return true;
+         // Property access, with the plain code's fast paths; get_by_id's
+         // result can be one of the registers.
+         case op_get_by_id: {
+@@ -1365,6 +2218,16 @@ private:
+         M68K_TARGET(op_jnlesseq, OpJnlesseq)
+         M68K_TARGET(op_jngreater, OpJngreater)
+         M68K_TARGET(op_jngreatereq, OpJngreatereq)
++        M68K_TARGET(op_jstricteq, OpJstricteq)
++        M68K_TARGET(op_jnstricteq, OpJnstricteq)
++        M68K_TARGET(op_jtrue, OpJtrue)
++        M68K_TARGET(op_jfalse, OpJfalse)
++        M68K_TARGET(op_jeq_null, OpJeqNull)
++        M68K_TARGET(op_jneq_null, OpJneqNull)
++        M68K_TARGET(op_jeq_ptr, OpJeqPtr)
++        M68K_TARGET(op_jneq_ptr, OpJneqPtr)
++        M68K_TARGET(op_jeq, OpJeq)
++        M68K_TARGET(op_jneq, OpJneq)
+ #undef M68K_TARGET
+         default:
+             return -1;
+@@ -1661,7 +2524,8 @@ private:
+             store(0, value);
+             return Next;
+         }
+-        case op_call: {
++        case op_call:
++        case op_call_ignore_result: {
+             Vector<size_t> branches;
+             FloatPath floatPath;
+             if (!m_fastPaths.emit(instruction, offset, branches, floatPath))
+@@ -1679,6 +2543,33 @@ private:
+             }
+             return Next;
+         }
++        case op_jstricteq: case op_jnstricteq: case op_jtrue: case op_jfalse:
++        case op_jeq_null: case op_jneq_null: case op_jeq_ptr: case op_jneq_ptr:
++        case op_jeq: case op_jneq:
++        case op_stricteq: case op_nstricteq: case op_eq_null: case op_neq_null: case op_is_undefined_or_null:
++        case op_less: case op_lesseq: case op_greater: case op_greatereq: case op_eq: case op_neq:
++        case op_resolve_scope: case op_get_from_scope: case op_put_to_scope: {
++            Vector<size_t> branches;
++            FloatPath floatPath;
++            size_t firstFixup = m_code.fixups.size();
++            if (!m_fastPaths.emit(instruction, offset, branches, floatPath) || floatPath.needed)
++                return Stop;
++            for (size_t i : branches)
++                m_code.fixups[i].targetBuffer = m_plainStart[offset];
++            // A jump to the loop's head stays in the copy: these leave d2-d7 alone.
++            for (size_t i = firstFixup; i < m_code.fixups.size(); ++i) {
++                auto& fixup = m_code.fixups[i];
++                if (fixup.toBytecode && fixup.targetBytecode == m_head) {
++                    fixup.toBytecode = false;
++                    fixup.targetBuffer = m_loop;
++                }
++            }
++            if (jumpTarget(instruction, offset) == static_cast<int>(m_head)) {
++                m_code.jumpToBytecode(offset + instruction->size());
++                return End;
++            }
++            return Next;
++        }
+         case op_get_by_id:
+         case op_put_by_id:
+         case op_get_by_val:
+diff --git a/Source/JavaScriptCore/runtime/StructureChain.h b/Source/JavaScriptCore/runtime/StructureChain.h
+index 2b9708e1cb2..ab4e279ac8a 100644
+--- a/Source/JavaScriptCore/runtime/StructureChain.h
++++ b/Source/JavaScriptCore/runtime/StructureChain.h
+@@ -51,6 +51,7 @@ public:
+ 
+     static StructureChain* create(VM&, JSObject*);
+     StructureID* head() LIFETIME_BOUND { return m_vector.get(); }
++    static constexpr ptrdiff_t offsetOfVector() { return OBJECT_OFFSETOF(StructureChain, m_vector); }
+     DECLARE_VISIT_CHILDREN;
+ 
+     inline static Structure* createStructure(VM&, JSGlobalObject*, JSValue);
+-- 
+2.43.0
+
