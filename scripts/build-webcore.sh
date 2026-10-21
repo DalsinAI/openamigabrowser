@@ -136,6 +136,12 @@ sha256() {
 }
 
 # One hash of every file under the given folders, names included.
+# A folder's files and links, each by name with its own digest or target,
+# so moving bytes between files or retargeting a link changes the result.
+file_hashes() {
+    (cd "$1" && { find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum --
+        find . -type l -printf '%p -> %l\n' | LC_ALL=C sort; }) | sha256
+}
 tree_hash() {
     for dir in "$@"; do
         [ -d "$dir" ] && (cd "$dir" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r cat -- 2>/dev/null; find . -type f | LC_ALL=C sort)
@@ -164,10 +170,17 @@ engine_options() {
 # Everything that can change what the engine compiles to, one line each.
 engine_inputs() {
     gcc="$GCC16/prefix/bin/m68k-amigaos-gcc"
-    echo "webkit $(git -C "$WEBKIT_SOURCE" rev-parse HEAD 2>/dev/null || echo unknown)"
-    echo "webkit-changes $( (git -C "$WEBKIT_SOURCE" diff HEAD -- Source CMakeLists.txt 2>/dev/null
-        git -C "$WEBKIT_SOURCE" ls-files --others --exclude-standard -- Source 2>/dev/null | LC_ALL=C sort |
-            while IFS= read -r f; do printf '%s %s\n' "$f" "$(sha256 < "$WEBKIT_SOURCE/$f")"; done) | sha256)"
+    if [ "$(git -C "$WEBKIT_SOURCE" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$WEBKIT_SOURCE" && pwd -P)" ]; then
+        echo "webkit $(git -C "$WEBKIT_SOURCE" rev-parse HEAD)"
+        echo "webkit-changes $( (git -C "$WEBKIT_SOURCE" diff HEAD -- Source CMakeLists.txt 2>/dev/null
+            git -C "$WEBKIT_SOURCE" ls-files --others --exclude-standard -- Source 2>/dev/null | LC_ALL=C sort |
+                while IFS= read -r f; do printf '%s %s\n' "$f" "$(sha256 < "$WEBKIT_SOURCE/$f")"; done) | sha256)"
+    else
+        # Not a git tree (a patched copy): every file decides, as nothing
+        # else shows which patches it carries.
+        echo "webkit-tree $(file_hashes "$WEBKIT_SOURCE/Source") $(sha256 < "$WEBKIT_SOURCE/CMakeLists.txt")"
+    fi
+    echo "patches $(tree_hash "$ROOT/webkit/patches")"
     echo "compiler $("$gcc" --version | head -n 1) $(sha256 < "$("$gcc" -print-prog-name=cc1plus)")"
     echo "binutils $("$GCC16/prefix/bin/m68k-amigaos-as" --version | head -n 1)"
     echo "toolchain-file $(sha256 < "$ROOT/toolchain/amigaos3-gcc16.cmake")"
