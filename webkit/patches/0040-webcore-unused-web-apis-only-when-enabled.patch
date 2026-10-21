@@ -362,6 +362,17 @@ index 770759bef49..dbbb2cee834 100644
  }
 +
 +#endif // ENABLE(COOKIE_STORE_API)
+diff --git a/Source/WebCore/Modules/cookie-store/CookieStore.h b/Source/WebCore/Modules/cookie-store/CookieStore.h
+index 21100fc2029..ed9f1d59cd4 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieStore.h
++++ b/Source/WebCore/Modules/cookie-store/CookieStore.h
+@@ -102,4 +102,6 @@ private:
+ 
+ } // namespace WebCore
+ 
++#if ENABLE(COOKIE_STORE_API)
+ SPECIALIZE_TYPE_TRAITS_EVENTTARGET(CookieStore)
++#endif
 diff --git a/Source/WebCore/Modules/cookie-store/CookieStore.idl b/Source/WebCore/Modules/cookie-store/CookieStore.idl
 index e2cc3c53f58..2201b98c43b 100644
 --- a/Source/WebCore/Modules/cookie-store/CookieStore.idl
@@ -584,6 +595,27 @@ index ddb91e4fb90..c677c518273 100644
  } // namespace WebCore
 +
 +#endif // ENABLE(SCREEN_WAKE_LOCK)
+diff --git a/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.h b/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.h
+index 14b569ceb0b..41b1ed55bd7 100644
+--- a/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.h
++++ b/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.h
+@@ -63,7 +63,9 @@ private:
+     bool NODELETE virtualHasPendingActivity() const final;
+ 
+     // EventTarget.
++#if ENABLE(SCREEN_WAKE_LOCK)
+     enum EventTargetInterfaceType eventTargetInterface() const final { return EventTargetInterfaceType::WakeLockSentinel; }
++#endif
+     ScriptExecutionContext* NODELETE scriptExecutionContext() const final;
+     void refEventTarget() final { RefCounted::ref(); }
+     void derefEventTarget() final { RefCounted::deref(); }
+@@ -76,4 +78,6 @@ private:
+ 
+ } // namespace WebCore
+ 
++#if ENABLE(SCREEN_WAKE_LOCK)
+ SPECIALIZE_TYPE_TRAITS_EVENTTARGET(WakeLockSentinel)
++#endif
 diff --git a/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.idl b/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.idl
 index e53a1dda434..49f1fd958e5 100644
 --- a/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.idl
@@ -625,6 +657,27 @@ index c71255ef5a5..c6c597866b4 100644
  } // namespace WebCore
 +
 +#endif // ENABLE(SPEECH_RECOGNITION)
+diff --git a/Source/WebCore/Modules/speech/SpeechRecognition.h b/Source/WebCore/Modules/speech/SpeechRecognition.h
+index 1245c02f2d8..12e24fec115 100644
+--- a/Source/WebCore/Modules/speech/SpeechRecognition.h
++++ b/Source/WebCore/Modules/speech/SpeechRecognition.h
+@@ -99,7 +99,9 @@ private:
+ 
+     // EventTarget
+     ScriptExecutionContext* NODELETE scriptExecutionContext() const final;
++#if ENABLE(SPEECH_RECOGNITION)
+     enum EventTargetInterfaceType eventTargetInterface() const final { return EventTargetInterfaceType::SpeechRecognition; }
++#endif
+     void refEventTarget() final { ref(); }
+     void derefEventTarget() final { deref(); }
+     bool NODELETE virtualHasPendingActivity() const final;
+@@ -119,4 +121,6 @@ private:
+ 
+ } // namespace WebCore
+ 
++#if ENABLE(SPEECH_RECOGNITION)
+ SPECIALIZE_TYPE_TRAITS_EVENTTARGET(SpeechRecognition)
++#endif
 diff --git a/Source/WebCore/Modules/speech/SpeechRecognition.idl b/Source/WebCore/Modules/speech/SpeechRecognition.idl
 index 1c0eb5510bd..44b24f61f93 100644
 --- a/Source/WebCore/Modules/speech/SpeechRecognition.idl

@@ -1032,7 +1032,7 @@ index 10ebca4e0d1..0d0ce612899 100644
 +
 +#endif // ENABLE(WEBGPU)
 diff --git a/Source/WebCore/Modules/WebGPU/GPUDevice.h b/Source/WebCore/Modules/WebGPU/GPUDevice.h
-index cceb85101bc..41c689514b4 100644
+index cceb85101bc..397e49519d9 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUDevice.h
 +++ b/Source/WebCore/Modules/WebGPU/GPUDevice.h
 @@ -188,7 +188,9 @@ private:
@@ -1045,6 +1045,13 @@ index cceb85101bc..41c689514b4 100644
      void refEventTarget() final { ref(); }
      void derefEventTarget() final { deref(); }
  
+@@ -222,4 +224,6 @@ private:
+ 
+ } // namespace WebCore
+ 
++#if ENABLE(WEBGPU)
+ SPECIALIZE_TYPE_TRAITS_EVENTTARGET(GPUDevice)
++#endif
 diff --git a/Source/WebCore/Modules/WebGPU/GPUDevice.idl b/Source/WebCore/Modules/WebGPU/GPUDevice.idl
 index 4e46be6c3a5..d8308e4787c 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUDevice.idl
