@@ -226,6 +226,10 @@ The patches, in order:
   calls. A virtual call link (a site with more callees than a polymorphic
   stub holds, or a construct site whose callees have no call CodeBlock)
   was taken for a polymorphic stub and crashed; it now takes the template.
+- `0044-jsc-m68k-jit-object-allocation.patch`: `new_object` (`{}` and
+  object literals) and `create_this` (`new F()` on a JS function) make the
+  object in line from the allocator's free list, as the baseline JIT does,
+  instead of calling into C++.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
