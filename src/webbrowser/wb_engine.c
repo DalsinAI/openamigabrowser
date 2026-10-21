@@ -1,9 +1,12 @@
 /*
  * WebBrowserEngine: the one engine behind webbrowser.library. It opens the
  * public port WEBBROWSER.ENGINE and serves WBMessages (wb_protocol.h) from
- * any number of programs, each with its own views, until WBC_SHUTDOWN or
- * Ctrl-C. Between messages it runs WebCore (its timers, the network's
- * answers), so pages go on loading while programs do other things.
+ * any number of programs, each with its own views, until WBC_SHUTDOWN,
+ * Ctrl-C, or IDLE_QUIT seconds with no view, browser window or waiting
+ * request (its memory goes back; the next program starts it again).
+ * ENV:WebBrowser/IdleQuit sets those seconds, 0 for never. Between
+ * messages it runs WebCore (its timers, the network's answers), so pages
+ * go on loading while programs do other things.
  * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <stdio.h>
@@ -13,6 +16,7 @@
 #include <devices/timer.h>
 #include <dos/dos.h>
 #include <dos/dosextens.h>
+#include <dos/var.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 
@@ -26,6 +30,7 @@ static const char version[] __attribute__((used)) = "$VER: WebBrowserEngine 1.0 
 
 #define MAX_VIEWS 16
 #define MAX_WAITS 16
+#define IDLE_QUIT 60
 
 struct view {
     OBWebView *web;
@@ -112,6 +117,31 @@ static ULONG seconds(void)
     struct DateStamp ds;
     DateStamp(&ds);
     return (ULONG)ds.ds_Days * 86400 + ds.ds_Minute * 60 + ds.ds_Tick / TICKS_PER_SECOND;
+}
+
+/* Seconds without work before the engine quits; 0 for never. */
+static ULONG idleQuitSeconds(void)
+{
+    char text[16];
+    long value;
+    if (GetVar((CONST_STRPTR)"WebBrowser/IdleQuit", (STRPTR)text, sizeof text, GVF_GLOBAL_ONLY) <= 0)
+        return IDLE_QUIT;
+    if (sscanf(text, "%ld", &value) != 1 || value < 0)
+        return IDLE_QUIT;
+    return (ULONG)value;
+}
+
+/* Nothing open and nobody waiting on us. */
+static int idle(void)
+{
+    int i;
+    for (i = 0; i < MAX_VIEWS; i++)
+        if (views[i].web)
+            return 0;
+    for (i = 0; i < MAX_WAITS; i++)
+        if (waits[i])
+            return 0;
+    return obb_signals() == 0;
 }
 
 static void notify(struct view *v)
@@ -372,6 +402,7 @@ static int serve(int argc, char **argv)
 {
     struct MsgPort *port;
     int running = 1, i, network;
+    ULONG idleLimit = idleQuitSeconds(), idleSince = seconds();
     (void)argc;
     (void)argv;
     engineTask = FindTask(NULL);
@@ -424,6 +455,10 @@ static int serve(int argc, char **argv)
         checkWaits();
         obb_update();
         if (!running)
+            break;
+        if (!idle())
+            idleSince = seconds();
+        else if (idleLimit && seconds() - idleSince >= idleLimit)
             break;
         next = ob_webcore_next_timer_micros();
         if (next == 0)
