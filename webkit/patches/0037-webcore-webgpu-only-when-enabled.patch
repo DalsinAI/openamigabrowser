@@ -4230,7 +4230,7 @@ index c9485057e31..1093e5c68d6 100644
  void InspectorInstrumentation::willApplyKeyframeEffectImpl(InstrumentingAgents& instrumentingAgents, const Styleable& target, KeyframeEffect& effect, const ComputedEffectTiming& computedTiming)
  {
 diff --git a/Source/WebCore/inspector/InspectorShaderProgram.cpp b/Source/WebCore/inspector/InspectorShaderProgram.cpp
-index 27fe05c6738..68eb8319202 100644
+index 27fe05c6738..ffeb446be29 100644
 --- a/Source/WebCore/inspector/InspectorShaderProgram.cpp
 +++ b/Source/WebCore/inspector/InspectorShaderProgram.cpp
 @@ -144,10 +144,15 @@ String InspectorShaderProgram::requestShaderSource(Inspector::Protocol::Canvas::
@@ -4302,14 +4302,14 @@ index 27fe05c6738..68eb8319202 100644
          }
      );
      if (!supported)
-@@ -317,6 +337,7 @@ void InspectorShaderProgram::requestRenderPipelineForHighlighting(unsigned canva
+@@ -311,6 +331,7 @@ void InspectorShaderProgram::requestRenderPipelineForHighlighting(unsigned canva
          return;
      }
  
 +#if ENABLE(WEBGPU)
-     auto generation = m_renderPipelineHighlightGeneration;
-     m_renderPipelineHighlightRequestGenerations.add(canvasColorAttachmentMask, generation);
-     pipeline->createPipelineForInspectorHighlight(canvasColorAttachmentMask, [protectedThis = Ref { *this }, canvasColorAttachmentMask, generation, completionHandler = WTF::move(completionHandler)](RefPtr<WebGPU::RenderPipeline>&& pipeline) mutable {
+     RefPtr pipeline = renderPipeline();
+     if (!pipeline) {
+         completionHandler();
 @@ -328,6 +349,9 @@ void InspectorShaderProgram::requestRenderPipelineForHighlighting(unsigned canva
          }
          completionHandler();
@@ -4348,7 +4348,7 @@ index 27fe05c6738..68eb8319202 100644
      );
      auto payload = Inspector::Protocol::Canvas::ShaderProgram::create()
 diff --git a/Source/WebCore/inspector/agents/InspectorCanvasAgent.cpp b/Source/WebCore/inspector/agents/InspectorCanvasAgent.cpp
-index 53a7a614033..085b58c918d 100644
+index 53a7a614033..d5483da46f4 100644
 --- a/Source/WebCore/inspector/agents/InspectorCanvasAgent.cpp
 +++ b/Source/WebCore/inspector/agents/InspectorCanvasAgent.cpp
 @@ -173,6 +173,7 @@ void InspectorCanvasAgent::internalEnable()
@@ -4607,7 +4607,18 @@ index 53a7a614033..085b58c918d 100644
  
  void InspectorCanvasAgent::scheduleRecordingCanvasFrame(InspectorCanvas& inspectorCanvas)
  {
-@@ -970,6 +1011,7 @@ InspectorCanvas& InspectorCanvasAgent::bindCanvas(CanvasRenderingContext& contex
+@@ -859,8 +900,10 @@ void InspectorCanvasAgent::scheduleRecordingCanvasFrame(InspectorCanvas& inspect
+ 
+                     if (RefPtr canvasRenderingContext = inspectorCanvas->canvasContext(); canvasRenderingContext && canvasRenderingContext->hasActiveInspectorCanvasCallTracer())
+                         canvasAgent->didFinishRecordingCanvasFrame(*canvasRenderingContext);
++#if ENABLE(WEBGPU)
+                     else if (RefPtr device = inspectorCanvas->deviceContext(); device && device->hasActiveInspectorCanvasCallTracer())
+                         canvasAgent->didFinishRecordingCanvasFrame(*device);
++#endif
+                 }
+ 
+                 canvasAgent->m_recordingCanvasIdentifiers.clear();
+@@ -970,6 +1013,7 @@ InspectorCanvas& InspectorCanvasAgent::bindCanvas(CanvasRenderingContext& contex
      return inspectorCanvas.unsafeGet();
  }
  
@@ -4615,7 +4626,7 @@ index 53a7a614033..085b58c918d 100644
  InspectorCanvas& InspectorCanvasAgent::bindCanvas(GPUDevice& device, bool captureBacktrace)
  {
      auto inspectorCanvas = InspectorCanvas::create(device);
-@@ -979,6 +1021,7 @@ InspectorCanvas& InspectorCanvasAgent::bindCanvas(GPUDevice& device, bool captur
+@@ -979,6 +1023,7 @@ InspectorCanvas& InspectorCanvasAgent::bindCanvas(GPUDevice& device, bool captur
  
      return inspectorCanvas.unsafeGet();
  }
@@ -4623,7 +4634,7 @@ index 53a7a614033..085b58c918d 100644
  
  Ref<Inspector::Protocol::Canvas::Canvas> InspectorCanvasAgent::buildObjectForCanvas(InspectorCanvas& inspectorCanvas, bool captureBacktrace)
  {
-@@ -1048,6 +1091,7 @@ RefPtr<InspectorCanvas> InspectorCanvasAgent::findInspectorCanvas(const CanvasRe
+@@ -1048,6 +1093,7 @@ RefPtr<InspectorCanvas> InspectorCanvasAgent::findInspectorCanvas(const CanvasRe
      return nullptr;
  }
  
@@ -4631,7 +4642,7 @@ index 53a7a614033..085b58c918d 100644
  RefPtr<InspectorCanvas> InspectorCanvasAgent::findInspectorCanvas(const GPUDevice& device)
  {
      for (auto& inspectorCanvas : m_identifierToInspectorCanvas.values()) {
-@@ -1056,6 +1100,7 @@ RefPtr<InspectorCanvas> InspectorCanvasAgent::findInspectorCanvas(const GPUDevic
+@@ -1056,6 +1102,7 @@ RefPtr<InspectorCanvas> InspectorCanvasAgent::findInspectorCanvas(const GPUDevic
      }
      return nullptr;
  }
@@ -4639,7 +4650,7 @@ index 53a7a614033..085b58c918d 100644
  
  void InspectorCanvasAgent::unbindProgram(InspectorShaderProgram& inspectorProgram)
  {
-@@ -1094,6 +1139,7 @@ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(WebGLP
+@@ -1094,6 +1141,7 @@ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(WebGLP
  
  #endif // ENABLE(WEBGL)
  
@@ -4647,7 +4658,7 @@ index 53a7a614033..085b58c918d 100644
  RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPUComputePipeline& pipeline)
  {
      for (auto& inspectorProgram : m_identifierToInspectorProgram.values()) {
-@@ -1102,7 +1148,9 @@ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPUCom
+@@ -1102,7 +1150,9 @@ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPUCom
      }
      return nullptr;
  }
@@ -4657,7 +4668,7 @@ index 53a7a614033..085b58c918d 100644
  RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPURenderPipeline& pipeline)
  {
      for (auto& inspectorProgram : m_identifierToInspectorProgram.values()) {
-@@ -1111,5 +1159,6 @@ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPURen
+@@ -1111,5 +1161,6 @@ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPURen
      }
      return nullptr;
  }
