@@ -3526,6 +3526,17 @@ index d02b86e5870..4c7365aad17 100644
      ImageBitmapRenderingContext or 
      CanvasRenderingContext2D) RenderingContext;
  
+diff --git a/Source/WebCore/dom/EventInterfaces.in b/Source/WebCore/dom/EventInterfaces.in
+index 677f2e8a4fb..a88a38f2f79 100644
+--- a/Source/WebCore/dom/EventInterfaces.in
++++ b/Source/WebCore/dom/EventInterfaces.in
+@@ -110,5 +110,5 @@ XRReferenceSpaceEvent conditional=WEBXR
+ XRSessionEvent conditional=WEBXR
+ NotificationEvent conditional=NOTIFICATION_EVENT
+ ContentVisibilityAutoStateChangeEvent
+-GPUUncapturedErrorEvent
++GPUUncapturedErrorEvent conditional=WEBGPU
+ CanvasPaintEvent
 diff --git a/Source/WebCore/dom/EventTargetFactory.in b/Source/WebCore/dom/EventTargetFactory.in
 index ec7469a0b58..d823788946a 100644
 --- a/Source/WebCore/dom/EventTargetFactory.in
@@ -3956,7 +3967,7 @@ index 2fe6b7c45bf..3528dee5d53 100644
  
      RefPtr<Inspector::Protocol::Recording::InitialState> m_initialState;
 diff --git a/Source/WebCore/inspector/InspectorCanvasArguments.cpp b/Source/WebCore/inspector/InspectorCanvasArguments.cpp
-index f0b9db9b64e..263c2f37e6e 100644
+index f0b9db9b64e..ffc1b0bf146 100644
 --- a/Source/WebCore/inspector/InspectorCanvasArguments.cpp
 +++ b/Source/WebCore/inspector/InspectorCanvasArguments.cpp
 @@ -80,6 +80,8 @@ static Ref<JSON::ArrayOf<JSON::Value>> process(InspectorCanvas& inspectorCanvas,
@@ -3968,7 +3979,25 @@ index f0b9db9b64e..263c2f37e6e 100644
  static Ref<JSON::Object> process(InspectorCanvas& inspectorCanvas, const GPUFragmentState& state)
  {
      Ref object = state.toJSON();
-@@ -389,6 +391,8 @@ auto InspectorCanvasArgumentProcessor<IDLDictionary<GPUShaderModuleDescriptor>>:
+@@ -302,6 +304,8 @@ static Ref<JSON::Object> process(InspectorCanvas& inspectorCanvas, const GPURend
+     return object;
+ }
+ 
++#endif // ENABLE(WEBGPU)
++
+ static std::optional<InspectorCanvasProcessedArgument> processJSON(Ref<JSON::Value>&& valueIndex, RecordingSwizzleType swizzleType = RecordingSwizzleType::JSON)
+ {
+     return { { WTF::move(valueIndex), swizzleType } };
+@@ -319,6 +323,8 @@ auto InspectorCanvasArgumentProcessor<IDLDictionary<CanvasDrawElementImageOption
+     return { { JSON::Value::create(argument.preserveElementGeometry), RecordingSwizzleType::Boolean } };
+ }
+ 
++#if ENABLE(WEBGPU)
++
+ auto InspectorCanvasArgumentProcessor<IDLDictionary<GPUComputePassDescriptor>>::operator()(InspectorCanvas& context, const GPUComputePassDescriptor& argument) -> std::optional<InspectorCanvasProcessedArgument>
+ {
+     return processJSON(context.valueIndexForData(process(context, argument)->toJSONString()), RecordingSwizzleType::GPUComputePassDescriptor);
+@@ -389,6 +395,8 @@ auto InspectorCanvasArgumentProcessor<IDLDictionary<GPUShaderModuleDescriptor>>:
      return processJSON(context.valueIndexForData(process(context, argument)->toJSONString()), RecordingSwizzleType::GPUShaderModuleDescriptor);
  }
  
