@@ -4728,7 +4728,7 @@ index ce1297b7562..f442f5ca3ef 100644
  private:
      bool enabled() const override;
 diff --git a/Source/WebCore/page/FrameConsoleClient.cpp b/Source/WebCore/page/FrameConsoleClient.cpp
-index b7f32f82252..9308ef4c595 100644
+index b7f32f82252..fee19775a01 100644
 --- a/Source/WebCore/page/FrameConsoleClient.cpp
 +++ b/Source/WebCore/page/FrameConsoleClient.cpp
 @@ -56,7 +56,9 @@
@@ -4741,30 +4741,28 @@ index b7f32f82252..9308ef4c595 100644
  #include "JSHTMLCanvasElement.h"
  #include "JSImageBitmap.h"
  #include "JSImageBitmapRenderingContext.h"
-@@ -341,9 +343,10 @@ void FrameConsoleClient::record(JSC::JSGlobalObject* lexicalGlobalObject, Ref<Sc
+@@ -341,8 +343,10 @@ void FrameConsoleClient::record(JSC::JSGlobalObject* lexicalGlobalObject, Ref<Sc
          JSC::VM& vm = lexicalGlobalObject->vm();
          if (RefPtr context = canvasRenderingContext(vm, target))
              InspectorInstrumentation::consoleStartRecordingCanvas(*context, *lexicalGlobalObject, objectArgumentAt(arguments, 1));
 +#if ENABLE(WEBGPU)
          else if (RefPtr device = JSGPUDevice::toWrapped(vm, target))
              InspectorInstrumentation::consoleStartRecordingCanvas(*device, *lexicalGlobalObject, objectArgumentAt(arguments, 1));
--    }
-+#endif    }
++#endif
+     }
  }
  
- void FrameConsoleClient::recordEnd(JSC::JSGlobalObject* lexicalGlobalObject, Ref<ScriptArguments>&& arguments)
-@@ -355,9 +358,10 @@ void FrameConsoleClient::recordEnd(JSC::JSGlobalObject* lexicalGlobalObject, Ref
+@@ -355,8 +359,10 @@ void FrameConsoleClient::recordEnd(JSC::JSGlobalObject* lexicalGlobalObject, Ref
          JSC::VM& vm = lexicalGlobalObject->vm();
          if (RefPtr context = canvasRenderingContext(vm, target))
              InspectorInstrumentation::consoleStopRecordingCanvas(*context);
 +#if ENABLE(WEBGPU)
          else if (RefPtr device = JSGPUDevice::toWrapped(vm, target))
              InspectorInstrumentation::consoleStopRecordingCanvas(*device);
--    }
-+#endif    }
++#endif
+     }
  }
  
- void FrameConsoleClient::screenshot(JSC::JSGlobalObject* lexicalGlobalObject, Ref<ScriptArguments>&& arguments)
 diff --git a/Source/WebCore/page/Navigator.cpp b/Source/WebCore/page/Navigator.cpp
 index 580290f2eb0..a4a67e3745a 100644
 --- a/Source/WebCore/page/Navigator.cpp
@@ -4796,7 +4794,7 @@ index 2bc6da74d65..ab632bb82d5 100644
  };
  }
 diff --git a/Source/WebCore/workers/WorkerConsoleClient.cpp b/Source/WebCore/workers/WorkerConsoleClient.cpp
-index b57e93b9736..b857788c2da 100644
+index b57e93b9736..3281314a734 100644
 --- a/Source/WebCore/workers/WorkerConsoleClient.cpp
 +++ b/Source/WebCore/workers/WorkerConsoleClient.cpp
 @@ -35,7 +35,9 @@
@@ -4809,27 +4807,25 @@ index b57e93b9736..b857788c2da 100644
  #include "JSImageBitmap.h"
  #include "JSImageBitmapRenderingContext.h"
  #include "JSImageData.h"
-@@ -189,9 +191,10 @@ void WorkerConsoleClient::record(JSC::JSGlobalObject* lexicalGlobalObject, Ref<S
+@@ -189,8 +191,10 @@ void WorkerConsoleClient::record(JSC::JSGlobalObject* lexicalGlobalObject, Ref<S
          JSC::VM& vm = lexicalGlobalObject->vm();
          if (RefPtr context = canvasRenderingContext(vm, target))
              InspectorInstrumentation::consoleStartRecordingCanvas(*context, *lexicalGlobalObject, objectArgumentAt(arguments, 1));
 +#if ENABLE(WEBGPU)
          else if (RefPtr device = JSGPUDevice::toWrapped(vm, target))
              InspectorInstrumentation::consoleStartRecordingCanvas(*device, *lexicalGlobalObject, objectArgumentAt(arguments, 1));
--    }
-+#endif    }
++#endif
+     }
  }
  
- void WorkerConsoleClient::recordEnd(JSC::JSGlobalObject* lexicalGlobalObject, Ref<ScriptArguments>&& arguments)
-@@ -203,9 +206,10 @@ void WorkerConsoleClient::recordEnd(JSC::JSGlobalObject* lexicalGlobalObject, Re
+@@ -203,8 +207,10 @@ void WorkerConsoleClient::recordEnd(JSC::JSGlobalObject* lexicalGlobalObject, Re
          JSC::VM& vm = lexicalGlobalObject->vm();
          if (RefPtr context = canvasRenderingContext(vm, target))
              InspectorInstrumentation::consoleStopRecordingCanvas(*context);
 +#if ENABLE(WEBGPU)
          else if (RefPtr device = JSGPUDevice::toWrapped(vm, target))
              InspectorInstrumentation::consoleStopRecordingCanvas(*device);
--    }
-+#endif    }
++#endif
+     }
  }
  
- void WorkerConsoleClient::screenshot(JSC::JSGlobalObject* lexicalGlobalObject, Ref<ScriptArguments>&& arguments)
