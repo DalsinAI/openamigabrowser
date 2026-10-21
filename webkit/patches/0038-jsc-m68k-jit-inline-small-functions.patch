@@ -1,0 +1,399 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 09:10:44 +0000
+Subject: [PATCH] JavaScriptCore: inline small functions in the 68k template
+ JIT
+
+- op_call and op_call_ignore_result: at a site whose call link holds
+  a JavaScript callee, a function of at most 64 bytecode bytes
+  (m68kTemplateJITMaximumInlineSize) whose instructions all have fast
+  code is written into the caller's code. A guard word checks the call
+  link still holds that CodeBlock; it is cleared when the CodeBlock
+  dies (reconcileCaches). The callee runs on the frame a call would
+  give it, with the prologue's stack check; op_ret copies the result
+  and moves cfr back.
+- Anything the fast code does not take goes to a bail stub that
+  finishes the frame (caller frame, return point, metadataTable,
+  CodeBlock, call site) and redispatches at that instruction, which
+  then returns to the call's return point.
+- An inlined function may call: the frame is finished first, and sp
+  and PB are put back at its return. A function that calls nothing is
+  also inlined into an inlined one.
+- op_to_this: fast code for a final object with the cached structure.
+- useM68KInlining (on) turns it off.
+
+Team 3
+---
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 266 +++++++++++++++++-
+ Source/JavaScriptCore/runtime/OptionsList.h   |   2 +
+ 2 files changed, 267 insertions(+), 1 deletion(-)
+
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index 43775de4b3b..b5a3fa035bb 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -79,6 +79,7 @@ extern "C" void jsc_m68k_llint_function_for_call_prologue() __asm__("_llint_func
+ extern "C" void jsc_m68k_llint_function_for_construct_prologue() __asm__("_llint_function_for_construct_prologue");
+ extern "C" void jsc_m68k_llint_function_for_call_arity_check() __asm__("_llint_function_for_call_arity_check");
+ extern "C" void jsc_m68k_llint_function_for_construct_arity_check() __asm__("_llint_function_for_construct_arity_check");
++extern "C" void jsc_m68k_tjit_redispatch() __asm__("_jsc_m68k_tjit_redispatch");
+ 
+ namespace JSC {
+ namespace M68KTemplateJIT {
+@@ -619,6 +620,8 @@ public:
+         if (!ok) {
+             m_hot.bytes.shrink(start);
+             m_hot.fixups.shrink(fixups);
++            while (!m_inlineGuards.isEmpty() && m_inlineGuards.last().first >= fixups)
++                m_inlineGuards.removeLast();
+             slowBranches.clear();
+             floatPath = FloatPath();
+         }
+@@ -900,6 +903,15 @@ private:
+             m_hot.bindBranch(next);
+         }
+         slowUnless(Builder::Always);
++        // Inlined into a caller (inlineCall): no table, and no getter calls,
++        // which would need this function's frame to be a real one.
++        if (m_inline) {
++            for (size_t i : tableMiss)
++                m_slow->append(i);
++            for (size_t i : done)
++                m_hot.bindBranch(i);
++            return;
++        }
+         // Another structure: the table (d1 the structure ID, a0 the object).
+         for (size_t i : tableMiss)
+             m_hot.bindBranch(i);
+@@ -1045,6 +1057,7 @@ public:
+         m_hot.word(0x4fef); m_hot.word(16); // lea 16(sp),sp
+     }
+     unsigned getByIdTableCount() const { return m_tableCount; }
++    const Vector<std::pair<size_t, CodeBlock*>>& inlineGuards() const { return m_inlineGuards; }
+     // Points the table addresses in the code at the tables, which start at
+     // the buffer position tables (a GetByIdTables).
+     void bindGetByIdTables(size_t tables)
+@@ -1416,6 +1429,23 @@ private:
+         return true;
+     }
+ 
++    // op_to_this: as the interpreter, this unchanged when it is a final
++    // object of the structure its cache holds; anything else is the template.
++    bool toThis(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpToThis>();
++        Operand value = operandFor(m_codeBlock, bytecode.m_srcDst);
++        if (!value.valid || value.isConstant)
++            return false;
++        loadCell(value);
++        m_hot.cmpByteImmDisp(FinalObjectType, 0, JSCell::typeInfoTypeOffset());
++        slowUnless(Builder::NotEqual);
++        m_hot.loadDisp(0, JSCell::structureIDOffset(), 1);
++        m_hot.cmpLongAbs(&bytecode.metadata(m_codeBlock).m_cachedStructureID, 1);
++        slowUnless(Builder::NotEqual);
++        return true;
++    }
++
+     // op_ret: the interpreter's handler (doReturn) without the count
+     // towards compiling, which is done. The result goes in r0 (t0: its low
+     // word in d4, its high word in the register file).
+@@ -1491,10 +1521,14 @@ private:
+         m_hot.cmpLongAbs(linkBase + CallLinkInfo::offsetOfCallee(), 0);
+         size_t notMonomorphic = m_hot.branch(Builder::NotEqual);
+ 
++        Vector<size_t, 2> returnPoints;
++        Vector<size_t> inlineDone;
++        if constexpr (!std::is_same_v<Op, OpConstruct>)
++            inlineCall(linkInfo, bytecode.m_argc, frame, dst, offset, returnPoints, inlineDone);
++
+         // The callee's frame: argument count, callee, CodeBlock; this
+         // frame's call site; sp past the callee's CallerFrameAndPC; lr is
+         // the return point (cloopCallJSFunction). d0 has the callee.
+-        Vector<size_t, 2> returnPoints;
+         auto setUpFrame = [&](auto storeCodeBlock) {
+             m_hot.storeFrameImm(bytecode.m_argc, frame + static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot + 4);
+             m_hot.storeFrameImm(offset, static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot); // storePC: CallSiteIndex
+@@ -1590,9 +1624,220 @@ private:
+         }
+         if (intrinsicDone != SIZE_MAX)
+             m_hot.bindBranch(intrinsicDone);
++        for (size_t i : inlineDone)
++            m_hot.bindBranch(i);
+         return true;
+     }
+ 
++    // Small functions inlined (item 6), at a call site whose call link
++    // holds one now: the callee's own fast code, written here, on the frame a
++    // call would give it (cfr moved down to it, the header's argument count
++    // and callee written), with no prologue, no return and no CodeBlock or
++    // return address in the frame. Only instructions whose fast code calls
++    // nothing are allowed, so no garbage collection or exception can come
++    // while the frame is not a real one, and calls, which finish the frame
++    // first; anything the fast code does not take finishes the frame (the
++    // bail stubs) and goes on in the callee's own code or the interpreter at
++    // that instruction, which returns to this call's return point. A guard word, cleared when the callee's
++    // CodeBlock dies (reconcileCaches), checks the call link still holds
++    // that CodeBlock. d0 has the callee. Writes nothing when the callee does
++    // not qualify.
++    static bool inlinable(OpcodeID opcode)
++    {
++        switch (opcode) {
++        case op_enter: case op_ret: case op_mov: case op_inc: case op_dec:
++        case op_add: case op_sub: case op_mul: case op_bitand: case op_bitor: case op_bitxor:
++        case op_jmp: case op_jless: case op_jlesseq: case op_jgreater: case op_jgreatereq:
++        case op_jnless: case op_jnlesseq: case op_jngreater: case op_jngreatereq:
++        case op_stricteq: case op_nstricteq: case op_jstricteq: case op_jnstricteq:
++        case op_jtrue: case op_jfalse: case op_eq_null: case op_neq_null: case op_jeq_null: case op_jneq_null:
++        case op_is_undefined_or_null: case op_jeq_ptr: case op_jneq_ptr:
++        case op_less: case op_lesseq: case op_greater: case op_greatereq: case op_eq: case op_neq: case op_jeq: case op_jneq:
++        case op_resolve_scope: case op_get_from_scope: case op_put_to_scope:
++        case op_get_by_id: case op_put_by_id: case op_get_by_val: case op_put_by_val: case op_get_length:
++        case op_check_traps: case op_to_this: case op_call: case op_call_ignore_result:
++            return true;
++        default:
++            return false;
++        }
++    }
++    void inlineCall(CallLinkInfo& linkInfo, unsigned argc, int frame, const Operand& dst, unsigned callOffset, Vector<size_t, 2>& returnPoints, Vector<size_t>& done)
++    {
++        if (!Options::useM68KInlining())
++            return;
++        auto* linkBase = reinterpret_cast<uint8_t*>(&linkInfo);
++        CodeBlock* callee = *reinterpret_cast<CodeBlock**>(linkBase + CallLinkInfo::offsetOfCodeBlock());
++        if (!callee || callee == m_codeBlock || callee->codeType() != FunctionCode || callee->specializationKind() != CodeSpecializationKind::CodeForCall)
++            return;
++        const auto& instructions = callee->instructions();
++        if (argc < callee->numParameters() || instructions.size() > Options::m68kTemplateJITMaximumInlineSize())
++            return;
++        for (const auto& instruction : instructions) {
++            if (!inlinable(instruction->opcodeID()))
++                return;
++        }
++        if (instructions.at(0)->opcodeID() != op_enter)
++            return;
++        bool calls = false;
++        for (const auto& instruction : instructions) {
++            OpcodeID opcode = instruction->opcodeID();
++            calls |= opcode == op_call || opcode == op_call_ignore_result;
++        }
++        // In an inlined callee, only functions that call nothing.
++        if (m_inline && calls)
++            return;
++        constexpr int slot = sizeof(Register);
++        int calleeBottom = -(static_cast<int>(callee->numCalleeLocals()) * slot + static_cast<int>(maxFrameExtentForSlowPathCall));
++        if (frame + calleeBottom < -32768 || -frame > 32767)
++            return;
++        uint32_t* sp = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotSP]);
++        void** limit = callee->vm().addressOfSoftStackLimit() - 1;
++        auto address = [](const void* pointer) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pointer)); };
++
++        size_t start = m_hot.size();
++        size_t fixupStart = m_hot.fixups.size();
++        size_t returnPointCount = returnPoints.size();
++        size_t doneCount = done.size();
++        auto abandon = [&] {
++            m_hot.bytes.shrink(start);
++            m_hot.fixups.shrink(fixupStart);
++            returnPoints.shrink(returnPointCount);
++            done.shrink(doneCount);
++        };
++
++        // The guard: the call link's CodeBlock is the one inlined here.
++        m_hot.moveLongAbs(linkBase + CallLinkInfo::offsetOfCodeBlock(), 1);
++        m_hot.word(0xb2b9); // cmp.l (guard).l,d1
++        size_t guard = m_hot.codeAddress();
++        size_t notInlined = m_hot.branch(Builder::NotEqual);
++        m_hot.storeFrameImm(argc, frame + static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot + 4);
++        m_hot.clrFrame(frame + static_cast<int>(CallFrameSlot::callee) * slot);
++        m_hot.storeFrame(0, frame + static_cast<int>(CallFrameSlot::callee) * slot + 4);
++        m_hot.leaFrame(frame, 5);
++        // The prologue's stack check; a frame that would not fit takes the call.
++        m_hot.leaFrame(calleeBottom, 0);
++        m_hot.word(0xb1f9); m_hot.longWord(address(limit)); // cmpa.l (limit).l,a0
++        size_t overflow = m_hot.branch(Builder::CarrySet);
++
++        FastPaths body(callee, m_hot);
++        body.m_inline = true;
++        Vector<size_t> instructionStart;
++        instructionStart.fill(SIZE_MAX, instructions.size());
++        struct Slow {
++            const JSInstruction* instruction;
++            unsigned offset;
++            Vector<size_t> branches;
++            FloatPath floatPath;
++        };
++        Vector<Slow> slows;
++        // The frame the callee's prologue would have made: caller frame,
++        // return address (this call's return point), the caller's
++        // metadataTable, CodeBlock, and this frame's call site. A call from
++        // the callee needs it, as does a bail.
++        auto finishFrame = [&] {
++            m_hot.leaFrame(-frame, 0);
++            m_hot.word(0x2a88); // move.l a0,(a5)
++            returnPoints.append(m_hot.moveaCodeAddress(0));
++            m_hot.storeAddressFrame(0, sizeof(void*));
++            m_hot.word(0x2b4c); m_hot.word(0xfffc); // move.l a4,-4(a5)
++            m_hot.clrFrame(static_cast<int>(CallFrameSlot::codeBlock) * slot);
++            m_hot.storeFrameImm(address(callee), static_cast<int>(CallFrameSlot::codeBlock) * slot + 4);
++            m_hot.storeFrameImm(callOffset, -frame + static_cast<int>(CallFrameSlot::argumentCountIncludingThis) * slot); // storePC: CallSiteIndex
++        };
++        int frameSize = static_cast<int>(m_codeBlock->numCalleeLocals()) * slot + static_cast<int>(maxFrameExtentForSlowPathCall);
++        for (const auto& instruction : instructions) {
++            const JSInstruction* ptr = instruction.ptr();
++            unsigned offset = instruction.offset();
++            instructionStart[offset] = m_hot.size();
++            if (ptr->opcodeID() == op_call || ptr->opcodeID() == op_call_ignore_result)
++                finishFrame();
++            if (ptr->opcodeID() == op_ret) {
++                // A call from the callee left sp at the callee's frame and PB
++                // at its instructions: both back to this frame's.
++                if (calls) {
++                    m_hot.leaFrame(-frame - frameSize, 0);
++                    m_hot.storeAddressAbs(0, sp + 1);
++                    m_hot.moveaImm(address(m_codeBlock->instructionsRawPointer()), 3);
++                }
++                // The result into the caller's dst, and cfr back.
++                auto bytecode = ptr->as<OpRet>();
++                if (bytecode.m_value.isConstant()) {
++                    uint64_t bits = JSValue::encode(callee->getConstant(bytecode.m_value));
++                    m_hot.leaFrame(-frame, 5);
++                    if (dst.valid) {
++                        m_hot.storeFrameImm(static_cast<uint32_t>(bits >> 32), dst.hi);
++                        m_hot.storeFrameImm(static_cast<uint32_t>(bits), dst.lo);
++                    }
++                } else {
++                    Operand value = operandFor(callee, bytecode.m_value);
++                    if (!value.valid)
++                        return abandon();
++                    if (dst.valid) {
++                        m_hot.loadFrame(value.hi, 0);
++                        m_hot.loadFrame(value.lo, 1);
++                    }
++                    m_hot.leaFrame(-frame, 5);
++                    if (dst.valid) {
++                        m_hot.storeFrame(0, dst.hi);
++                        m_hot.storeFrame(1, dst.lo);
++                    }
++                }
++                done.append(m_hot.branch(Builder::Always));
++                continue;
++            }
++            Vector<size_t> branches;
++            FloatPath floatPath;
++            if (!body.emit(ptr, offset, branches, floatPath))
++                return abandon();
++            if (!branches.isEmpty() || floatPath.needed)
++                slows.append({ ptr, offset, WTF::move(branches), WTF::move(floatPath) });
++        }
++
++        // Out of line: the float paths, then a bail stub per instruction
++        // that has a slow path. A stub makes the frame the one the callee's
++        // prologue would have made (caller frame, return address, the
++        // caller's metadataTable, CodeBlock; this frame's call site; sp; the
++        // callee's PB, metadataTable and t1) and redispatches at its
++        // instruction.
++        for (auto& slow : slows) {
++            unsigned next = slow.offset + slow.instruction->size();
++            if (slow.floatPath.needed) {
++                for (size_t i : slow.floatPath.branches)
++                    m_hot.fixups[i].targetBuffer = m_hot.size();
++                body.emitFloatPath(slow.floatPath, next, slow.branches);
++            }
++            if (slow.branches.isEmpty())
++                continue;
++            for (size_t i : slow.branches)
++                m_hot.fixups[i].targetBuffer = m_hot.size();
++            finishFrame();
++            m_hot.leaFrame(calleeBottom, 0);
++            m_hot.storeAddressAbs(0, sp + 1);
++            m_hot.clrAbs(sp);
++            m_hot.moveaImm(address(callee->instructionsRawPointer()), 3);
++            m_hot.moveaImm(address(callee->metadataTable()), 4);
++            m_hot.moveImm(address(callee), 5);
++            m_hot.moveaImm(slow.offset, 2);
++            m_hot.word(0x4ef9); m_hot.longWord(address(reinterpret_cast<const void*>(jsc_m68k_tjit_redispatch))); // jmp redispatch
++        }
++        m_hot.bindBranch(overflow);
++        m_hot.leaFrame(-frame, 5);
++        m_hot.bindBranch(notInlined);
++
++        // Jumps between the callee's instructions go to their inlined code.
++        for (size_t i = fixupStart; i < m_hot.fixups.size(); ++i) {
++            auto& fixup = m_hot.fixups[i];
++            if (!fixup.toBytecode)
++                continue;
++            if (fixup.targetBytecode >= instructionStart.size() || instructionStart[fixup.targetBytecode] == SIZE_MAX)
++                return abandon();
++            fixup.targetBuffer = instructionStart[fixup.targetBytecode];
++            fixup.toBytecode = false;
++        }
++        m_inlineGuards.appendVector(body.m_inlineGuards);
++        m_inlineGuards.append({ guard, callee });
++    }
++
+     // Built-in functions done in line (item 3), at a call site whose call
+     // link holds one now: String.prototype.charCodeAt on a flat string and
+     // an int32 index in range. The callee (in d0, kept) is checked by its
+@@ -2329,6 +2574,8 @@ private:
+         switch (instruction->opcodeID()) {
+         case op_enter:
+             return enter();
++        case op_to_this:
++            return toThis(instruction);
+         case op_check_traps:
+             // A trap (a debugger, a watchdog, a termination) is the template's.
+             m_hot.loadAbsoluteMasked(m_codeBlock->vm().traps().trapBitsAddress(), VMTraps::AsyncEvents);
+@@ -2496,6 +2743,10 @@ private:
+     Vector<size_t>* m_tableMiss { nullptr };
+     unsigned m_tableCount { 0 };
+     Vector<std::tuple<size_t, unsigned, size_t>> m_tableFixups;
++    bool m_inline { false }; // this CodeBlock's code inlined into a caller's (inlineCall)
++    // The inlined callees' guard words (inlineCall): the fixups of the
++    // code addresses that read them, and the CodeBlocks they hold.
++    Vector<std::pair<size_t, CodeBlock*>> m_inlineGuards;
+ };
+ 
+ // Register caching (stage J6). A loop's body gets a second copy that keeps
+@@ -3502,6 +3753,12 @@ bool compile(CodeBlock* codeBlock)
+     code.bytes.grow(code.size() + tableCount * sizeof(GetByIdTable));
+     zeroSpan(code.bytes.mutableSpan().subspan(tables + 4));
+     fastPaths.bindGetByIdTables(tables);
++    // Then the inlined callees' guard words (FastPaths::inlineCall).
++    code.longWord(fastPaths.inlineGuards().size());
++    for (auto [fixup, callee] : fastPaths.inlineGuards()) {
++        code.fixups[fixup].targetBuffer = code.size();
++        code.longWord(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(callee)));
++    }
+ 
+     size_t codeSize = code.size();
+     uint8_t* memory = allocateCode(codeSize);
+@@ -3571,6 +3828,13 @@ void reconcileCaches(CodeBlock* codeBlock, VM& vm)
+             entry = { };
+         }
+     }
++    // An inlined callee whose CodeBlock died: its guard word becomes 1, which
++    // no call link holds (not 0, which a link to a native function holds).
++    auto* guards = reinterpret_cast<uint32_t*>(&tables->tables[tables->count]);
++    for (unsigned i = 0; i < guards[0]; ++i) {
++        if (guards[i + 1] != 1 && !vm.heap.isMarked(reinterpret_cast<CodeBlock*>(guards[i + 1])))
++            guards[i + 1] = 1;
++    }
+ }
+ 
+ void release(CodeBlock* codeBlock)
+diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
+index 8f1e2be040f..caaf2f3cbfb 100644
+--- a/Source/JavaScriptCore/runtime/OptionsList.h
++++ b/Source/JavaScriptCore/runtime/OptionsList.h
+@@ -658,6 +658,8 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, useM68KFastPaths, true, Normal, "68k only: the template JIT writes its own 32-bit code for common integer operations (J3)."_s) \
+     v(Bool, useM68KPropertyFastPaths, true, Normal, "68k only: the template JIT writes its own code for property reads and writes its inline cache has settled (J4)."_s) \
+     v(Bool, useM68KRegisterCache, true, Normal, "68k only: the template JIT keeps loops' int32 variables in data registers (J6)."_s) \
++    v(Bool, useM68KInlining, true, Normal, "68k only: the template JIT writes small functions into their callers' code at call sites that always call them."_s) \
++    v(Unsigned, m68kTemplateJITMaximumInlineSize, 64, Normal, "68k only: largest function, in bytecode bytes, the template JIT inlines."_s) \
+     v(Unsigned, m68kTemplateJITMaximumBytecodeSize, 4096, Normal, "68k only: largest CodeBlock, in bytecode bytes, the template JIT compiles."_s) \
+     v(Bool, useBaselineJITCodeSharing, jitEnabledByDefault(), Normal, nullptr) \
+     v(Bool, libpasScavengeContinuously, false, Normal, nullptr) \
+-- 
+2.43.0
+

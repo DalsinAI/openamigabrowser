@@ -6,6 +6,38 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 21 Oct 2026, small functions inlined (patch 0038)
+
+A call site whose call link holds a JavaScript function of at most 64
+bytecode bytes, all of whose instructions have fast code, gets that
+function's code written in line, behind a guard on the call link's
+CodeBlock. The inlined function may itself call (its frame is finished
+first), and a function that calls nothing is inlined into an inlined
+one. Anything its fast code does not take finishes the frame and goes on
+in the function's own code. `lab/correct13.js` (arithmetic, mixed types,
+overflow, methods, primitive `this`, exceptions and stack traces through
+inlined frames, getters, a callee replaced and collected, argument
+counts, globals, writes, deep recursion and stack overflow, `.call`,
+nested calls, garbage collection during an inner call) prints what node
+prints with the JIT on and off, also with
+`JSC_m68kTemplateJITMaximumInlineSize=600`, as do correct.js-correct12.js.
+
+Counts with start-up (5.5 M) taken off:
+
+| test | 0036 (M) | 0038 (M) | 0038 vs 0036 |
+|---|---:|---:|---:|
+| calls (small leaf functions) | 12.0 | 8.5 | 1.42x |
+| nested (`f` calls `g`, 20000 times) | 5.0 | 3.8 | 1.31x |
+| page-lexer    | 18.6 | 18.3 | 1.02x |
+| page-vdom     | 61.6 | 61.3 | 1.00x |
+| page-events, page-json, page-template, the other micro tests | | | 1.00x |
+
+The page tests gain little: most of their call sites call natives or
+several functions, and the functions they call are larger than 64 bytes
+and use instructions the inliner does not take (arguments objects, new
+objects, scopes, loops, to_object, to_string). Getters reached through
+get_by_id are not inlined; the page tests barely use them.
+
 ## 21 Oct 2026, property shape tables, getters, strings, loop doubles (patch 0036)
 
 get_by_id sites keep a table of the last four structures they saw, with
