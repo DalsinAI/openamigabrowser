@@ -49,8 +49,10 @@
 #                   when ninja is installed, otherwise Unix Makefiles; an
 #                   existing folder keeps the generator it was made with)
 #   OB_OPTIMIZE     "size" (-Os, CMake's MinSizeRel), "js" (-Os, but -O2
-#                   for JavaScriptCore and its interpreter) or "speed" (-O2
-#                   throughout: Release with -O2 rather than CMake's -O3)
+#                   for JavaScriptCore and its interpreter), "layout" (-Os,
+#                   but -O2 for WebCore's css, dom, layout, rendering and
+#                   style folders) or "speed" (-O2 throughout: Release with
+#                   -O2 rather than CMake's -O3)
 #                   for a new build folder; an existing folder keeps its
 #                   choice. Use a separate WEBKIT_BUILD to compare them.
 #                                                               (default size)
@@ -288,9 +290,11 @@ configure_engine() {
         size) set -- "$@" -DCMAKE_BUILD_TYPE=MinSizeRel ;;
         js) set -- "$@" -DCMAKE_BUILD_TYPE=MinSizeRel \
             -DCMAKE_PROJECT_INCLUDE="$ROOT/scripts/cmake/ob-optimize-js.cmake" ;;
+        layout) set -- "$@" -DCMAKE_BUILD_TYPE=MinSizeRel \
+            -DCMAKE_PROJECT_INCLUDE="$ROOT/scripts/cmake/ob-optimize-layout.cmake" ;;
         speed) set -- "$@" -DCMAKE_BUILD_TYPE=Release \
             "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG" "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG" ;;
-        *) echo "OB_OPTIMIZE must be size, js or speed" >&2; exit 2 ;;
+        *) echo "OB_OPTIMIZE must be size, js, layout or speed" >&2; exit 2 ;;
     esac
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "$(generator)" "$@" \
       -DPORT=Amiga \
