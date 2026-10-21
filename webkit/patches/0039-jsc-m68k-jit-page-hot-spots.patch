@@ -1,0 +1,338 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 09:49:37 +0000
+Subject: [PATCH] JavaScriptCore: page hot spots in the 68k template JIT
+
+- in_by_val: `index in array` (the array builtins' hole checks) is true
+  for an int32 index below the length of an Int32Shape or
+  ContiguousShape array whose element is not a hole.
+- get_length and get_by_val on a DirectArguments object (arguments.length
+  and arguments[i]) while nothing on it is overridden.
+- enumerator_next: for-in's next name while the object keeps the
+  enumerator's structure, also on the first step (no indexed
+  properties) and the last (the sentinel).
+- stricteq and friends: two flat strings with the same StringImpl are
+  equal, and two different atoms are not.
+- CodeBlock::bytecodeOffset on 68k: the start from the CodeBlock's raw
+  instructions pointer, so each slow path's setCurrentVPC calls into
+  UnlinkedCodeBlock once instead of three times.
+
+Team 3
+---
+ Source/JavaScriptCore/bytecode/CodeBlock.h    |   9 +
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 186 +++++++++++++++++-
+ 2 files changed, 189 insertions(+), 6 deletions(-)
+
+diff --git a/Source/JavaScriptCore/bytecode/CodeBlock.h b/Source/JavaScriptCore/bytecode/CodeBlock.h
+index 80a38217d2c..00da6633dc1 100644
+--- a/Source/JavaScriptCore/bytecode/CodeBlock.h
++++ b/Source/JavaScriptCore/bytecode/CodeBlock.h
+@@ -321,10 +321,19 @@ public:
+ 
+     inline unsigned bytecodeOffset(const JSInstruction* returnAddress)
+     {
++#if CPU(M68K)
++        // Every slow path sets the call site from its PC: the start from this
++        // CodeBlock, and one call for the size instead of three.
++        const auto* instructionsBegin = static_cast<const JSInstruction*>(m_instructionsRawPointer);
++        uintptr_t offset = reinterpret_cast<uintptr_t>(returnAddress) - reinterpret_cast<uintptr_t>(instructionsBegin);
++        RELEASE_ASSERT(offset < instructions().size());
++        return offset;
++#else
+         const auto* instructionsBegin = instructions().at(0).ptr();
+         const auto* instructionsEnd = reinterpret_cast<const JSInstruction*>(reinterpret_cast<uintptr_t>(instructionsBegin) + instructions().size());
+         RELEASE_ASSERT(returnAddress >= instructionsBegin && returnAddress < instructionsEnd);
+         return returnAddress - instructionsBegin;
++#endif
+     }
+ 
+     inline BytecodeIndex bytecodeIndex(const JSInstruction* returnAddress)
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index b5a3fa035bb..3d4fd8a7026 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -30,6 +30,7 @@
+ #include "CallLinkInfo.h"
+ #include "Butterfly.h"
+ #include "CodeBlock.h"
++#include "DirectArguments.h"
+ #include "IndexingType.h"
+ #include "GetByIdMetadata.h"
+ #include "JSCJSValueInlines.h"
+@@ -46,6 +47,7 @@
+ #include "FunctionExecutable.h"
+ #include "JSFunction.h"
+ #include "JSLexicalEnvironment.h"
++#include "JSPropertyNameEnumerator.h"
+ #include "LLIntData.h"
+ #include "PolymorphicCallStubRoutine.h"
+ #include "Watchpoint.h"
+@@ -1185,12 +1187,122 @@ private:
+         m_hot.copyIndexedToFrame(0, 1, 4, dst.lo);
+         return true;
+     }
++    // `index in array` (the array builtins' hole checks): true for an int32
++    // index below the length of an Int32Shape or ContiguousShape array where
++    // the element is not a hole; anything else is the template.
++    bool inByVal(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpInByVal>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        Operand base = operandFor(m_codeBlock, bytecode.m_base);
++        Operand index = operandFor(m_codeBlock, bytecode.m_property);
++        if (!dst.valid || dst.isConstant || !base.valid || base.isConstant || !index.valid)
++            return false;
++        loadCell(base);
++        checkInt32(index);
++        load(index, 1);
++        loadShape(false);
++        m_hot.cmpByteImm(Int32Shape, 0);
++        size_t shapeOk = m_hot.branchShort(Builder::Equal);
++        m_hot.cmpByteImm(ContiguousShape, 0);
++        slowUnless(Builder::NotEqual);
++        m_hot.bindShort(shapeOk);
++        m_hot.moveaDisp(0, JSObject::butterflyOffset(), 0);
++        m_hot.cmpDisp(0, Butterfly::offsetOfPublicLength(), 1);
++        slowUnless(Builder::CarryClear); // index >= length, unsigned (negative too)
++        m_hot.lsl3(1);
++        // A hole (the empty value, all zero) is the template's.
++        m_hot.loadIndexed(0, 1, 0, 0);
++        size_t notHole = m_hot.branchShort(Builder::NotEqual);
++        m_hot.loadIndexed(0, 1, 4, 0);
++        slowUnless(Builder::Equal);
++        m_hot.bindShort(notHole);
++        m_hot.moveq(static_cast<int8_t>(JSValue::encode(jsBoolean(true))), 0);
++        m_hot.clrFrame(dst.hi);
++        m_hot.storeFrame(0, dst.lo);
++        return true;
++    }
++
++    // for-in's next name (the interpreter's OwnStructureMode case), also on
++    // the first step, for an object with no indexed properties, and on the
++    // last, past the names: while the object has the enumerator's
++    // structure. Anything else is the template.
++    bool enumeratorNext(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpEnumeratorNext>();
++        Operand name = operandFor(m_codeBlock, bytecode.m_propertyName);
++        Operand mode = operandFor(m_codeBlock, bytecode.m_mode);
++        Operand index = operandFor(m_codeBlock, bytecode.m_index);
++        Operand base = operandFor(m_codeBlock, bytecode.m_base);
++        Operand enumerator = operandFor(m_codeBlock, bytecode.m_enumerator);
++        for (const Operand* op : { &name, &mode, &index, &base, &enumerator }) {
++            if (!op->valid || op->isConstant)
++                return false;
++        }
++        using Enumerator = JSPropertyNameEnumerator;
++        loadCell(base);
++        m_hot.loadFrame(enumerator.lo, 1);
++        m_hot.moveaFromData(1, 1);
++        m_hot.loadDisp(0, JSCell::structureIDOffset(), 0);
++        m_hot.cmpDisp(1, Enumerator::cachedStructureIDOffset(), 0);
++        slowUnless(Builder::NotEqual);
++        // d1 the next index; the first step starts at the structure's names.
++        m_hot.loadFrame(index.lo, 1);
++        m_hot.word(0x5281); // addq.l #1,d1
++        m_hot.loadFrame(mode.lo, 0);
++        m_hot.cmpImm(Enumerator::OwnStructureMode, 0);
++        size_t own = m_hot.branchShort(Builder::Equal);
++        static_assert(!Enumerator::InitMode);
++        m_hot.tst(0);
++        slowUnless(Builder::NotEqual);
++        m_hot.loadDisp(1, Enumerator::indexedLengthOffset(), 0);
++        slowUnless(Builder::NotEqual);
++        m_hot.loadDisp(1, Enumerator::endGenericPropertyIndexOffset(), 0);
++        slowUnless(Builder::Equal);
++        m_hot.moveq(0, 1);
++        m_hot.bindShort(own);
++        m_hot.cmpDisp(1, Enumerator::endStructurePropertyIndexOffset(), 1);
++        size_t inStructure = m_hot.branchShort(Builder::CarrySet); // index < end, unsigned
++        // Past all the names (none from the prototype chain): the sentinel.
++        m_hot.cmpDisp(1, Enumerator::endGenericPropertyIndexOffset(), 1);
++        slowUnless(Builder::CarrySet);
++        m_hot.moveImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(m_codeBlock->vm().smallStrings.sentinelString())), 0);
++        size_t store = m_hot.branchShort(Builder::Always);
++        m_hot.bindShort(inStructure);
++        m_hot.moveaDisp(1, Enumerator::cachedPropertyNamesVectorOffset(), 1);
++        m_hot.word(0x2031); m_hot.word(Builder::index(1, 0) | 0x0400); // move.l 0(a1,d1.l*4),d0
++        m_hot.bindShort(store);
++        m_hot.clrFrame(name.hi);
++        m_hot.storeFrame(0, name.lo);
++        m_hot.storeFrameImm(int32Tag, index.hi);
++        m_hot.storeFrame(1, index.lo);
++        m_hot.storeFrameImm(int32Tag, mode.hi);
++        m_hot.storeFrameImm(Enumerator::OwnStructureMode, mode.lo);
++        return true;
++    }
++
+     // get_by_val's string (no indexing shape; a0 the cell, d0 its shape,
+     // d1 the index): the character's string, for codes below 256.
+     void stringCharacterValue(const Operand& dst)
+     {
+         m_hot.tstByte(0);
+         slowUnless(Builder::NotEqual);
++        // Or an arguments object's element, below its length.
++        m_hot.cmpByteImmDisp(DirectArgumentsType, 0, JSCell::typeInfoTypeOffset());
++        size_t notArguments = m_hot.branchShort(Builder::NotEqual);
++        int storage = static_cast<int>(DirectArguments::storageOffset());
++        if (storage + 4 > 127)
++            slowUnless(Builder::Always);
++        else {
++            directArguments();
++            m_hot.cmpDisp(0, DirectArguments::offsetOfLength(), 1);
++            slowUnless(Builder::CarryClear); // index >= length, unsigned (negative too)
++            m_hot.lsl3(1);
++            m_hot.copyIndexedToFrame(0, 1, storage, dst.hi);
++            m_hot.copyIndexedToFrame(0, 1, storage + 4, dst.lo);
++        }
++        size_t done = m_hot.branch(Builder::Always);
++        m_hot.bindShort(notArguments);
+         m_hot.cmpByteImmDisp(StringType, 0, JSCell::typeInfoTypeOffset());
+         slowUnless(Builder::NotEqual);
+         stringCharacter([&](Builder::Condition cc) { slowUnless(cc); });
+@@ -1202,6 +1314,7 @@ private:
+         slowUnless(Builder::Equal);
+         m_hot.clrFrame(dst.hi);
+         m_hot.storeFrame(0, dst.lo);
++        m_hot.bindBranch(done);
+     }
+ 
+     // As getByVal, in bounds only (the template grows arrays), and not to
+@@ -1285,15 +1398,31 @@ private:
+         m_hot.storeFrame(0, dst.lo);
+         return true;
+     }
+-    // get_length's string (a0 the cell).
++    // get_length's string, or arguments object while nothing on it was
++    // overridden (a0 the cell).
+     void stringLengthValue(const Operand& dst)
+     {
+         m_hot.cmpByteImmDisp(StringType, 0, JSCell::typeInfoTypeOffset());
+-        slowUnless(Builder::NotEqual);
++        size_t notString = m_hot.branchShort(Builder::NotEqual);
+         stringLength();
++        size_t done = m_hot.branchShort(Builder::Always);
++        m_hot.bindShort(notString);
++        directArguments();
++        m_hot.loadDisp(0, DirectArguments::offsetOfLength(), 0);
++        m_hot.bindShort(done);
+         m_hot.storeFrameImm(int32Tag, dst.hi);
+         m_hot.storeFrame(0, dst.lo);
+     }
++    // a0 a DirectArguments whose length, callee and elements are its own
++    // (overrodeThings() false), or the slow path. Uses d0.
++    void directArguments()
++    {
++        static_assert(sizeof(CagedBarrierPtr<Gigacage::Primitive, bool>) == sizeof(uint32_t)); // m_mappedArguments
++        m_hot.cmpByteImmDisp(DirectArgumentsType, 0, JSCell::typeInfoTypeOffset());
++        slowUnless(Builder::NotEqual);
++        m_hot.loadDisp(0, DirectArguments::offsetOfMappedArguments(), 0);
++        slowUnless(Builder::NotEqual);
++    }
+ 
+     bool putById(const JSInstruction* instruction)
+     {
+@@ -1654,7 +1783,7 @@ private:
+         case op_is_undefined_or_null: case op_jeq_ptr: case op_jneq_ptr:
+         case op_less: case op_lesseq: case op_greater: case op_greatereq: case op_eq: case op_neq: case op_jeq: case op_jneq:
+         case op_resolve_scope: case op_get_from_scope: case op_put_to_scope:
+-        case op_get_by_id: case op_put_by_id: case op_get_by_val: case op_put_by_val: case op_get_length:
++        case op_get_by_id: case op_put_by_id: case op_get_by_val: case op_put_by_val: case op_in_by_val: case op_get_length:
+         case op_check_traps: case op_to_this: case op_call: case op_call_ignore_result:
+             return true;
+         default:
+@@ -1998,14 +2127,40 @@ private:
+         branch(Builder::Equal, equal);
+         m_hot.btst1(0);
+         branch(Builder::NotEqual, notEqual);
++        // Two strings: flat ones with the same StringImpl are equal, and
++        // two different atoms are not; anything else is the slow path's.
++        static_assert(StringImpl::flagIsAtom() < 256);
++        constexpr unsigned atomBit = std::countr_zero(StringImpl::flagIsAtom());
++        static_assert(JSString::isRopeInPointer == 1);
++        auto flatString = [&](unsigned dn) {
++            m_hot.cmpByteImmDisp(StringType, 0, JSCell::typeInfoTypeOffset());
++            slowUnless(Builder::NotEqual);
++            m_hot.loadDisp(0, JSString::offsetOfValue(), dn);
++            m_hot.btstImm(0, dn);
++            slowUnless(Builder::NotEqual);
++        };
++        auto atom = [&](unsigned dn) {
++            m_hot.moveaFromData(dn, 0);
++            m_hot.btstImmDisp(atomBit, 0, StringImpl::flagsOffset() + 3);
++            slowUnless(Builder::Equal);
++        };
+         if (rhs.isConstant) {
+-            if (!rhs.constant.isCell() || rhs.constant.asCell()->type() > LastValueCompareCellType) {
++            JSCell* cell = rhs.constant.isCell() ? rhs.constant.asCell() : nullptr;
++            if (!cell || cell->type() > LastValueCompareCellType) {
+                 branch(Builder::Always, notEqual);
+             } else {
+                 m_hot.moveaFromData(0, 0);
+                 m_hot.cmpByteImmDisp(LastValueCompareCellType, 0, JSCell::typeInfoTypeOffset());
+                 branch(Builder::Higher, notEqual);
+-                slowUnless(Builder::Always);
++                auto* string = cell->type() == StringType ? static_cast<JSString*>(cell) : nullptr;
++                if (string && !string->isRope() && string->tryGetValueImpl()->isAtom()) {
++                    flatString(0);
++                    m_hot.cmpImm(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(string->tryGetValueImpl())), 0);
++                    branch(Builder::Equal, equal);
++                    atom(0);
++                    branch(Builder::Always, notEqual);
++                } else
++                    slowUnless(Builder::Always);
+             }
+         } else {
+             m_hot.loadFrame(rhs.lo, 1);
+@@ -2016,7 +2171,14 @@ private:
+             branch(Builder::Higher, notEqual);
+             m_hot.moveaFromData(1, 0);
+             m_hot.cmpByteImmDisp(LastValueCompareCellType, 0, JSCell::typeInfoTypeOffset());
+-            slowUnless(Builder::LowerSame);
++            branch(Builder::Higher, notEqual);
++            flatString(1);
++            m_hot.moveaFromData(0, 0);
++            flatString(0);
++            m_hot.word(0xb280); // cmp.l d0,d1
++            branch(Builder::Equal, equal);
++            atom(0);
++            atom(1);
+             branch(Builder::Always, notEqual);
+         }
+         // lhs is an int32: equal to an int32 with the same low word only.
+@@ -2726,6 +2888,10 @@ private:
+             return Options::useM68KPropertyFastPaths() && putById(instruction);
+         case op_get_by_val:
+             return Options::useM68KPropertyFastPaths() && getByVal(instruction);
++        case op_in_by_val:
++            return Options::useM68KPropertyFastPaths() && inByVal(instruction);
++        case op_enumerator_next:
++            return Options::useM68KPropertyFastPaths() && enumeratorNext(instruction);
+         case op_put_by_val:
+             return Options::useM68KPropertyFastPaths() && putByVal(instruction);
+         case op_get_length:
+@@ -2951,6 +3117,13 @@ private:
+             add(bytecode.m_property);
+             return result(Options::useM68KPropertyFastPaths() && !bytecode.m_base.isConstant() && !bytecode.m_dst.isConstant());
+         }
++        case op_in_by_val: {
++            auto bytecode = instruction->as<OpInByVal>();
++            cell(bytecode.m_dst);
++            cell(bytecode.m_base);
++            add(bytecode.m_property);
++            return result(Options::useM68KPropertyFastPaths() && !bytecode.m_base.isConstant() && !bytecode.m_dst.isConstant());
++        }
+         case op_put_by_val: {
+             auto bytecode = instruction->as<OpPutByVal>();
+             cell(bytecode.m_base);
+@@ -3558,6 +3731,7 @@ private:
+         case op_put_by_id:
+         case op_get_by_val:
+         case op_put_by_val:
++        case op_in_by_val:
+         case op_get_length: {
+             Vector<size_t> branches;
+             FloatPath floatPath;
+-- 
+2.43.0
+

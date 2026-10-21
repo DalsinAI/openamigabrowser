@@ -217,6 +217,11 @@ The patches, in order:
   on the CodeBlock; the inlined function may call, and anything its fast
   code does not take finishes the frame and goes on in its own code.
   op_to_this gets fast code. `useM68KInlining` turns it off.
+- `0039-jsc-m68k-jit-page-hot-spots.patch`: fast code for `index in array`,
+  `arguments.length` and `arguments[i]`, for-in's next name, and `===` on
+  atom strings; `CodeBlock::bytecodeOffset` takes the CodeBlock's raw
+  instructions pointer on 68k, which makes every slow path's
+  setCurrentVPC cheaper.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
