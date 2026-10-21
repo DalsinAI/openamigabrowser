@@ -56,6 +56,10 @@
 #                   for a new build folder; an existing folder keeps its
 #                   choice. Use a separate WEBKIT_BUILD to compare them.
 #                                                               (default size)
+#   OB_GC_SECTIONS  1: each function and variable in its own section, and the
+#                   linker drops the ones nothing uses (-ffunction-sections
+#                   -fdata-sections, --gc-sections). For a new build folder;
+#                   an existing folder keeps its choice.       (default 0)
 #   OB_CCACHE       the ccache program, or "none"  (default: ccache on PATH)
 #   OB_CCACHE_DIR   ccache's folder for this build
 #                   (default ~/.cache/ccache-openbrowser)
@@ -295,6 +299,16 @@ configure_engine() {
         speed) set -- "$@" -DCMAKE_BUILD_TYPE=Release \
             "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG" "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG" ;;
         *) echo "OB_OPTIMIZE must be size, js, layout or speed" >&2; exit 2 ;;
+    esac
+    # Through CFLAGS, CXXFLAGS and LDFLAGS, which CMake puts before the
+    # toolchain file's flags in a new folder's cache (so the engine's
+    # fingerprint, which reads the cache, sees them).
+    case "${OB_GC_SECTIONS:-0}" in
+        0) ;;
+        1) export CFLAGS="${CFLAGS:+$CFLAGS }-ffunction-sections -fdata-sections"
+           export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-ffunction-sections -fdata-sections"
+           export LDFLAGS="${LDFLAGS:+$LDFLAGS }-Wl,--gc-sections" ;;
+        *) echo "OB_GC_SECTIONS must be 0 or 1" >&2; exit 2 ;;
     esac
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "$(generator)" "$@" \
       -DPORT=Amiga \
