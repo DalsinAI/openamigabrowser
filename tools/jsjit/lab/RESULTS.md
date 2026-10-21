@@ -6,6 +6,50 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 21 Oct 2026, timing on the 68040 lab (patch 0043, K09 engine)
+
+The OpenBrowser 0.7 engine (-Os, 0001-0043) in a lab copy of the
+emulated 68040, three rounds, each test repeated for 2 s, JIT set on and
+off with `Set JSC_useM68KTemplateJIT 1` / `0`. The engine reads only
+local shell variables: `SetEnv` (ENV:) is not seen, and an earlier run
+that used it had the JIT on in both modes. Mean ms per run:
+
+| page | JIT on | JIT off | speed-up |
+|---|---:|---:|---:|
+| page-vdom | 42.6 | 116.9 | 2.7x |
+| page-lexer | 24.5 | 54.3 | 2.2x |
+| page-json | 40.8 | 45.9 | 1.13x |
+| page-template | 110.9 | 123.4 | 1.11x |
+| page-events | | | about 2x (first run) |
+
+page-events builds up state as it repeats, so only its first runs
+compare. json and template spend their time in C++ (the JSON parser,
+string building). No crashes in 37 runs.
+
+## 21 Oct 2026, objects made in line (patch 0044)
+
+`new_object` and `create_this` now take a cell straight from the
+allocator's free-list interval and fill in the header, as the baseline
+JIT's emitAllocateJSObject does; an empty interval, a profile without an
+allocator, a callee other than the one cached and a poly proto structure
+go to the template. `lab/correct16.js` (object literals, points, classes
+and subclasses, new.target, constructors that return objects, poly proto,
+allocation churn through many GCs, big objects) prints what node prints
+with the JIT on and off, as do correct.js-correct15.js (32/32).
+
+Counts with start-up (5.5 M) left in, 0043 then 0044:
+
+| test | 0043 (M) | 0044 (M) |
+|---|---:|---:|
+| page-vdom | 43.86 | 40.02 |
+| page-lexer | 23.39 | 22.08 |
+| page-events | 61.72 | 60.71 |
+| page-json | 42.08 | 42.05 |
+| page-template | 83.48 | 83.44 |
+
+page-vdom (many small node objects) gains 9 per cent, 10 per cent with
+start-up taken off; the micro tests are unchanged.
+
 ## 21 Oct 2026, virtual calls fixed (patch 0043)
 
 0035's polymorphic call path crashed on a virtual call link: a call
