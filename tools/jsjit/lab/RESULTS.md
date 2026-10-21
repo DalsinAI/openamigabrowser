@@ -6,6 +6,39 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 21 Oct 2026, page hot spots (patch 0039)
+
+A profile of the page tests by C++ function (qemu's executed blocks
+mapped to `nm` symbols) showed where the time outside the JIT's code
+went: `in` on arrays (the array builtins' hole checks) was a third of
+page-events; for-in's next name, `arguments.length` and `arguments[i]`,
+and `===` on strings were a quarter of page-vdom. Each now has fast
+code. Every slow path's call-site bookkeeping (setCurrentVPC) also got
+cheaper. `lab/correct14.js` (`in` on arrays of each shape, holes,
+prototype elements, non-int32 keys, objects, strings, proxies, arrays
+that grow, the array builtins; arguments objects with fewer and more
+arguments, overridden length, deleted and redefined elements, sloppy and
+strict mode, leaked arguments; for-in over one shape and many, empty
+objects, indexed and prototype properties, properties added and deleted
+during the loop, nested loops, arrays, strings, null, proxies,
+dictionaries; `===` on atoms, strings built at run time, ropes, BigInts
+and symbols) prints what node prints with the JIT on and off, as do
+correct.js-correct13.js.
+
+Counts with start-up (5.5 M) taken off:
+
+| test | interpreter (M) | 0038 (M) | 0039 (M) | 0039 vs 0038 | vs interpreter |
+|---|---:|---:|---:|---:|---:|
+| page-vdom     | 154.3 | 61.3 | 38.4 | 1.60x | 4.0x |
+| page-events   | 261.7 | 94.4 | 56.2 | 1.68x | 4.7x |
+| page-json     |  50.8 | 38.8 | 36.6 | 1.06x | 1.4x |
+| page-lexer    |  79.0 | 18.3 | 17.9 | 1.02x | 4.4x |
+| page-template |  96.5 | 79.0 | 78.0 | 1.01x | 1.2x |
+
+page-template is mostly regular expressions (the Yarr interpreter, in
+C++); page-lexer's get_by_val with string keys made by `slice()` (not
+atoms, so hashed in C++) and page-json's JSON.parse stay in C++.
+
 ## 21 Oct 2026, small functions inlined (patch 0038)
 
 A call site whose call link holds a JavaScript function of at most 64
