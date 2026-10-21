@@ -375,17 +375,17 @@ index 3333bc5a29d..fbfa07ec828 100644
 +
 +#endif // ENABLE(WEBGPU)
 diff --git a/Source/WebCore/Modules/WebGPU/GPUBuffer.idl b/Source/WebCore/Modules/WebGPU/GPUBuffer.idl
-index c69d1ecebb8..2d09eb3549a 100644
+index c69d1ecebb8..a64db750dc8 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUBuffer.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUBuffer.idl
-@@ -31,6 +31,7 @@ typedef [EnforceRange] unsigned long long GPUSize64;
- typedef [EnforceRange] unsigned long GPUBufferUsageFlags;
+@@ -32,6 +32,7 @@ typedef [EnforceRange] unsigned long GPUBufferUsageFlags;
  
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
 diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferBinding.idl b/Source/WebCore/Modules/WebGPU/GPUBufferBinding.idl
 index f4075fdf8bf..5515636a316 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUBufferBinding.idl
@@ -485,17 +485,17 @@ index 0d801f11ac8..2e4dc295464 100644
  ] enum GPUBufferMapState {
      "unmapped",
 diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferUsage.idl b/Source/WebCore/Modules/WebGPU/GPUBufferUsage.idl
-index 75e7792dfb0..939c7ae45d3 100644
+index 75e7792dfb0..b5a87726f78 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUBufferUsage.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUBufferUsage.idl
-@@ -27,6 +27,7 @@
- 
+@@ -28,6 +28,7 @@
  typedef [EnforceRange] unsigned long GPUBufferUsageFlags;
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext
+ ]
 diff --git a/Source/WebCore/Modules/WebGPU/GPUCanvasAlphaMode.idl b/Source/WebCore/Modules/WebGPU/GPUCanvasAlphaMode.idl
 index fb4d4308d18..c65a8ffeb7b 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUCanvasAlphaMode.idl
@@ -607,17 +607,17 @@ index cdf30cc9093..ad2abe5ae23 100644
  ] dictionary GPUColorTargetState {
      required GPUTextureFormat format;
 diff --git a/Source/WebCore/Modules/WebGPU/GPUColorWrite.idl b/Source/WebCore/Modules/WebGPU/GPUColorWrite.idl
-index 9d048d47d25..634b4b658e5 100644
+index 9d048d47d25..b717181041a 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUColorWrite.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUColorWrite.idl
-@@ -27,6 +27,7 @@
- 
+@@ -28,6 +28,7 @@
  typedef [EnforceRange] unsigned long GPUColorWriteFlags;
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext
+ ]
 diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.cpp b/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.cpp
 index f68176c2bf6..69b11219dfc 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.cpp
@@ -681,17 +681,17 @@ index 405e2e5e0ef..be463a147a1 100644
 +
 +#endif // ENABLE(WEBGPU)
 diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.idl b/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.idl
-index 60a671174c4..b3e89a62556 100644
+index 60a671174c4..7c81f2b73e8 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.idl
-@@ -32,6 +32,7 @@ typedef [EnforceRange] unsigned long GPUIntegerCoordinate;
- typedef (sequence<GPUIntegerCoordinate> or GPUExtent3DDict) GPUExtent3D;
+@@ -33,6 +33,7 @@ typedef (sequence<GPUIntegerCoordinate> or GPUExtent3DDict) GPUExtent3D;
  
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
 diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandEncoderDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUCommandEncoderDescriptor.idl
 index 98219ea7d27..d091fce765f 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUCommandEncoderDescriptor.idl
@@ -872,17 +872,17 @@ index 65118bebb62..fbbd88104a6 100644
 +
 +#endif // ENABLE(WEBGPU)
 diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.idl b/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.idl
-index cdd65c81580..5430a26eb04 100644
+index cdd65c81580..e5fcdb1589e 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.idl
-@@ -30,6 +30,7 @@ typedef [EnforceRange] unsigned long GPUSize32;
- typedef [EnforceRange] unsigned long long GPUSize64;
+@@ -31,6 +31,7 @@ typedef [EnforceRange] unsigned long long GPUSize64;
  
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
 diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.cpp b/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.cpp
 index 2d46588a125..240ae261967 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.cpp
@@ -1649,17 +1649,17 @@ index 69691c4110f..9ce8c6f7fd3 100644
  ] enum GPULoadOp {
      "load",
 diff --git a/Source/WebCore/Modules/WebGPU/GPUMapMode.idl b/Source/WebCore/Modules/WebGPU/GPUMapMode.idl
-index 2a72f00a0fd..7c415cc7541 100644
+index 2a72f00a0fd..83117020714 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUMapMode.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUMapMode.idl
-@@ -27,6 +27,7 @@
- 
+@@ -28,6 +28,7 @@
  typedef [EnforceRange] unsigned long GPUMapModeFlags;
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext
+ ]
 diff --git a/Source/WebCore/Modules/WebGPU/GPUMipmapFilterMode.idl b/Source/WebCore/Modules/WebGPU/GPUMipmapFilterMode.idl
 index c51634c3b19..90cac9fd3c1 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUMipmapFilterMode.idl
@@ -2055,17 +2055,19 @@ index f3345d493ab..028869c7e69 100644
  ] enum GPUPrimitiveTopology {
      "point-list",
 diff --git a/Source/WebCore/Modules/WebGPU/GPUProgrammablePassEncoder.idl b/Source/WebCore/Modules/WebGPU/GPUProgrammablePassEncoder.idl
-index 461cca87e8d..c028a32d13a 100644
+index 461cca87e8d..c6a4960b47c 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUProgrammablePassEncoder.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUProgrammablePassEncoder.idl
-@@ -32,6 +32,7 @@ typedef [EnforceRange] unsigned long GPUIndex32;
+@@ -32,7 +32,8 @@ typedef [EnforceRange] unsigned long GPUIndex32;
  typedef [EnforceRange] unsigned long GPUBufferDynamicOffset;
  
  [
-+    Conditional=WEBGPU,
-     EnabledBySetting=WebGPUEnabled
+-    EnabledBySetting=WebGPUEnabled
++    EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU
  ]
  interface mixin GPUProgrammablePassEncoder {
+     undefined setBindGroup(GPUIndex32 index, GPUBindGroup? bindGroup,
 diff --git a/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.cpp b/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.cpp
 index 47a2ab34564..b44469ef566 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.cpp
@@ -2191,17 +2193,17 @@ index 4a5431490a7..b04f5f8bb20 100644
 +
 +#endif // ENABLE(WEBGPU)
 diff --git a/Source/WebCore/Modules/WebGPU/GPUQueue.idl b/Source/WebCore/Modules/WebGPU/GPUQueue.idl
-index e6348392b9d..b09ae9b308a 100644
+index e6348392b9d..aec1670f640 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUQueue.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUQueue.idl
-@@ -32,6 +32,7 @@ typedef [EnforceRange] unsigned long GPUIntegerCoordinate;
- typedef (sequence<GPUIntegerCoordinate> or GPUExtent3DDict) GPUExtent3D;
+@@ -33,6 +33,7 @@ typedef (sequence<GPUIntegerCoordinate> or GPUExtent3DDict) GPUExtent3D;
  
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
 diff --git a/Source/WebCore/Modules/WebGPU/GPUQueueDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUQueueDescriptor.idl
 index 127348c536d..69d5297882f 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUQueueDescriptor.idl
@@ -2320,17 +2322,19 @@ index 8b1e69e6cd4..05f51e04eba 100644
  ] dictionary GPURenderBundleEncoderDescriptor : GPURenderPassLayout {
      boolean depthReadOnly = false;
 diff --git a/Source/WebCore/Modules/WebGPU/GPURenderEncoderBase.idl b/Source/WebCore/Modules/WebGPU/GPURenderEncoderBase.idl
-index c5837c7aa30..dc74d81c768 100644
+index c5837c7aa30..d6885e6eee2 100644
 --- a/Source/WebCore/Modules/WebGPU/GPURenderEncoderBase.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPURenderEncoderBase.idl
-@@ -33,6 +33,7 @@ typedef [EnforceRange] long GPUSignedOffset32;
+@@ -33,7 +33,8 @@ typedef [EnforceRange] long GPUSignedOffset32;
  
  // FIXME: Rename this to `GPURenderCommandsMixin` to match the latest specification.
  [
-+    Conditional=WEBGPU,
-     EnabledBySetting=WebGPUEnabled
+-    EnabledBySetting=WebGPUEnabled
++    EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU
  ] interface mixin GPURenderEncoderBase {
      undefined setPipeline(GPURenderPipeline pipeline);
+ 
 diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.cpp
 index 0559591265b..ddb2facbbda 100644
 --- a/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.cpp
@@ -2444,17 +2448,17 @@ index d0f39095e35..6899d4b7ec8 100644
 +
 +#endif // ENABLE(WEBGPU)
 diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.idl b/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.idl
-index 7d5ac5ac89a..27afe8e6115 100644
+index 7d5ac5ac89a..70dfc5fbc37 100644
 --- a/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.idl
-@@ -32,6 +32,7 @@ typedef [EnforceRange] unsigned long GPUStencilValue;
- typedef (sequence<double> or GPUColorDict) GPUColor;
+@@ -33,6 +33,7 @@ typedef (sequence<double> or GPUColorDict) GPUColor;
  
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
 diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.cpp
 index 27942573ba1..ea00af5d1f1 100644
 --- a/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.cpp
@@ -2790,17 +2794,17 @@ index 2c315485df2..27e03d78070 100644
  ] dictionary GPUShaderModuleDescriptor : GPUObjectDescriptorBase {
      required USVString code;
 diff --git a/Source/WebCore/Modules/WebGPU/GPUShaderStage.idl b/Source/WebCore/Modules/WebGPU/GPUShaderStage.idl
-index 1a5f137d3e2..005287056f0 100644
+index 1a5f137d3e2..aa8f6e9fb4b 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUShaderStage.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUShaderStage.idl
-@@ -27,6 +27,7 @@
- 
+@@ -28,6 +28,7 @@
  typedef [EnforceRange] unsigned long GPUShaderStageFlags;
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext
+ ]
 diff --git a/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.cpp b/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.cpp
 index 53a1ce1fd5f..289f32f07e4 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.cpp
@@ -3103,17 +3107,17 @@ index 4e449451aeb..f2df6f28d8d 100644
  ] enum GPUTextureSampleType {
      "float",
 diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureUsage.idl b/Source/WebCore/Modules/WebGPU/GPUTextureUsage.idl
-index 59a7d1f98cd..c5de9c82671 100644
+index 59a7d1f98cd..6a63e5ec795 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUTextureUsage.idl
 +++ b/Source/WebCore/Modules/WebGPU/GPUTextureUsage.idl
-@@ -27,6 +27,7 @@
- 
+@@ -28,6 +28,7 @@
  typedef [EnforceRange] unsigned long GPUTextureUsageFlags;
  [
-+    Conditional=WEBGPU,
      EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
      Exposed=(Window,Worker),
      SecureContext
+ ]
 diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureView.cpp b/Source/WebCore/Modules/WebGPU/GPUTextureView.cpp
 index 6890bea4453..91c27929e9b 100644
 --- a/Source/WebCore/Modules/WebGPU/GPUTextureView.cpp
