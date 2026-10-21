@@ -30,6 +30,20 @@ set(OB_PROGRAM_SOURCES
     ${OB_THIRD_PARTY}/oam_stack.c
 )
 
+# ICU's data (OB_ICU_DATA): "file" (the default) reads ICU's common data file
+# at start from LOCALE:Unicode/ or PROGDIR:Unicode/ (ob_icudata.c), and each
+# program carries an empty data block (ob_icustub.c), which keeps
+# libicudata.a's 5 MB of tables out of it; "linked" links the tables in as
+# before.
+set(OB_ICU_DATA "file" CACHE STRING "ICU data: file (read at start) or linked")
+if (OB_ICU_DATA STREQUAL "file")
+    list(APPEND OB_CORE_SOURCES ob_icudata.c)
+    list(APPEND OB_PROGRAM_SOURCES ob_icustub.c)
+    add_compile_definitions(OB_ICU_DATA_FILE=1)
+elseif (NOT OB_ICU_DATA STREQUAL "linked")
+    message(FATAL_ERROR "OB_ICU_DATA must be file or linked")
+endif ()
+
 # openservice.device (DalsinAI/openamigaservice, checked out beside this
 # repository, or OPENSERVICE_DIR): page pictures decoded by a board or a
 # paired Cradle when one offers it (ob_media.c). Its TLS key provider was for

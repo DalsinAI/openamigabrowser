@@ -13,6 +13,9 @@
 #include "AmigaPlatformStrategies.h"
 #include "AmigaWebView.h"
 #include "ob_network.h"
+#if OB_ICU_DATA_FILE
+#include "ob_icudata.h"
+#endif
 
 #include <WebCore/CurlContext.h>
 #include <JavaScriptCore/InitializeThreading.h>
@@ -91,6 +94,10 @@ static void initializeEngine(WebCore::LoaderStrategy* loader)
 int ob_webcore_init(void)
 {
     ob_quiet_requesters();
+#if OB_ICU_DATA_FILE
+    if (!ob_icu_data_load())
+        return 0;
+#endif
     initializeEngine(nullptr);
     return 1;
 }
@@ -104,6 +111,10 @@ static RefPtr<OpenBrowser::AmigaCookieJar>& cookieJar()
 int ob_webcore_init_with_network(const char* cookieDatabase)
 {
     ob_quiet_requesters();
+#if OB_ICU_DATA_FILE
+    if (!ob_icu_data_load())
+        return 0;
+#endif
     if (!ob_network_open())
         return 0;
     initializeEngine(OpenBrowser::networkLoaderStrategy());

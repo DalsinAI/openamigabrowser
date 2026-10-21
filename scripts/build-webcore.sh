@@ -60,6 +60,12 @@
 #                   linker drops the ones nothing uses (-ffunction-sections
 #                   -fdata-sections, --gc-sections). For a new build folder;
 #                   an existing folder keeps its choice.       (default 0)
+#   OB_ICU_DATA     "file": the programs read ICU's data (icudt78b.dat) at
+#                   start from LOCALE:Unicode/ or PROGDIR:Unicode/, which
+#                   keeps 5 MB of tables out of each program; "linked": the
+#                   tables are linked in. A CMake option of src/webcore, so
+#                   an existing folder takes "file" at its next configure.
+#                   test-browser stages the file in Unicode/.  (default file)
 #   OB_CCACHE       the ccache program, or "none"  (default: ccache on PATH)
 #   OB_CCACHE_DIR   ccache's folder for this build
 #                   (default ~/.cache/ccache-openbrowser)
@@ -443,6 +449,30 @@ build_tests() {
     ls -l "$BUILD/bin/obcore-view" "$BUILD/bin/obcore-dump"
 }
 
+# icu_data_file: the path of ICU's common data file, the one the programs
+# read at start (OB_ICU_DATA=file). scripts/build-icu.sh installs it in
+# share/; for a dependency folder made before that, it is taken out of
+# libicudata.a, whose one object holds it byte for byte as its data.
+icu_data_file() {
+    icu="$OAB_DEPS/icu78-m68k-amigaos"
+    dat="$icu/share/icudt78b.dat"
+    if [ ! -f "$dat" ]; then
+        tmp=$(mktemp -d)
+        (cd "$tmp" && "$GCC16/prefix/bin/m68k-amigaos-ar" x "$icu/lib/libicudata.a") \
+            || die "cannot read $icu/lib/libicudata.a"
+        set -- "$tmp"/*.o
+        [ $# -eq 1 ] || die "$icu/lib/libicudata.a holds $# objects, not one"
+        mkdir -p "$icu/share"
+        "$GCC16/prefix/bin/m68k-amigaos-objcopy" -O binary -j .data "$1" "$dat.tmp" \
+            || die "cannot take the data out of $1"
+        rm -rf "$tmp"
+        [ "$(od -An -tx1 -j2 -N2 "$dat.tmp" | tr -d ' ')" = da27 ] \
+            || die "$icu/lib/libicudata.a does not hold ICU data"
+        mv "$dat.tmp" "$dat"
+    fi
+    echo "$dat"
+}
+
 test_browser() {
     : "${OB_TEST_DIR:?set OB_TEST_DIR to the folder to stage the tests in}"
     : "${OB_FONTS:?set OB_FONTS to the folder of the Liberation and DejaVu .ttf files}"
@@ -457,6 +487,10 @@ test_browser() {
     cp "$ROOT"/tests/pages/*.html "$OB_TEST_DIR/pages/"
     cp "$ROOT/src/webcore/fontconfig/fonts.conf" "$OB_TEST_DIR/fontconfig/"
     cp "$ROOT/src/webcore/blocklist" "$OB_TEST_DIR/"
+    if [ "$(sed -n 's/^OB_ICU_DATA:STRING=//p' "$BUILD/CMakeCache.txt")" != linked ]; then
+        mkdir -p "$OB_TEST_DIR/Unicode"
+        cp "$(icu_data_file)" "$OB_TEST_DIR/Unicode/"
+    fi
     {
         echo "; OpenBrowser's test pages through obcore-view, staged by"
         echo "; scripts/build-webcore.sh test-browser. From this drawer:"
