@@ -6,6 +6,27 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 21 Oct 2026, arrays and calls in loops (patch 0034)
+
+get_by_val, put_by_val and get_length get their own code for int32 and
+contiguous arrays; loop register copies also run array access and calls;
+a nested entry from C++ saves only the sp and lr slots. `arrays` is a new
+jsbench test (1000-element int array, read and written 50 times).
+`lab/correct5.js` (holes, prototype holes, out-of-bounds, negative and
+fractional indexes, copy-on-write literals, appends, doubles, objects,
+mixed and changing shapes, sparse, frozen and typed arrays, array-likes,
+arguments, lengths of strings and functions, 2^32-1 length) prints what
+node prints with the JIT on and off, as do `lab/correct3.js` and
+`lab/correct4.js`; `lab/correct.js` and `lab/correct2.js` are unchanged.
+
+| jsbench test | 0032 (M) | 0034 (M) | 0034 vs 0032 | vs interpreter |
+|---|---:|---:|---:|---:|
+| arrays      |  25.8 |   7.3 | 3.53x |  8.5x |
+| array (sort)|  76.8 |  71.3 | 1.08x |  2.1x |
+| closures    |  10.9 |  10.1 | 1.07x |  1.9x |
+| calls       |  12.0 |  11.6 | 1.03x |  8.8x |
+| int-loop, double-loop, properties, strings, regexp, json | | | 1.00x | |
+
 ## 20 Oct 2026, stage J6 (loop variables in registers; patch 0032)
 
 Integer loops get a second copy of their body with up to six variables in

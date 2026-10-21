@@ -13,6 +13,7 @@ run("double-loop", function () { var s = 0.5; for (var i = 0; i < 100000; i++) s
 run("calls", function () { function f(a, b) { return a + b; } var s = 0; for (var i = 0; i < 100000; i++) s = f(s, i) & 0xffff; return s; });
 run("properties", function () { var o = { a: 1, b: 2, c: 3 }, s = 0; for (var i = 0; i < 100000; i++) { o.a = o.b + o.c; s += o.a; } return s; });
 run("array", function () { var a = []; for (var i = 0; i < 20000; i++) a.push(i ^ 0x55); a.sort(function (x, y) { return x - y; }); return a[100]; });
+run("arrays", function () { var a = []; for (var i = 0; i < 1000; i++) a.push(i); var s = 0; for (var r = 0; r < 50; r++) for (var j = 0; j < a.length; j++) { s = (s + a[j]) | 0; a[j] = (a[j] + 1) | 0; } return s; });
 run("strings", function () { var s = ""; for (var i = 0; i < 5000; i++) s += String.fromCharCode(65 + i % 26); return s.length + s.indexOf("XYZ"); });
 run("regexp", function () { var re = /(\w+)@(\w+)\.com/, n = 0; for (var i = 0; i < 2000; i++) if (re.test("user" + i + "@host.com")) n++; return n; });
 run("json", function () { var o = { list: [] }; for (var i = 0; i < 500; i++) o.list.push({ id: i, name: "n" + i }); var t = JSON.stringify(o); return JSON.parse(t).list.length + t.length; });
