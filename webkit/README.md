@@ -211,6 +211,13 @@ The patches, in order:
   `charCodeAt` get their own code (`VM.cpp` keeps charCodeAt's intrinsic
   on the 68k C loop), and loop register copies keep doubles in fp2-fp6.
 
+- `0038-jsc-m68k-jit-inline-small-functions.patch`: call sites whose
+  call link holds a small JavaScript function (64 bytecode bytes or less,
+  `m68kTemplateJITMaximumInlineSize`) get its code in line, behind a guard
+  on the CodeBlock; the inlined function may call, and anything its fast
+  code does not take finishes the frame and goes on in its own code.
+  op_to_this gets fast code. `useM68KInlining` turns it off.
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;
