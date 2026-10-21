@@ -194,6 +194,15 @@ The patches, in order:
   copies also cover array access and calls (registers reloaded after the
   call). A nested entry from C++ saves only sp and lr.
 
+- `0035-jsc-m68k-jit-compares-objects-scopes.patch`: fixes the sp left at
+  the callee's frame after a JIT call (since 0031), which let a garbage
+  collection clear live slots. Gives the JIT its own code for ===, !==,
+  == null, jtrue/jfalse and int32 compares as values, put_by_id
+  transitions (new properties, with the prototype chain check),
+  polymorphic and unused-result calls, and resolve_scope, get_from_scope
+  and put_to_scope for globals, global let/const and closure variables.
+  `StructureChain.h` gains `offsetOfVector()` for the chain check.
+
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
 - the m68k CPU and AROS platform layer from the AmigaChrome AROS m68k port;
