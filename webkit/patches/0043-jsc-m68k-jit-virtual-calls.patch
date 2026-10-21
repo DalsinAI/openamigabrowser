@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 19:08:54 +0000
+Subject: [PATCH] JavaScriptCore: 68k template JIT: virtual calls take the
+ template
+
+The polymorphic call path (since 0035) took a call link whose callee
+is polymorphicCalleeMask as a polymorphic stub, and assumed the normal
+trampoline when the destination was not the closure one. A virtual
+call link has the same callee marker, no stub and the virtual call
+thunk as its destination: a site that has seen more callees than
+maxPolymorphicCallVariantListSize, or a construct site with two
+callees that have no call CodeBlock. The stub walk then read from
+address 38 and crashed. The destination must now be one of the two
+polymorphic trampolines; anything else is the template's, which calls
+through the interpreter's own path.
+
+Team 3
+---
+ Source/JavaScriptCore/llint/M68KTemplateJIT.cpp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index 3d4fd8a7026..c79e2a47c2f 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -1718,6 +1718,12 @@ private:
+         m_hot.loadDisp(0, FunctionRareData::offsetOfExecutable() - static_cast<int>(JSFunction::rareDataTag), 1);
+         size_t search2 = m_hot.branch(Builder::Always);
+         m_hot.bindBranch(byCallee);
++        // Not the normal trampoline either: a virtual call (no stub; a
++        // construct whose callee has no call CodeBlock, or too many callees),
++        // the template's.
++        uintptr_t normalTrampoline = reinterpret_cast<uintptr_t>(LLInt::getCodePtr<JSEntryPtrTag>(llint_polymorphic_normal_call_trampoline).taggedPtr());
++        m_hot.word(0x0cb9); m_hot.longWord(normalTrampoline); m_hot.longWord(reinterpret_cast<uintptr_t>(linkBase + CallLinkInfo::offsetOfMonomorphicCallDestination())); // cmpi.l #imm,(abs).l
++        slowUnless(Builder::NotEqual);
+         m_hot.moveReg(0, 1);
+         m_hot.bindBranch(search);
+         m_hot.bindBranch(search2);
+-- 
+2.43.0
+

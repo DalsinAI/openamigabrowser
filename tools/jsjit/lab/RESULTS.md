@@ -6,6 +6,16 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 21 Oct 2026, virtual calls fixed (patch 0043)
+
+0035's polymorphic call path crashed on a virtual call link: a call
+site that had seen more callees than a polymorphic stub holds, or a
+construct site whose constructors had never been called (no call
+CodeBlock). `lab/correct15.js` (twenty callees at one site, closures,
+natives and arrow functions mixed, seven constructors at one `new`,
+exceptions through a megamorphic site) crashed with the JIT on before
+the fix and prints what node prints with it now. Counts are unchanged.
+
 ## 21 Oct 2026, page hot spots (patch 0039)
 
 A profile of the page tests by C++ function (qemu's executed blocks
