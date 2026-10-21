@@ -192,7 +192,7 @@ void WebView::loadData(const String& text, const String& mimeType, const String&
         return;
     CString utf8 = text.utf8();
     URL base { baseURL.isEmpty() ? "about:blank"_s : baseURL };
-    ResourceResponse response(URL { base }, mimeType.isEmpty() ? "text/html"_s : mimeType, utf8.length(), "UTF-8"_s);
+    ResourceResponse response(URL { base }, mimeType.isEmpty() ? String { "text/html"_s } : String { mimeType }, utf8.length(), "UTF-8"_s);
     SubstituteData data(SharedBuffer::create(utf8.span()), URL { }, WTF::move(response), SubstituteData::SessionHistoryVisibility::Hidden);
     frame->loader().load(FrameLoadRequest(*frame, ResourceRequest(WTF::move(base)), WTF::move(data)));
 }
