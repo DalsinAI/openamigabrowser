@@ -235,6 +235,10 @@ The patches, in order:
   `ENABLE_SCREEN_WAKE_LOCK`, `ENABLE_SHAPE_DETECTION`,
   `ENABLE_SPEECH_RECOGNITION`, on by default), and the Amiga port turns
   them off. Their settings were already off, so pages see no change.
+- `0041-webcore-web-sql-and-text-extraction-only-when-enabled.patch`: Web
+  SQL (`ENABLE_WEB_DATABASE`) and the page text extraction behind element
+  targeting (`ENABLE_TEXT_EXTRACTION`) get build flags, on by default; the
+  Amiga port turns them off. `openDatabase` was already off by setting.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
