@@ -228,6 +228,12 @@ The patches, in order:
   atom strings; `CodeBlock::bytecodeOffset` takes the CodeBlock's raw
   instructions pointer on 68k, which makes every slow path's
   setCurrentVPC cheaper.
+- `0040-webcore-unused-web-apis-only-when-enabled.patch`: WebTransport,
+  the Cookie Store API, Web Locks, the Screen Wake Lock API and the Shape
+  Detection API get build flags (`ENABLE_WEB_TRANSPORT`,
+  `ENABLE_COOKIE_STORE_API`, `ENABLE_WEB_LOCKS`, `ENABLE_SCREEN_WAKE_LOCK`,
+  `ENABLE_SHAPE_DETECTION`, on by default), and the Amiga port turns them
+  off. Their settings were already off, so pages see no change.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
