@@ -1,4 +1,4 @@
-From e5e8cc2b90569ae08d9bb1b217c062024618cfd1 Mon Sep 17 00:00:00 2001
+From 80ab651c9799068053c9e684036df6d56e8ac731 Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
 Date: Wed, 21 Oct 2026 01:44:58 +0000
 Subject: [PATCH] JavaScriptCore: compares, tests, new objects, polymorphic
@@ -36,12 +36,12 @@ fewer, an event/store app 1.4x, a virtual DOM diff 1.3x, JSON handling
 call two instructions (the calls test 2%). Lab tests correct6-8 check every value kind, polymorphic
 calls, transitions, scopes and garbage collection against node.
 ---
- .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 957 +++++++++++++++++-
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 963 +++++++++++++++++-
  .../JavaScriptCore/runtime/StructureChain.h   |   1 +
- 2 files changed, 922 insertions(+), 36 deletions(-)
+ 2 files changed, 928 insertions(+), 36 deletions(-)
 
 diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
-index 6b999621df8..6fb3269348f 100644
+index 6b999621df8..d0c8974b497 100644
 --- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
 +++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
 @@ -34,6 +34,13 @@
@@ -150,7 +150,7 @@ index 6b999621df8..6fb3269348f 100644
          m_hot.loadDisp(1, OBJECT_OFFSETOF(OpPutById::Metadata, m_offset), 1);
          uint64_t bits = JSValue::encode(constant);
          withProperty([&](int d8) {
-@@ -963,63 +1016,801 @@ private:
+@@ -963,63 +1016,807 @@ private:
      bool call(const JSInstruction* instruction, unsigned offset)
      {
          auto bytecode = instruction->as<Op>();
@@ -258,6 +258,12 @@ index 6b999621df8..6fb3269348f 100644
 +        m_hot.word(0x4dee); m_hot.word(static_cast<uint16_t>(PolymorphicCallStubRoutine::offsetOfTrailingData())); // lea d16(a6),a6
 +        m_hot.word(0x0cb9); m_hot.longWord(closureTrampoline); m_hot.longWord(reinterpret_cast<uintptr_t>(linkBase + CallLinkInfo::offsetOfMonomorphicCallDestination())); // cmpi.l #imm,(abs).l
 +        size_t byCallee = m_hot.branch(Builder::NotEqual);
++        // Not a cell (its high word is zero, as for undefined, null and the
++        // booleans): the template, which throws.
++        m_hot.btst1(0);
++        slowUnless(Builder::NotEqual);
++        m_hot.tst(0);
++        slowUnless(Builder::Equal);
 +        m_hot.moveaFromData(0, 0);
 +        m_hot.cmpByteImmDisp(JSFunctionType, 0, JSCell::typeInfoTypeOffset());
 +        slowUnless(Builder::NotEqual);
@@ -446,9 +452,9 @@ index 6b999621df8..6fb3269348f 100644
 +        m_hot.cmpFrame(rhs.lo, 0);
 +        branch(Builder::Equal, equal);
 +        branch(Builder::Always, notEqual);
-+        return true;
-+    }
-+
+         return true;
+     }
+ 
 +    // A boolean result: dst gets true where the branches in yes go, false
 +    // where those in no go.
 +    void storeBoolean(const Operand& dst, Vector<size_t>& yes, Vector<size_t>& no)
@@ -686,9 +692,9 @@ index 6b999621df8..6fb3269348f 100644
 +            storeBoolean(dst, yes, no);
 +        } else
 +            m_hot.branchToBytecode(cc, jumpTarget(instruction, bytecode.m_targetLabel));
-         return true;
-     }
- 
++        return true;
++    }
++
 +    // Variables in scopes (stage J7): the interpreter's handlers for the
 +    // resolve type the site's cache holds when the code is written, which
 +    // the code checks it still holds; anything else takes the template.
@@ -983,7 +989,7 @@ index 6b999621df8..6fb3269348f 100644
      bool emitImpl(const JSInstruction* instruction, unsigned offset)
      {
          switch (instruction->opcodeID()) {
-@@ -1029,6 +1820,8 @@ private:
+@@ -1029,6 +1826,8 @@ private:
              return call<OpCall>(instruction, offset);
          case op_construct:
              return call<OpConstruct>(instruction, offset);
@@ -992,7 +998,7 @@ index 6b999621df8..6fb3269348f 100644
          case op_ret:
              return ret(instruction);
          case op_loop_hint:
-@@ -1138,6 +1931,30 @@ private:
+@@ -1138,6 +1937,30 @@ private:
          case op_jnlesseq: return compareAndJump<OpJnlesseq>(instruction, offset, Builder::Greater);
          case op_jngreater: return compareAndJump<OpJngreater>(instruction, offset, Builder::LessEqual);
          case op_jngreatereq: return compareAndJump<OpJngreatereq>(instruction, offset, Builder::Less);
@@ -1023,7 +1029,7 @@ index 6b999621df8..6fb3269348f 100644
          case op_get_by_id:
              return Options::useM68KPropertyFastPaths() && getById(instruction);
          case op_put_by_id:
-@@ -1291,6 +2108,36 @@ private:
+@@ -1291,6 +2114,36 @@ private:
              cell(bytecode.m_callee);
              return !bytecode.m_dst.isConstant() && !bytecode.m_callee.isConstant();
          }
@@ -1060,7 +1066,7 @@ index 6b999621df8..6fb3269348f 100644
          // Property access, with the plain code's fast paths; get_by_id's
          // result can be one of the registers.
          case op_get_by_id: {
-@@ -1365,6 +2212,16 @@ private:
+@@ -1365,6 +2218,16 @@ private:
          M68K_TARGET(op_jnlesseq, OpJnlesseq)
          M68K_TARGET(op_jngreater, OpJngreater)
          M68K_TARGET(op_jngreatereq, OpJngreatereq)
@@ -1077,7 +1083,7 @@ index 6b999621df8..6fb3269348f 100644
  #undef M68K_TARGET
          default:
              return -1;
-@@ -1661,7 +2518,8 @@ private:
+@@ -1661,7 +2524,8 @@ private:
              store(0, value);
              return Next;
          }
@@ -1087,7 +1093,7 @@ index 6b999621df8..6fb3269348f 100644
              Vector<size_t> branches;
              FloatPath floatPath;
              if (!m_fastPaths.emit(instruction, offset, branches, floatPath))
-@@ -1679,6 +2537,33 @@ private:
+@@ -1679,6 +2543,33 @@ private:
              }
              return Next;
          }
