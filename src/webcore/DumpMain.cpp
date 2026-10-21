@@ -41,6 +41,9 @@ extern "C" {
 #include "oam_stack.h"
 void ob_quiet_requesters(void);
 }
+#if OB_ICU_DATA_FILE
+#include "ob_icudata.h"
+#endif
 
 using namespace WebCore;
 
@@ -57,6 +60,10 @@ static int dumpMain(int argc, char** argv)
         width = 800;
 
     ob_quiet_requesters();
+#if OB_ICU_DATA_FILE
+    if (!ob_icu_data_load())
+        return 20;
+#endif
     JSC::initialize();
     WTF::initializeMainThread();
     initializeCommonAtomStrings();
