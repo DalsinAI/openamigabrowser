@@ -13,6 +13,12 @@
  *   obcore-view -text ...  also print the page's text (OBVIEW_TEXT, cut
  *                         to 2000 bytes), for pages that show a score
  *
+ * If the run loop stops turning for 20 s (a thread waits on another that
+ * never answers), a watchdog prints OBVIEW_STALL, then one OBVIEW_THREAD
+ * line per WebCore task and for the main task: its state, its signals
+ * (waited for, received, allocated) and the return addresses on its stack
+ * that lie in our code, as offsets for the link map.
+ *
  * At the end it prints one OBVIEW_BENCH line of timings and memory for
  * tools/bench (see docs/BENCHMARKS.md and the block marked "Benchmark").
  *
@@ -28,6 +34,8 @@
 #include <proto/dos.h>
 #include <proto/exec.h>
 #include <dos/dosextens.h>
+#include <dos/dostags.h>
+#include <exec/execbase.h>
 #include <exec/memory.h>
 #include <unistd.h>
 
@@ -39,6 +47,7 @@ static const char version[] __attribute__((used)) = "$VER: obcore-view 0.1 (4.10
 /* abort(), replaced so a crash says where it came from: the return
  * addresses on the stack that lie in our code, as offsets for the link map. */
 static ULONG codeStart, codeEnd;
+static void stopWatchdog(void);
 
 void abort(void)
 {
@@ -54,6 +63,7 @@ void abort(void)
     printf("\n");
     fflush(stdout);
     Wait(SIGBREAKF_CTRL_C);
+    stopWatchdog();
     _exit(20);
 }
 
@@ -70,6 +80,130 @@ static void findCode(void)
         codeStart = (ULONG)(segment + 1);
         codeEnd = (ULONG)segment - 4 + segment[-1];
     }
+}
+
+/* ---- Stall watchdog ---- */
+static volatile ULONG heartbeat;        /* run() counts its turns here */
+static volatile int watchdogQuit;
+static struct Task *mainTask;
+static struct Task *volatile watchdogTask;
+static struct Task *volatile watchdogStopper;   /* told when the watchdog has gone */
+static BPTR watchdogOutput;
+static char dumpText[8192];
+static int dumpLength;
+
+static void dumpPut(const char *text)
+{
+    while (*text && dumpLength < (int)sizeof dumpText - 1)
+        dumpText[dumpLength++] = *text++;
+}
+
+static void dumpHex(ULONG value)
+{
+    char digits[12];
+    int i = 0, n;
+    do {
+        n = value & 15;
+        digits[i++] = n < 10 ? '0' + n : 'a' + n - 10;
+        value >>= 4;
+    } while (value);
+    while (i && dumpLength < (int)sizeof dumpText - 1)
+        dumpText[dumpLength++] = digits[--i];
+}
+
+/* One task, called inside Forbid(): it is not running, so its stack from
+ * tc_SPReg up is what it left when it last switched out. */
+static void dumpTask(struct Task *task)
+{
+    ULONG *p = (ULONG *)task->tc_SPReg, *top = (ULONG *)task->tc_SPUpper;
+    int n = 0;
+    dumpPut("OBVIEW_THREAD ");
+    dumpPut(task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "?");
+    dumpPut(task == mainTask ? " (main)" : "");
+    dumpPut(" state=");
+    dumpHex(task->tc_State);
+    dumpPut(" sigwait=");
+    dumpHex(task->tc_SigWait);
+    dumpPut(" sigrecvd=");
+    dumpHex(task->tc_SigRecvd);
+    dumpPut(" sigalloc=");
+    dumpHex(task->tc_SigAlloc);
+    dumpPut(":");
+    for (; p && p < top && n < 48; p++)
+        if (*p >= codeStart && *p < codeEnd) {
+            dumpPut(" ");
+            dumpHex(*p - codeStart);
+            n++;
+        }
+    dumpPut("\n");
+}
+
+static int dumpWanted(struct Task *task)
+{
+    const char *name = task->tc_Node.ln_Name;
+    return task == mainTask || (name && !strncmp(name, "WebCore", 7));
+}
+
+static void dumpThreads(void)
+{
+    struct Node *node;
+    dumpLength = 0;
+    Forbid();
+    for (node = SysBase->TaskWait.lh_Head; node->ln_Succ; node = node->ln_Succ)
+        if (dumpWanted((struct Task *)node))
+            dumpTask((struct Task *)node);
+    for (node = SysBase->TaskReady.lh_Head; node->ln_Succ; node = node->ln_Succ)
+        if (dumpWanted((struct Task *)node))
+            dumpTask((struct Task *)node);
+    Permit();
+}
+
+/* A process of its own (it writes with dos.library), polling once a second. */
+static void watchdog(void)
+{
+    ULONG seen = heartbeat;
+    int still = 0, dumped = 0;
+    while (!watchdogQuit) {
+        Delay(TICKS_PER_SECOND);
+        if (heartbeat != seen) {
+            seen = heartbeat;
+            still = 0;
+            continue;
+        }
+        if (++still == 20 && !dumped) {
+            dumped = 1;
+            dumpThreads();
+            Write(watchdogOutput, (APTR)"OBVIEW_STALL run loop still for 20 s\n", sizeof "OBVIEW_STALL run loop still for 20 s\n" - 1);
+            Write(watchdogOutput, dumpText, dumpLength);
+        }
+    }
+    Forbid();
+    watchdogTask = NULL;
+    Signal(watchdogStopper, SIGBREAKF_CTRL_F);
+}
+
+static void startWatchdog(void)
+{
+    mainTask = FindTask(NULL);
+    watchdogOutput = Output();
+    watchdogTask = (struct Task *)CreateNewProcTags(NP_Entry, (ULONG)watchdog, NP_Name, (ULONG)"obcore-view watchdog",
+        NP_StackSize, 16384, NP_Output, (ULONG)watchdogOutput, NP_CloseOutput, FALSE, NP_Input, 0, NP_CloseInput, FALSE,
+        TAG_DONE);
+}
+
+static void stopWatchdog(void)
+{
+    Forbid();
+    if (!watchdogTask || watchdogStopper) {
+        Permit();
+        return;
+    }
+    watchdogStopper = FindTask(NULL);
+    SetSignal(0, SIGBREAKF_CTRL_F);
+    watchdogQuit = 1;
+    Permit();
+    while (watchdogTask)
+        Wait(SIGBREAKF_CTRL_F);
 }
 
 static const char *tlsFile;  /* -tls: TLS sessions kept across runs */
@@ -228,6 +362,7 @@ static void run(double seconds)
     while (difftime(time(NULL), start) < seconds) {
         double next;
         ob_webcore_cycle();
+        heartbeat++;
         benchSample(0);
         next = ob_webcore_next_timer();
         if (loading == 0 && (next < 0 || next > 0.05))
@@ -489,10 +624,14 @@ static int viewMain(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    int result;
     findCode();
     startTime = time(NULL);
     gettimeofday(&benchStart, NULL);
     availStart = AvailMem(MEMF_ANY);
     largestStart = AvailMem(MEMF_ANY | MEMF_LARGEST);
-    return oam_run_with_stack(2 * 1024 * 1024, viewMain, argc, argv);
+    startWatchdog();
+    result = oam_run_with_stack(2 * 1024 * 1024, viewMain, argc, argv);
+    stopWatchdog();
+    return result;
 }
