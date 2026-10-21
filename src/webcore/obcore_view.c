@@ -15,9 +15,9 @@
  *
  * If the run loop stops turning for 20 s (a thread waits on another that
  * never answers), a watchdog prints OBVIEW_STALL, then one OBVIEW_THREAD
- * line per WebCore task and for the main task: its state, its signals
- * (waited for, received, allocated) and the return addresses on its stack
- * that lie in our code, as offsets for the link map.
+ * line per task (the main one first): its state, signals (waited for,
+ * received, allocated), priority, stack, and the return addresses on its
+ * stack that lie in our code, as offsets for the link map.
  *
  * At the end it prints one OBVIEW_BENCH line of timings and memory for
  * tools/bench (see docs/BENCHMARKS.md and the block marked "Benchmark").
@@ -89,7 +89,7 @@ static struct Task *mainTask;
 static struct Task *volatile watchdogTask;
 static struct Task *volatile watchdogStopper;   /* told when the watchdog has gone */
 static BPTR watchdogOutput;
-static char dumpText[8192];
+static char dumpText[32768];
 static int dumpLength;
 
 static void dumpPut(const char *text)
@@ -112,11 +112,14 @@ static void dumpHex(ULONG value)
 }
 
 /* One task, called inside Forbid(): it is not running, so its stack from
- * tc_SPReg up is what it left when it last switched out. */
+ * tc_SPReg up is what it left when it last switched out. When tc_SPReg is
+ * outside the stack exec knows of, 64 KB above it are searched instead. */
 static void dumpTask(struct Task *task)
 {
     ULONG *p = (ULONG *)task->tc_SPReg, *top = (ULONG *)task->tc_SPUpper;
-    int n = 0;
+    int n = 0, most = task == mainTask ? 96 : 40;
+    if (p < (ULONG *)task->tc_SPLower || p >= top)
+        top = p + 65536 / sizeof(ULONG);
     dumpPut("OBVIEW_THREAD ");
     dumpPut(task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "?");
     dumpPut(task == mainTask ? " (main)" : "");
@@ -128,8 +131,16 @@ static void dumpTask(struct Task *task)
     dumpHex(task->tc_SigRecvd);
     dumpPut(" sigalloc=");
     dumpHex(task->tc_SigAlloc);
+    dumpPut(" pri=");
+    dumpHex((UBYTE)task->tc_Node.ln_Pri);
+    dumpPut(" sp=");
+    dumpHex((ULONG)task->tc_SPReg);
+    dumpPut(" stack=");
+    dumpHex((ULONG)task->tc_SPLower);
+    dumpPut("-");
+    dumpHex((ULONG)task->tc_SPUpper);
     dumpPut(":");
-    for (; p && p < top && n < 48; p++)
+    for (; p && p < top && n < most; p++)
         if (*p >= codeStart && *p < codeEnd) {
             dumpPut(" ");
             dumpHex(*p - codeStart);
@@ -138,22 +149,19 @@ static void dumpTask(struct Task *task)
     dumpPut("\n");
 }
 
-static int dumpWanted(struct Task *task)
-{
-    const char *name = task->tc_Node.ln_Name;
-    return task == mainTask || (name && !strncmp(name, "WebCore", 7));
-}
-
 static void dumpThreads(void)
 {
     struct Node *node;
     dumpLength = 0;
     Forbid();
+    /* Every task: the program's threads have many names (WebCore, JSC,
+     * WTF work queues, libpthread's own). The main one first. */
+    dumpTask(mainTask);
     for (node = SysBase->TaskWait.lh_Head; node->ln_Succ; node = node->ln_Succ)
-        if (dumpWanted((struct Task *)node))
+        if ((struct Task *)node != mainTask)
             dumpTask((struct Task *)node);
     for (node = SysBase->TaskReady.lh_Head; node->ln_Succ; node = node->ln_Succ)
-        if (dumpWanted((struct Task *)node))
+        if ((struct Task *)node != mainTask)
             dumpTask((struct Task *)node);
     Permit();
 }
