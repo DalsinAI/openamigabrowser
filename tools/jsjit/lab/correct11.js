@@ -43,3 +43,6 @@ print("typed " + typed(300));
 // int32 overflow into doubles inside the copy
 function ovf(n) { var x = 2147483000, d = 0.5; for (var i = 0; i < n; i++) { x = x + 100; d = d + 0.5; } return x + " " + d; }
 print("ovf " + ovf(20));
+// a slot that holds doubles given constants that are not numbers
+function nonNumbers(n) { var d = 0.5, s = 0.0, kinds = ""; for (var i = 0; i < n; i++) { d = d * 1.5; s = s + 0.25; if (i === 100) d = "x"; if (i === 101) { kinds += typeof d; d = 2.5; } if (i === 150) d = null; if (i === 151) { kinds += typeof d; d = 0.25; } if (i === 160) d = undefined; if (i === 161) { kinds += typeof d; d = 1.0; } if (i === 170) d = true; if (i === 171) { kinds += typeof d; d = 0.5; } } return kinds + " " + d + " " + s; }
+print("nonnum " + nonNumbers(200));

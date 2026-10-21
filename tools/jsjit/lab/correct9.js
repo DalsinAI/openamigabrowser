@@ -77,3 +77,18 @@ print("class " + cls(800));
 // dictionary-mode objects
 function dict(n) { var d = {}; for (var j = 0; j < 80; j++) d["k" + j] = j; delete d.k3; d.x = 1; var os = [d, { x: 2 }, { y: 0, x: 3 }], t = 0; for (var i = 0; i < n; i++) t += os[i % 3].x; return t; }
 print("dict " + dict(600));
+// a setter-only accessor (its getter is the null getter) read at a hot site
+var setOnly = {}; Object.defineProperty(setOnly, "x", { set: function (v) {} }); setOnly.y = 1;
+function readSetOnly(n) { var os = [setOnly, { x: 1 }, { z: 0, x: 2 }], u = 0, t = 0; for (var i = 0; i < n; i++) { var v = os[i % 3].x; if (v === undefined) u++; else t += v; } return u + "/" + t; }
+print("setonly " + readSetOnly(900));
+// a prototype getter redefined, then a property added to the prototype
+// (the site's entry is refreshed, not stuck)
+function Q(k) { this.k = k; }
+Object.defineProperty(Q.prototype, "kk", { get: function () { return this.k + 1; }, configurable: true });
+function readKK(objs, n) { var t = 0; for (var i = 0; i < n; i++) t += objs[i % objs.length].kk; return t; }
+var qs = [new Q(1), new Q(2), { kk: 10 }];
+var r1 = readKK(qs, 600);
+Object.defineProperty(Q.prototype, "kk", { get: function () { return this.k * 10; }, configurable: true });
+var r2 = readKK(qs, 600);
+Q.prototype.other = 5;
+print("refresh " + r1 + " " + r2 + " " + readKK(qs, 600));

@@ -29,10 +29,10 @@ Subject: [PATCH] JavaScriptCore: property shape tables, getters, strings and
 The AmigaChrome Team.
 ---
  Source/JavaScriptCore/bytecode/CodeBlock.cpp  |   4 +
- .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 803 +++++++++++++++++-
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 828 +++++++++++++++++-
  Source/JavaScriptCore/llint/M68KTemplateJIT.h |   5 +
  Source/JavaScriptCore/runtime/VM.cpp          |  12 +
- 4 files changed, 796 insertions(+), 28 deletions(-)
+ 4 files changed, 821 insertions(+), 28 deletions(-)
 
 diff --git a/Source/JavaScriptCore/bytecode/CodeBlock.cpp b/Source/JavaScriptCore/bytecode/CodeBlock.cpp
 index 87b856ceb3c..433450833cd 100644
@@ -50,7 +50,7 @@ index 87b856ceb3c..433450833cd 100644
          // FIXME: https://bugs.webkit.org/show_bug.cgi?id=166418
          // We need to add optimizations for op_resolve_scope_for_hoisting_func_decl_in_eval to do link time scope resolution.
 diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
-index d0c8974b497..198d364961e 100644
+index d0c8974b497..43775de4b3b 100644
 --- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
 +++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
 @@ -36,6 +36,14 @@
@@ -139,7 +139,7 @@ index d0c8974b497..198d364961e 100644
      // b<cc>.l (68020+): a 32-bit displacement from the opcode word + 2.
      size_t branch(Condition cc)
      {
-@@ -438,8 +479,115 @@ struct FloatPath {
+@@ -438,8 +479,123 @@ struct FloatPath {
      Operand rhs;
      unsigned target { 0 }; // a compare's jump target, as a bytecode offset
      Vector<size_t> branches; // to the float code
@@ -198,9 +198,13 @@ index d0c8974b497..198d364961e 100644
 +    JSObject* object = asObject(base);
 +    Structure* structure = object->structure();
 +    StructureID structureID = object->structureID();
++    // An entry for this structure that sent the code here is out of date
++    // (its prototype changed structure, or its getter is no longer one): it
++    // is filled again, in place.
++    GetByIdTable::Entry* existing = nullptr;
 +    for (auto& entry : table->entries) {
 +        if (entry.structureID == structureID.bits())
-+            return;
++            existing = &entry;
 +    }
 +    auto cacheable = [](Structure* structure) {
 +        return structure->propertyAccessesAreCacheable() && !structure->isDictionary() && !structure->hasPolyProto()
@@ -209,6 +213,10 @@ index d0c8974b497..198d364961e 100644
 +    };
 +    GetByIdTable::Entry newEntry { structureID.bits(), 0, 0, 0 };
 +    auto insert = [&] {
++        if (existing) {
++            *existing = newEntry;
++            return;
++        }
 +        table->entries[table->next / sizeof(GetByIdTable::Entry)] = newEntry;
 +        table->next = (table->next + sizeof(GetByIdTable::Entry)) % sizeof(table->entries);
 +    };
@@ -255,7 +263,7 @@ index d0c8974b497..198d364961e 100644
  class FastPaths {
  public:
      FastPaths(CodeBlock* codeBlock, Builder& hot)
-@@ -459,6 +607,7 @@ public:
+@@ -459,6 +615,7 @@ public:
          m_float = &floatPath;
          m_bail = m_slow;
          bool ok = emitImpl(instruction, offset);
@@ -263,7 +271,7 @@ index d0c8974b497..198d364961e 100644
          if (!ok) {
              m_hot.bytes.shrink(start);
              m_hot.fixups.shrink(fixups);
-@@ -473,7 +622,13 @@ public:
+@@ -473,7 +630,13 @@ public:
      void emitFloatPath(const FloatPath& floatPath, unsigned nextOffset, Vector<size_t>& slowBranches)
      {
          m_slow = &slowBranches;
@@ -278,7 +286,7 @@ index d0c8974b497..198d364961e 100644
              floatCompare(floatPath.opcode, floatPath.lhs, floatPath.rhs, floatPath.target);
          else
              floatArith(floatPath.opcode, floatPath.dst, floatPath.lhs, floatPath.rhs);
-@@ -690,6 +845,203 @@ private:
+@@ -690,6 +853,207 @@ private:
          m_hot.bindShort(done);
      }
  
@@ -368,7 +376,11 @@ index d0c8974b497..198d364961e 100644
 +        constexpr int slot = sizeof(Register);
 +        int frameSize = static_cast<int>(m_codeBlock->numCalleeLocals()) * slot + static_cast<int>(maxFrameExtentForSlowPathCall);
 +        int frame = -frameSize - static_cast<int>(roundUpToMultipleOf(stackAlignmentBytes(), (static_cast<unsigned>(CallFrameSlot::thisArgument) + 1) * slot));
-+        RELEASE_ASSERT(frame >= -32768);
++        // A frame too far down for a displacement: the slow path.
++        if (frame < -32768) {
++            slowUnless(Builder::Always);
++            return m_hot.branch(Builder::Always);
++        }
 +        uint32_t* lr = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotLR]);
 +        uint32_t* sp = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotSP]);
 +        uint32_t* t0High = reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[m68kSlotT0]);
@@ -482,7 +494,7 @@ index d0c8974b497..198d364961e 100644
      bool getById(const JSInstruction* instruction)
      {
          auto bytecode = instruction->as<OpGetById>();
-@@ -698,21 +1050,28 @@ private:
+@@ -698,21 +1062,28 @@ private:
          if (!dst.valid || dst.isConstant || !base.valid || base.isConstant)
              return false;
          auto& metadata = bytecode.metadata(m_codeBlock);
@@ -524,7 +536,7 @@ index d0c8974b497..198d364961e 100644
          return true;
      }
  
-@@ -724,9 +1083,48 @@ private:
+@@ -724,9 +1095,48 @@ private:
          m_hot.andByteImm(IndexingShapeMask | (copyOnWrite ? CopyOnWrite : 0), 0);
      }
  
@@ -575,7 +587,7 @@ index d0c8974b497..198d364961e 100644
      bool getByVal(const JSInstruction* instruction)
      {
          auto bytecode = instruction->as<OpGetByVal>();
-@@ -742,7 +1140,11 @@ private:
+@@ -742,7 +1152,11 @@ private:
          m_hot.cmpByteImm(Int32Shape, 0);
          size_t shapeOk = m_hot.branchShort(Builder::Equal);
          m_hot.cmpByteImm(ContiguousShape, 0);
@@ -588,7 +600,7 @@ index d0c8974b497..198d364961e 100644
          m_hot.bindShort(shapeOk);
          m_hot.moveaDisp(0, JSObject::butterflyOffset(), 0);
          m_hot.cmpDisp(0, Butterfly::offsetOfPublicLength(), 1);
-@@ -758,6 +1160,24 @@ private:
+@@ -758,6 +1172,24 @@ private:
          m_hot.copyIndexedToFrame(0, 1, 4, dst.lo);
          return true;
      }
@@ -613,7 +625,7 @@ index d0c8974b497..198d364961e 100644
  
      // As getByVal, in bounds only (the template grows arrays), and not to
      // copy-on-write arrays. An Int32Shape array only takes int32s.
-@@ -826,7 +1246,11 @@ private:
+@@ -826,7 +1258,11 @@ private:
          m_hot.loadByteDisp(0, JSCell::indexingTypeAndMiscOffset(), 0);
          static_assert(IsArray == 1);
          m_hot.btstImm(0, 0);
@@ -626,7 +638,7 @@ index d0c8974b497..198d364961e 100644
          m_hot.andByteImm(IndexingShapeMask, 0);
          slowUnless(Builder::Equal);
          m_hot.moveaDisp(0, JSObject::butterflyOffset(), 0);
-@@ -836,6 +1260,15 @@ private:
+@@ -836,6 +1272,15 @@ private:
          m_hot.storeFrame(0, dst.lo);
          return true;
      }
@@ -642,7 +654,7 @@ index d0c8974b497..198d364961e 100644
  
      bool putById(const JSInstruction* instruction)
      {
-@@ -1042,6 +1475,7 @@ private:
+@@ -1042,6 +1487,7 @@ private:
          m_hot.tstFrame(callee.hi);
          slowUnless(Builder::NotEqual);
          m_hot.loadFrame(callee.lo, 0);
@@ -650,7 +662,7 @@ index d0c8974b497..198d364961e 100644
          m_hot.cmpLongAbs(linkBase + CallLinkInfo::offsetOfCallee(), 0);
          size_t notMonomorphic = m_hot.branch(Builder::NotEqual);
  
-@@ -1142,9 +1576,70 @@ private:
+@@ -1142,9 +1588,70 @@ private:
              m_hot.copyAbsToFrame(t0High, dst.hi);
              m_hot.storeFrame(4, dst.lo);
          }
@@ -721,7 +733,7 @@ index d0c8974b497..198d364961e 100644
      // Comparisons and tests on any value (stage J7), not only int32s: what
      // the interpreter's handlers do with 64-bit operations, done with the
      // high and low words. Doubles, strings compared by their contents and
-@@ -1822,6 +2317,11 @@ private:
+@@ -1822,6 +2329,11 @@ private:
          switch (instruction->opcodeID()) {
          case op_enter:
              return enter();
@@ -733,7 +745,7 @@ index d0c8974b497..198d364961e 100644
          case op_call:
              return call<OpCall>(instruction, offset);
          case op_construct:
-@@ -1981,6 +2481,9 @@ private:
+@@ -1981,6 +2493,9 @@ private:
      Vector<size_t>* m_slow { nullptr };
      Vector<size_t>* m_bail { nullptr };
      FloatPath* m_float { nullptr };
@@ -743,7 +755,7 @@ index d0c8974b497..198d364961e 100644
  };
  
  // Register caching (stage J6). A loop's body gets a second copy that keeps
-@@ -2026,6 +2529,10 @@ public:
+@@ -2026,6 +2541,10 @@ public:
              m_code.branchToBuffer(Builder::NotEqual, m_plainStart[m_head]);
              m_code.loadFrame(slot + 4, reg);
          }
@@ -754,7 +766,7 @@ index d0c8974b497..198d364961e 100644
          m_loop = m_code.size();
          const JSInstruction* instruction = head;
          while (true) {
-@@ -2054,6 +2561,10 @@ private:
+@@ -2054,6 +2573,10 @@ private:
          bool isConstant { false };
          int32_t constant { 0 };
          int reg { -1 }; // a cached variable's register
@@ -765,7 +777,7 @@ index d0c8974b497..198d364961e 100644
          bool liveIn { false }; // cached, and its frame tag checked by the preheader
          int hi { 0 };
          int lo { 0 };
-@@ -2088,6 +2599,13 @@ private:
+@@ -2088,6 +2611,13 @@ private:
                  int32Constants = false;
              uses.append(reg);
          };
@@ -779,7 +791,7 @@ index d0c8974b497..198d364961e 100644
          auto result = [&](bool handled) { return handled && int32Constants; };
          switch (instruction->opcodeID()) {
          case op_loop_hint:
-@@ -2096,6 +2614,10 @@ private:
+@@ -2096,6 +2626,10 @@ private:
              return true;
          case op_mov: {
              auto bytecode = instruction->as<OpMov>();
@@ -790,7 +802,7 @@ index d0c8974b497..198d364961e 100644
              if (bytecode.m_src.isConstant() && !m_codeBlock->getConstant(bytecode.m_src).isInt32()) {
                  // Another constant (undefined for a call's this, say): its
                  // slot stays out of the registers.
-@@ -2182,14 +2704,16 @@ private:
+@@ -2182,14 +2716,16 @@ private:
          case op_inc: add(instruction->as<OpInc>().m_srcDst); return true;
          case op_dec: add(instruction->as<OpDec>().m_srcDst); return true;
  #define M68K_BINARY(name, Op) case name: { auto bytecode = instruction->as<Op>(); add(bytecode.m_dst); add(bytecode.m_lhs); add(bytecode.m_rhs); return result(true); }
@@ -811,7 +823,7 @@ index d0c8974b497..198d364961e 100644
          M68K_COMPARE(op_jless, OpJless)
          M68K_COMPARE(op_jlesseq, OpJlesseq)
          M68K_COMPARE(op_jgreater, OpJgreater)
-@@ -2249,6 +2773,16 @@ private:
+@@ -2249,6 +2785,16 @@ private:
          HashSet<int, WTF::IntHash<int>, WTF::SignedWithZeroKeyHashTraits<int>> cellSlots;
          Vector<std::pair<int, int>> moves;
          auto displacement = [](VirtualRegister reg) { return reg.offset() * static_cast<int>(sizeof(Register)); };
@@ -828,7 +840,7 @@ index d0c8974b497..198d364961e 100644
          unsigned handled = 0;
          bool backEdge = false;
          const JSInstruction* instruction = head;
-@@ -2263,6 +2797,29 @@ private:
+@@ -2263,6 +2809,29 @@ private:
                  cellSlots.add(displacement(reg));
              if (instruction->opcodeID() == op_mov && regs.size() == 2 && !regs[1].isConstant())
                  moves.append({ displacement(regs[0]), displacement(regs[1]) });
@@ -858,7 +870,7 @@ index d0c8974b497..198d364961e 100644
              // mov and the arithmetic list their result first; it is written
              // after the others are read.
              OpcodeID opcode = instruction->opcodeID();
-@@ -2311,9 +2868,49 @@ private:
+@@ -2311,9 +2880,49 @@ private:
                  }
              }
          }
@@ -909,7 +921,7 @@ index d0c8974b497..198d364961e 100644
                  ranked.append({ entry.value, entry.key });
          }
          std::sort(ranked.begin(), ranked.end(), [](auto& a, auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
-@@ -2326,7 +2923,16 @@ private:
+@@ -2326,7 +2935,16 @@ private:
              m_registers.append({ ranked[i].second, registers[m_registers.size()] });
              m_liveIn.append(liveIn.contains(ranked[i].second));
          }
@@ -927,7 +939,7 @@ index d0c8974b497..198d364961e 100644
      }
  
      bool isTemporary(int hi) const
-@@ -2349,12 +2955,20 @@ private:
+@@ -2349,12 +2967,20 @@ private:
          Value value;
          if (reg.isConstant()) {
              value.isConstant = true;
@@ -949,7 +961,7 @@ index d0c8974b497..198d364961e 100644
          for (unsigned i = 0; i < m_registers.size(); ++i) {
              if (m_registers[i].first == value.hi)
                  value.liveIn = m_liveIn[i];
-@@ -2401,6 +3015,70 @@ private:
+@@ -2401,6 +3027,70 @@ private:
              m_code.branchToBytecode(cc, target);
      }
  
@@ -1020,7 +1032,7 @@ index d0c8974b497..198d364961e 100644
      enum class Arith { Add, Sub, Mul, And, Or, Xor };
      template<typename Op>
      Result binary(const JSInstruction* instruction, Arith arith)
-@@ -2411,6 +3089,8 @@ private:
+@@ -2411,6 +3101,8 @@ private:
          Value dst = valueFor(bytecode.m_dst);
          Value lhs = valueFor(bytecode.m_lhs);
          Value rhs = valueFor(bytecode.m_rhs);
@@ -1029,7 +1041,7 @@ index d0c8974b497..198d364961e 100644
          checkUncached(lhs);
          checkUncached(rhs);
          load(lhs, 0);
-@@ -2441,6 +3121,19 @@ private:
+@@ -2441,6 +3133,19 @@ private:
          auto bytecode = instruction->as<Op>();
          Value lhs = valueFor(bytecode.m_lhs);
          Value rhs = valueFor(bytecode.m_rhs);
@@ -1049,10 +1061,23 @@ index d0c8974b497..198d364961e 100644
          checkUncached(lhs);
          checkUncached(rhs);
          unsigned left = 0;
-@@ -2486,6 +3179,19 @@ private:
+@@ -2486,6 +3191,32 @@ private:
              auto bytecode = instruction->as<OpMov>();
              if (bytecode.m_dst.isConstant())
                  return Stop;
++            // A constant that is not a number (undefined for a call's this,
++            // a string, a boolean) goes to the frame as it is, also into a
++            // slot that otherwise holds doubles; a slot an FPU or data
++            // register keeps goes on in the plain code.
++            if (bytecode.m_src.isConstant() && !m_codeBlock->getConstant(bytecode.m_src).isNumber()) {
++                Value dst = valueFor(bytecode.m_dst);
++                if (dst.reg >= 0 || dst.fp >= 0)
++                    return Stop;
++                uint64_t bits = JSValue::encode(m_codeBlock->getConstant(bytecode.m_src));
++                m_code.storeFrameImm(static_cast<uint32_t>(bits >> 32), dst.hi);
++                m_code.storeFrameImm(static_cast<uint32_t>(bits), dst.lo);
++                return Next;
++            }
 +            if (Value dst = valueFor(bytecode.m_dst); dst.isDoubleSlot) {
 +                Value src = valueFor(bytecode.m_src);
 +                unsigned from = loadNumber(src, dst.fp >= 0 ? dst.fp : 0);
@@ -1069,7 +1094,7 @@ index d0c8974b497..198d364961e 100644
              if (bytecode.m_src.isConstant() && !m_codeBlock->getConstant(bytecode.m_src).isInt32()) {
                  Value dst = valueFor(bytecode.m_dst);
                  if (dst.reg >= 0)
-@@ -2541,6 +3247,8 @@ private:
+@@ -2541,6 +3272,8 @@ private:
                  m_code.branchToBuffer(Builder::NotEqual, m_plainStart[next]);
                  m_code.loadFrame(slot + 4, reg);
              }
@@ -1078,7 +1103,7 @@ index d0c8974b497..198d364961e 100644
              return Next;
          }
          case op_jstricteq: case op_jnstricteq: case op_jtrue: case op_jfalse:
-@@ -2579,9 +3287,14 @@ private:
+@@ -2579,9 +3312,14 @@ private:
              FloatPath floatPath;
              if (!m_fastPaths.emit(instruction, offset, branches, floatPath))
                  return Stop;
@@ -1094,7 +1119,7 @@ index d0c8974b497..198d364961e 100644
              std::optional<VirtualRegister> result;
              if (instruction->opcodeID() == op_get_by_id)
                  result = instruction->as<OpGetById>().m_dst;
-@@ -2625,6 +3338,9 @@ private:
+@@ -2625,6 +3363,9 @@ private:
      const Vector<unsigned>& m_plainStart;
      Vector<std::pair<int, unsigned>> m_registers; // frame slot (high word) -> data register
      Vector<bool> m_liveIn; // per register: its value comes in from before the loop
@@ -1104,7 +1129,7 @@ index d0c8974b497..198d364961e 100644
      unsigned m_head { 0 };
      unsigned m_offset { 0 };
      size_t m_loop { 0 };
-@@ -2745,14 +3461,27 @@ bool compile(CodeBlock* codeBlock)
+@@ -2745,14 +3486,27 @@ bool compile(CodeBlock* codeBlock)
          for (size_t i : slow.branches)
              code.fixups[i].targetBuffer = start;
          copyTemplate(slow.instruction, slow.offset);
@@ -1133,7 +1158,7 @@ index d0c8974b497..198d364961e 100644
          fastFree(memory);
          fastFree(map);
          return false;
-@@ -2773,6 +3502,7 @@ bool compile(CodeBlock* codeBlock)
+@@ -2773,6 +3527,7 @@ bool compile(CodeBlock* codeBlock)
      flushInstructionCache(memory, codeSize);
      for (const auto& instruction : instructions)
          map[instruction.offset()] = memory + hotStart[instruction.offset()];
@@ -1141,7 +1166,7 @@ index d0c8974b497..198d364961e 100644
  
      codeBlock->m_m68kTemplateCode = memory;
      codeBlock->m_m68kTemplateMap = map;
-@@ -2801,6 +3531,23 @@ void* entryFor(CodeBlock* codeBlock, const JSInstruction* pc)
+@@ -2801,6 +3556,23 @@ void* entryFor(CodeBlock* codeBlock, const JSInstruction* pc)
      return codeBlock->m_m68kTemplateMap[bytecodeOffset];
  }
  
