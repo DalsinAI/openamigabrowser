@@ -1,0 +1,687 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 16:30:00 +0100
+Subject: [PATCH] WebCore: Web SQL and page text extraction only when enabled
+
+Web SQL (openDatabase) is deprecated and off by setting, and the page
+text extraction behind Apple's assistive and element targeting features
+has no user on the Amiga, but both were built into the engine (about
+0.3 MB of 68k code). Each gets a feature flag, on by default as before,
+and the Amiga port turns both off:
+
+- ENABLE_WEB_DATABASE and ENABLE_TEXT_EXTRACTION (WebKitFeatures.cmake
+  and PlatformEnable.h, default on; OptionsAmiga.cmake sets them off).
+- Every Modules/webdatabase IDL carries Conditional=WEB_DATABASE and its
+  sources build only with it, except DatabaseAuthorizer.cpp, which
+  SQLiteDatabase uses. Window's custom openDatabase, the script execution
+  context's DatabaseContext and the frame loader's stopDatabases call go
+  with it.
+- TextExtraction.cpp and TextExtractionScriptFiltering.cpp build only with
+  ENABLE(TEXT_EXTRACTION); without it extractRenderedText, which element
+  targeting calls, returns empty text.
+
+diff --git a/Source/WTF/wtf/PlatformEnable.h b/Source/WTF/wtf/PlatformEnable.h
+index 317bfb6c7fa..53352bacafb 100644
+--- a/Source/WTF/wtf/PlatformEnable.h
++++ b/Source/WTF/wtf/PlatformEnable.h
+@@ -653,6 +653,14 @@
+ #define ENABLE_SPEECH_RECOGNITION 1
+ #endif
+ 
++#if !defined(ENABLE_TEXT_EXTRACTION)
++#define ENABLE_TEXT_EXTRACTION 1
++#endif
++
++#if !defined(ENABLE_WEB_DATABASE)
++#define ENABLE_WEB_DATABASE 1
++#endif
++
+ #if !defined(ENABLE_WEB_LOCKS)
+ #define ENABLE_WEB_LOCKS 1
+ #endif
+diff --git a/Source/WebCore/Modules/webdatabase/ChangeVersionWrapper.cpp b/Source/WebCore/Modules/webdatabase/ChangeVersionWrapper.cpp
+index 199c5cd3cf4..3728484954b 100644
+--- a/Source/WebCore/Modules/webdatabase/ChangeVersionWrapper.cpp
++++ b/Source/WebCore/Modules/webdatabase/ChangeVersionWrapper.cpp
+@@ -26,6 +26,8 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "ChangeVersionWrapper.h"
+ 
+ #include "Database.h"
+@@ -80,3 +82,5 @@ void ChangeVersionWrapper::handleCommitFailedAfterPostflight(SQLTransaction& tra
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/DOMWindow+WebDatabase.idl b/Source/WebCore/Modules/webdatabase/DOMWindow+WebDatabase.idl
+index 175fb274e12..05e72a58ebd 100644
+--- a/Source/WebCore/Modules/webdatabase/DOMWindow+WebDatabase.idl
++++ b/Source/WebCore/Modules/webdatabase/DOMWindow+WebDatabase.idl
+@@ -25,6 +25,7 @@
+  */
+ 
+ [
++    Conditional=WEB_DATABASE,
+     ImplementedBy=LocalDOMWindowWebDatabase
+ ] partial interface DOMWindow {
+     [Custom, NotEnumerable] attribute any openDatabase;
+diff --git a/Source/WebCore/Modules/webdatabase/Database.cpp b/Source/WebCore/Modules/webdatabase/Database.cpp
+index 367d813a19c..c48cfedfcdd 100644
+--- a/Source/WebCore/Modules/webdatabase/Database.cpp
++++ b/Source/WebCore/Modules/webdatabase/Database.cpp
+@@ -27,6 +27,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "Database.h"
+ 
+ #include "ChangeVersionData.h"
+@@ -804,3 +806,5 @@ String Database::databaseDebugName() const
+ #endif
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/Database.idl b/Source/WebCore/Modules/webdatabase/Database.idl
+index 9a547503d1a..607889efc54 100644
+--- a/Source/WebCore/Modules/webdatabase/Database.idl
++++ b/Source/WebCore/Modules/webdatabase/Database.idl
+@@ -27,6 +27,7 @@
+  */
+ 
+ [
++    Conditional=WEB_DATABASE,
+     EnabledByDeprecatedGlobalSetting=WebSQLEnabled,
+     Exposed=Window
+ ] interface Database {
+diff --git a/Source/WebCore/Modules/webdatabase/DatabaseCallback.idl b/Source/WebCore/Modules/webdatabase/DatabaseCallback.idl
+index 6a07aa5ee49..b94db741238 100644
+--- a/Source/WebCore/Modules/webdatabase/DatabaseCallback.idl
++++ b/Source/WebCore/Modules/webdatabase/DatabaseCallback.idl
+@@ -26,4 +26,4 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-[ GenerateIsReachable=ImplScriptExecutionContext ] callback DatabaseCallback = undefined (Database database);
++[Conditional=WEB_DATABASE,  GenerateIsReachable=ImplScriptExecutionContext ] callback DatabaseCallback = undefined (Database database);
+diff --git a/Source/WebCore/Modules/webdatabase/DatabaseContext.cpp b/Source/WebCore/Modules/webdatabase/DatabaseContext.cpp
+index f5a9bd720ce..80a180e3032 100644
+--- a/Source/WebCore/Modules/webdatabase/DatabaseContext.cpp
++++ b/Source/WebCore/Modules/webdatabase/DatabaseContext.cpp
+@@ -26,6 +26,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "DatabaseContext.h"
+ 
+ #include "Chrome.h"
+@@ -217,3 +219,5 @@ bool DatabaseContext::isContextThread() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/DatabaseManager.cpp b/Source/WebCore/Modules/webdatabase/DatabaseManager.cpp
+index 677fcf7441e..0dbcf0b9212 100644
+--- a/Source/WebCore/Modules/webdatabase/DatabaseManager.cpp
++++ b/Source/WebCore/Modules/webdatabase/DatabaseManager.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "DatabaseManager.h"
+ 
+ #include "Database.h"
+@@ -284,3 +286,5 @@ void DatabaseManager::platformInitialize(const String& databasePath)
+ #endif
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/DatabaseTask.cpp b/Source/WebCore/Modules/webdatabase/DatabaseTask.cpp
+index b058d9ce95a..28651570fbf 100644
+--- a/Source/WebCore/Modules/webdatabase/DatabaseTask.cpp
++++ b/Source/WebCore/Modules/webdatabase/DatabaseTask.cpp
+@@ -27,6 +27,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "DatabaseTask.h"
+ 
+ #include "Database.h"
+@@ -195,3 +197,5 @@ ASCIILiteral DatabaseTableNamesTask::debugTaskName() const
+ #endif
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/DatabaseThread.cpp b/Source/WebCore/Modules/webdatabase/DatabaseThread.cpp
+index fb8f41590a6..1cfd8219c5f 100644
+--- a/Source/WebCore/Modules/webdatabase/DatabaseThread.cpp
++++ b/Source/WebCore/Modules/webdatabase/DatabaseThread.cpp
+@@ -27,6 +27,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "DatabaseThread.h"
+ 
+ #include "Database.h"
+@@ -182,3 +184,5 @@ bool DatabaseThread::hasPendingDatabaseActivity() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/DatabaseTracker.cpp b/Source/WebCore/Modules/webdatabase/DatabaseTracker.cpp
+index 94438a4d09f..e85850a5bd6 100644
+--- a/Source/WebCore/Modules/webdatabase/DatabaseTracker.cpp
++++ b/Source/WebCore/Modules/webdatabase/DatabaseTracker.cpp
+@@ -27,6 +27,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "DatabaseTracker.h"
+ 
+ #include "Database.h"
+@@ -1320,3 +1322,5 @@ void DatabaseTracker::notifyDatabasesChanged()
+ 
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/LocalDOMWindowWebDatabase.cpp b/Source/WebCore/Modules/webdatabase/LocalDOMWindowWebDatabase.cpp
+index a943090bb64..d84153ee39b 100644
+--- a/Source/WebCore/Modules/webdatabase/LocalDOMWindowWebDatabase.cpp
++++ b/Source/WebCore/Modules/webdatabase/LocalDOMWindowWebDatabase.cpp
+@@ -25,6 +25,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "LocalDOMWindowWebDatabase.h"
+ 
+ #include "Database.h"
+@@ -62,3 +64,5 @@ ExceptionOr<RefPtr<Database>> LocalDOMWindowWebDatabase::openDatabase(LocalDOMWi
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/OriginLock.cpp b/Source/WebCore/Modules/webdatabase/OriginLock.cpp
+index eff93bd0e1f..3b4a1e4a062 100644
+--- a/Source/WebCore/Modules/webdatabase/OriginLock.cpp
++++ b/Source/WebCore/Modules/webdatabase/OriginLock.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "OriginLock.h"
+ 
+ #include <wtf/FileSystem.h>
+@@ -84,3 +86,5 @@ void OriginLock::deleteLockFile(const String& originPath)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/SQLError.idl b/Source/WebCore/Modules/webdatabase/SQLError.idl
+index 44aaeab9aa9..1ac83972168 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLError.idl
++++ b/Source/WebCore/Modules/webdatabase/SQLError.idl
+@@ -27,6 +27,7 @@
+  */
+ 
+ [
++    Conditional=WEB_DATABASE,
+     EnabledByDeprecatedGlobalSetting=WebSQLEnabled,
+     Exposed=Window
+ ] interface SQLError {
+diff --git a/Source/WebCore/Modules/webdatabase/SQLResultSet.cpp b/Source/WebCore/Modules/webdatabase/SQLResultSet.cpp
+index 63e5153c5bb..6ea51ffed34 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLResultSet.cpp
++++ b/Source/WebCore/Modules/webdatabase/SQLResultSet.cpp
+@@ -27,6 +27,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "SQLResultSet.h"
+ 
+ #include "ExceptionOr.h"
+@@ -48,3 +50,5 @@ ExceptionOr<int64_t> SQLResultSet::insertId() const
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/SQLResultSet.idl b/Source/WebCore/Modules/webdatabase/SQLResultSet.idl
+index d75e87cf248..8ca0e915bfd 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLResultSet.idl
++++ b/Source/WebCore/Modules/webdatabase/SQLResultSet.idl
+@@ -27,6 +27,7 @@
+  */
+ 
+ [
++    Conditional=WEB_DATABASE,
+     EnabledByDeprecatedGlobalSetting=WebSQLEnabled,
+     Exposed=Window
+ ] interface SQLResultSet {
+diff --git a/Source/WebCore/Modules/webdatabase/SQLResultSetRowList.cpp b/Source/WebCore/Modules/webdatabase/SQLResultSetRowList.cpp
+index 00ffb2f68a5..3ef3e493e30 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLResultSetRowList.cpp
++++ b/Source/WebCore/Modules/webdatabase/SQLResultSetRowList.cpp
+@@ -27,6 +27,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "SQLResultSetRowList.h"
+ 
+ #include "ExceptionCode.h"
+@@ -60,3 +62,5 @@ ExceptionOr<Vector<KeyValuePair<String, SQLValue>>> SQLResultSetRowList::item(un
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/SQLResultSetRowList.idl b/Source/WebCore/Modules/webdatabase/SQLResultSetRowList.idl
+index d5f02de8711..294f9f0ff53 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLResultSetRowList.idl
++++ b/Source/WebCore/Modules/webdatabase/SQLResultSetRowList.idl
+@@ -29,6 +29,7 @@
+ typedef (DOMString? or unrestricted double) SQLValue;
+ 
+ [
++    Conditional=WEB_DATABASE,
+     EnabledByDeprecatedGlobalSetting=WebSQLEnabled,
+     Exposed=Window
+ ] interface SQLResultSetRowList {
+diff --git a/Source/WebCore/Modules/webdatabase/SQLStatement.cpp b/Source/WebCore/Modules/webdatabase/SQLStatement.cpp
+index 83cb461e97a..0b7c4cac648 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLStatement.cpp
++++ b/Source/WebCore/Modules/webdatabase/SQLStatement.cpp
+@@ -26,6 +26,8 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "SQLStatement.h"
+ 
+ #include "Database.h"
+@@ -264,3 +266,5 @@ bool SQLStatement::lastExecutionFailedDueToQuota() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/SQLStatementCallback.idl b/Source/WebCore/Modules/webdatabase/SQLStatementCallback.idl
+index de3f1ec9f90..46150051c6b 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLStatementCallback.idl
++++ b/Source/WebCore/Modules/webdatabase/SQLStatementCallback.idl
+@@ -26,4 +26,4 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-[ GenerateIsReachable=ImplScriptExecutionContext ] callback SQLStatementCallback = undefined (SQLTransaction transaction, SQLResultSet resultSet);
++[Conditional=WEB_DATABASE,  GenerateIsReachable=ImplScriptExecutionContext ] callback SQLStatementCallback = undefined (SQLTransaction transaction, SQLResultSet resultSet);
+diff --git a/Source/WebCore/Modules/webdatabase/SQLStatementErrorCallback.idl b/Source/WebCore/Modules/webdatabase/SQLStatementErrorCallback.idl
+index 6edeadce7c3..edcef981822 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLStatementErrorCallback.idl
++++ b/Source/WebCore/Modules/webdatabase/SQLStatementErrorCallback.idl
+@@ -26,4 +26,4 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-[ GenerateIsReachable=ImplScriptExecutionContext ] callback SQLStatementErrorCallback = boolean (SQLTransaction transaction, SQLError error);
++[Conditional=WEB_DATABASE,  GenerateIsReachable=ImplScriptExecutionContext ] callback SQLStatementErrorCallback = boolean (SQLTransaction transaction, SQLError error);
+diff --git a/Source/WebCore/Modules/webdatabase/SQLTransaction.cpp b/Source/WebCore/Modules/webdatabase/SQLTransaction.cpp
+index 3a2eb4f51ee..357f8a7f7a5 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLTransaction.cpp
++++ b/Source/WebCore/Modules/webdatabase/SQLTransaction.cpp
+@@ -27,6 +27,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "SQLTransaction.h"
+ 
+ #include "Database.h"
+@@ -679,3 +681,5 @@ ASCIILiteral SQLTransaction::debugStepName(void (SQLTransaction::*step)())
+ #endif
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/SQLTransaction.idl b/Source/WebCore/Modules/webdatabase/SQLTransaction.idl
+index 98e1737bce9..aba2bff78c5 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLTransaction.idl
++++ b/Source/WebCore/Modules/webdatabase/SQLTransaction.idl
+@@ -29,6 +29,7 @@
+ typedef (DOMString? or unrestricted double) SQLValue;
+ 
+ [
++    Conditional=WEB_DATABASE,
+     SkipVTableValidation,
+     Exposed=Window
+ ] interface SQLTransaction {
+diff --git a/Source/WebCore/Modules/webdatabase/SQLTransactionBackend.cpp b/Source/WebCore/Modules/webdatabase/SQLTransactionBackend.cpp
+index 506bd75e712..32d61fabef2 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLTransactionBackend.cpp
++++ b/Source/WebCore/Modules/webdatabase/SQLTransactionBackend.cpp
+@@ -27,6 +27,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "SQLTransactionBackend.h"
+ 
+ #include "Database.h"
+@@ -526,3 +528,5 @@ void SQLTransactionBackend::unreachableState()
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/SQLTransactionCallback.idl b/Source/WebCore/Modules/webdatabase/SQLTransactionCallback.idl
+index 7929b196c80..7438d9b9aff 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLTransactionCallback.idl
++++ b/Source/WebCore/Modules/webdatabase/SQLTransactionCallback.idl
+@@ -26,4 +26,4 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-[ GenerateIsReachable=ImplScriptExecutionContext ] callback SQLTransactionCallback = undefined (SQLTransaction transaction);
++[Conditional=WEB_DATABASE,  GenerateIsReachable=ImplScriptExecutionContext ] callback SQLTransactionCallback = undefined (SQLTransaction transaction);
+diff --git a/Source/WebCore/Modules/webdatabase/SQLTransactionCoordinator.cpp b/Source/WebCore/Modules/webdatabase/SQLTransactionCoordinator.cpp
+index 9147a38c554..45d7fe78e11 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLTransactionCoordinator.cpp
++++ b/Source/WebCore/Modules/webdatabase/SQLTransactionCoordinator.cpp
+@@ -30,6 +30,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "SQLTransactionCoordinator.h"
+ 
+ #include "Database.h"
+@@ -142,3 +144,5 @@ void SQLTransactionCoordinator::shutdown()
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/Modules/webdatabase/SQLTransactionErrorCallback.idl b/Source/WebCore/Modules/webdatabase/SQLTransactionErrorCallback.idl
+index 69b9fe0941c..65d24891718 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLTransactionErrorCallback.idl
++++ b/Source/WebCore/Modules/webdatabase/SQLTransactionErrorCallback.idl
+@@ -26,4 +26,4 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-[ GenerateIsReachable=ImplScriptExecutionContext ] callback SQLTransactionErrorCallback = undefined (SQLError error);
++[Conditional=WEB_DATABASE,  GenerateIsReachable=ImplScriptExecutionContext ] callback SQLTransactionErrorCallback = undefined (SQLError error);
+diff --git a/Source/WebCore/Modules/webdatabase/SQLTransactionStateMachine.cpp b/Source/WebCore/Modules/webdatabase/SQLTransactionStateMachine.cpp
+index 2a4c776ad3d..206074df0e9 100644
+--- a/Source/WebCore/Modules/webdatabase/SQLTransactionStateMachine.cpp
++++ b/Source/WebCore/Modules/webdatabase/SQLTransactionStateMachine.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_DATABASE)
+ #include "SQLTransactionStateMachine.h"
+ 
+ #include "Logging.h"
+@@ -69,3 +71,5 @@ ASCIILiteral nameForSQLTransactionState(SQLTransactionState state)
+ #endif
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/bindings/js/JSDOMWindowCustom.cpp b/Source/WebCore/bindings/js/JSDOMWindowCustom.cpp
+index bc331d2d7c3..c3e7885c629 100644
+--- a/Source/WebCore/bindings/js/JSDOMWindowCustom.cpp
++++ b/Source/WebCore/bindings/js/JSDOMWindowCustom.cpp
+@@ -32,8 +32,12 @@
+ #include "JSDOMConvertNumbers.h"
+ #include "JSDOMConvertStrings.h"
+ #include "JSDOMGlobalObjectInlines.h"
++#if ENABLE(WEB_DATABASE)
+ #include "JSDatabase.h"
++#endif
++#if ENABLE(WEB_DATABASE)
+ #include "JSDatabaseCallback.h"
++#endif
+ #include "JSEvent.h"
+ #include "JSEventListener.h"
+ #include "JSHTMLAudioElement.h"
+@@ -41,7 +45,9 @@
+ #include "JSIDBFactory.h"
+ #include "JSWindowProxy.h"
+ #include "JSWorker.h"
++#if ENABLE(WEB_DATABASE)
+ #include "LocalDOMWindowWebDatabase.h"
++#endif
+ #include "LocalFrame.h"
+ #include "Location.h"
+ #include "ScheduledAction.h"
+@@ -72,7 +78,9 @@
+ namespace WebCore {
+ using namespace JSC;
+ 
++#if ENABLE(WEB_DATABASE)
+ static JSC_DECLARE_HOST_FUNCTION(jsDOMWindowInstanceFunction_openDatabase);
++#endif
+ #if ENABLE(USER_MESSAGE_HANDLERS)
+ static JSC_DECLARE_CUSTOM_GETTER(jsDOMWindow_webkit);
+ #endif
+@@ -655,6 +663,7 @@ JSValue NODELETE JSDOMWindow::frames(JSC::JSGlobalObject&) const
+     return globalThis();
+ }
+ 
++#if ENABLE(WEB_DATABASE)
+ static inline JSC::EncodedJSValue jsDOMWindowInstanceFunctionOpenDatabaseBody(JSC::JSGlobalObject* lexicalGlobalObject, CallFrame* callFrame, typename IDLOperation<JSDOMWindow>::ClassParameter castedThis)
+ {
+     auto& vm = lexicalGlobalObject->vm();
+@@ -718,6 +727,7 @@ void JSDOMWindow::setOpenDatabase(JSC::JSGlobalObject& lexicalGlobalObject, JSC:
+     bool shouldThrow = true;
+     createDataProperty(&lexicalGlobalObject, builtinNames(lexicalGlobalObject.vm()).openDatabasePublicName(), value, shouldThrow);
+ }
++#endif // ENABLE(WEB_DATABASE)
+ 
+ JSDOMWindow& mainWorldGlobalObject(LocalFrame& frame)
+ {
+diff --git a/Source/WebCore/dom/ScriptExecutionContext.cpp b/Source/WebCore/dom/ScriptExecutionContext.cpp
+index c259d7e6ea7..e0d1d00ba07 100644
+--- a/Source/WebCore/dom/ScriptExecutionContext.cpp
++++ b/Source/WebCore/dom/ScriptExecutionContext.cpp
+@@ -36,7 +36,9 @@
+ #include "CrossOriginMode.h"
+ #include "CrossOriginOpenerPolicy.h"
+ #include "DOMTimer.h"
++#if ENABLE(WEB_DATABASE)
+ #include "DatabaseContext.h"
++#endif
+ #include "Document.h"
+ #include "DocumentPage.h"
+ #include "DocumentQuirks.h"
+@@ -717,10 +719,12 @@ void ScriptExecutionContext::removeRejectedPromiseTracker()
+     m_rejectedPromiseTracker = nullptr;
+ }
+ 
++#if ENABLE(WEB_DATABASE)
+ void ScriptExecutionContext::setDatabaseContext(DatabaseContext* databaseContext)
+ {
+     m_databaseContext = databaseContext;
+ }
++#endif // ENABLE(WEB_DATABASE)
+ 
+ bool ScriptExecutionContext::hasPendingActivity() const
+ {
+diff --git a/Source/WebCore/dom/ScriptExecutionContext.h b/Source/WebCore/dom/ScriptExecutionContext.h
+index 2c28dba1585..59717c79f2c 100644
+--- a/Source/WebCore/dom/ScriptExecutionContext.h
++++ b/Source/WebCore/dom/ScriptExecutionContext.h
+@@ -316,8 +316,10 @@ public:
+ 
+     virtual EventTarget* errorEventTarget() = 0;
+ 
++#if ENABLE(WEB_DATABASE)
+     DatabaseContext* databaseContext() { return m_databaseContext.get(); }
+     void setDatabaseContext(DatabaseContext*);
++#endif
+ 
+     // These two methods are used when CryptoKeys are serialized into IndexedDB. As a side effect, it is also
+     // used for things that utilize the same structure clone algorithm, for example, message passing between
+@@ -450,7 +452,9 @@ private:
+ 
+     const RefPtr<PublicURLManager> m_publicURLManager;
+ 
++#if ENABLE(WEB_DATABASE)
+     RefPtr<DatabaseContext> m_databaseContext;
++#endif
+ 
+     int m_circularSequentialID { 0 };
+     int m_timerNestingLevel { 0 };
+diff --git a/Source/WebCore/loader/FrameLoader.cpp b/Source/WebCore/loader/FrameLoader.cpp
+index 95b6306fabf..84f343f8095 100644
+--- a/Source/WebCore/loader/FrameLoader.cpp
++++ b/Source/WebCore/loader/FrameLoader.cpp
+@@ -52,7 +52,9 @@
+ #include "CrossOriginEmbedderPolicy.h"
+ #include "DNS.h"
+ #include "DOMWrapperWorld.h"
++#if ENABLE(WEB_DATABASE)
+ #include "DatabaseManager.h"
++#endif
+ #include "DiagnosticLoggingClient.h"
+ #include "DiagnosticLoggingKeys.h"
+ #include "DiagnosticLoggingResultType.h"
+@@ -626,8 +628,10 @@ void FrameLoader::stopLoading(UnloadEventPolicy unloadEventPolicy)
+     }
+ 
+     if (RefPtr document = frame->document()) {
++#if ENABLE(WEB_DATABASE)
+         // FIXME: Should the DatabaseManager watch for something like ActiveDOMObject::stop() rather than being special-cased here?
+         DatabaseManager::singleton().stopDatabases(*document, nullptr);
++#endif
+ 
+         if (document->settings().navigationAPIEnabled() && !m_doNotAbortNavigationAPI && unloadEventPolicy != UnloadEventPolicy::UnloadAndPageHide) {
+             if (RefPtr window = document->window()) {
+diff --git a/Source/WebCore/page/text-extraction/TextExtraction.cpp b/Source/WebCore/page/text-extraction/TextExtraction.cpp
+index ec41345ade2..db057bfe711 100644
+--- a/Source/WebCore/page/text-extraction/TextExtraction.cpp
++++ b/Source/WebCore/page/text-extraction/TextExtraction.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(TEXT_EXTRACTION)
+ #include "TextExtraction.h"
+ 
+ #include "AXObjectCache.h"
+@@ -3700,3 +3702,20 @@ Vector<FilterRule> extractRules(Vector<FilterRuleData>&& data)
+ 
+ } // namespace TextExtraction
+ } // namespace WebCore
++
++#else // !ENABLE(TEXT_EXTRACTION)
++
++#include "TextExtraction.h"
++
++namespace WebCore {
++namespace TextExtraction {
++
++RenderedText extractRenderedText(Element&)
++{
++    return { };
++}
++
++} // namespace TextExtraction
++} // namespace WebCore
++
++#endif // ENABLE(TEXT_EXTRACTION)
+diff --git a/Source/WebCore/page/text-extraction/TextExtractionScriptFiltering.cpp b/Source/WebCore/page/text-extraction/TextExtractionScriptFiltering.cpp
+index 69cd5a67eee..231ddcebb66 100644
+--- a/Source/WebCore/page/text-extraction/TextExtractionScriptFiltering.cpp
++++ b/Source/WebCore/page/text-extraction/TextExtractionScriptFiltering.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(TEXT_EXTRACTION)
+ #include "TextExtractionScriptFiltering.h"
+ 
+ #include "CommonVM.h"
+@@ -137,3 +139,5 @@ void applyScriptFilteringRules(const String& input, const URL& documentURL, cons
+ }
+ 
+ } // namespace WebCore::TextExtraction
++
++#endif // ENABLE(TEXT_EXTRACTION)
+diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
+index 5fada34f47c..a0736dabcd7 100644
+--- a/Source/cmake/OptionsAmiga.cmake
++++ b/Source/cmake/OptionsAmiga.cmake
+@@ -75,10 +75,12 @@ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SCREEN_WAKE_LOCK PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SHAPE_DETECTION PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SMOOTH_SCROLLING PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SPEECH_RECOGNITION PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_TEXT_EXTRACTION PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_USER_MESSAGE_HANDLERS PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_VIDEO PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_VIDEO_USES_ELEMENT_FULLSCREEN PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_AUDIO PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_DATABASE PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_LOCKS PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_TRANSPORT PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBGL PRIVATE OFF)
+diff --git a/Source/cmake/WebKitFeatures.cmake b/Source/cmake/WebKitFeatures.cmake
+index a1e0e7b2d0a..ff857f81c12 100644
+--- a/Source/cmake/WebKitFeatures.cmake
++++ b/Source/cmake/WebKitFeatures.cmake
+@@ -283,6 +283,7 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_PDFKIT_PLUGIN "Toggle PDFKit plugin support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_SCREEN_WAKE_LOCK "Toggle Screen Wake Lock API support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_SHAPE_DETECTION "Toggle Shape Detection API support" PRIVATE ON)
++    WEBKIT_OPTION_DEFINE(ENABLE_TEXT_EXTRACTION "Toggle the page text extraction used by assistive features" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_UNIFIED_PDF "Toggle unified PDF support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_PERIODIC_MEMORY_MONITOR "Toggle periodical memory monitor support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_UIPROCESS_PERIODIC_MEMORY_MONITOR "Toggle UIProcess periodic memory monitor support" PRIVATE OFF)
+@@ -335,6 +336,7 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_AUDIO "Toggle Web Audio support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_AUTHN "Toggle Web AuthN support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_CODECS "Toggle WebCodecs support" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_WEB_DATABASE "Toggle Web SQL Database support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_LOCKS "Toggle Web Locks API support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_RTC "Toggle WebRTC support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_TRANSPORT "Toggle WebTransport support" PRIVATE ON)

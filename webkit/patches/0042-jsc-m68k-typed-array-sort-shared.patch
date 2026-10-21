@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 17:00:00 +0100
+Subject: [PATCH] JSC: one typed array sort body per type on 68k
+
+TypedArray.prototype.sort and toSorted each inlined the whole sort
+(genericTypedArrayViewProtoFuncSortImpl and its stable merge sort) for
+all twelve array types, and they lived in different source files, so the
+68k engine carried every sort twice. On CPU(M68K) the sort body is
+NEVER_INLINE, and toSorted moves next to sort in
+JSTypedArrayViewPrototypeFunctions3.cpp so both call the same copy.
+
+Measured with the 68040 -Os build: JSTypedArrayViewPrototypeFunctions2
+and 3 go from 1,262,156 to 795,260 bytes of code (467 KB less). One
+extra call per sort, not per comparison.
+
+diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewPrototypeFunctions.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewPrototypeFunctions.h
+index 9b16f3c11c1..c83af434f71 100644
+--- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewPrototypeFunctions.h
++++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewPrototypeFunctions.h
+@@ -1638,8 +1638,16 @@ ALWAYS_INLINE EncodedJSValue genericTypedArrayViewProtoFuncToReversed(VM& vm, JS
+     return JSValue::encode(result);
+ }
+ 
++#if CPU(M68K)
++// One out-of-line copy per array type, shared by sort and toSorted: inlined, each type's
++// stable sort was emitted twice (about 240 KB of 68k code).
++#define TYPED_ARRAY_SORT_IMPL_INLINE NEVER_INLINE
++#else
++#define TYPED_ARRAY_SORT_IMPL_INLINE ALWAYS_INLINE
++#endif
++
+ template<typename ViewClass>
+-static ALWAYS_INLINE EncodedJSValue genericTypedArrayViewProtoFuncSortImpl(VM& vm, JSGlobalObject* globalObject, ViewClass* thisObject, JSValue comparatorValue)
++static TYPED_ARRAY_SORT_IMPL_INLINE EncodedJSValue genericTypedArrayViewProtoFuncSortImpl(VM& vm, JSGlobalObject* globalObject, ViewClass* thisObject, JSValue comparatorValue)
+ {
+     auto scope = DECLARE_THROW_SCOPE(vm);
+ 
+@@ -1729,6 +1737,8 @@ static ALWAYS_INLINE EncodedJSValue genericTypedArrayViewProtoFuncSortImpl(VM& v
+     return JSValue::encode(thisObject);
+ }
+ 
++#undef TYPED_ARRAY_SORT_IMPL_INLINE
++
+ template<typename ViewClass>
+ ALWAYS_INLINE EncodedJSValue genericTypedArrayViewProtoFuncSort(VM& vm, JSGlobalObject* globalObject, CallFrame* callFrame)
+ {
+diff --git a/Source/JavaScriptCore/runtime/JSTypedArrayViewPrototypeFunctions2.cpp b/Source/JavaScriptCore/runtime/JSTypedArrayViewPrototypeFunctions2.cpp
+index f2a1cc7bb92..507f279f414 100644
+--- a/Source/JavaScriptCore/runtime/JSTypedArrayViewPrototypeFunctions2.cpp
++++ b/Source/JavaScriptCore/runtime/JSTypedArrayViewPrototypeFunctions2.cpp
+@@ -31,17 +31,6 @@
+ 
+ namespace JSC {
+ 
+-JSC_DEFINE_HOST_FUNCTION(typedArrayViewProtoFuncToSorted, (JSGlobalObject* globalObject, CallFrame* callFrame))
+-{
+-    VM& vm = globalObject->vm();
+-    auto scope = DECLARE_THROW_SCOPE(vm);
+-    JSValue thisValue = callFrame->thisValue();
+-    if (!thisValue.isObject()) [[unlikely]]
+-        return throwVMTypeError(globalObject, scope, "Receiver should be a typed array view but was not an object"_s);
+-    scope.release();
+-    CALL_GENERIC_TYPEDARRAY_PROTOTYPE_FUNCTION(genericTypedArrayViewProtoFuncToSorted);
+-}
+-
+ JSC_DEFINE_HOST_FUNCTION(typedArrayViewProtoFuncFindLastIndex, (JSGlobalObject* globalObject, CallFrame* callFrame))
+ {
+     VM& vm = globalObject->vm();
+diff --git a/Source/JavaScriptCore/runtime/JSTypedArrayViewPrototypeFunctions3.cpp b/Source/JavaScriptCore/runtime/JSTypedArrayViewPrototypeFunctions3.cpp
+index 76c53a3e252..af5614a3603 100644
+--- a/Source/JavaScriptCore/runtime/JSTypedArrayViewPrototypeFunctions3.cpp
++++ b/Source/JavaScriptCore/runtime/JSTypedArrayViewPrototypeFunctions3.cpp
+@@ -42,6 +42,18 @@ JSC_DEFINE_HOST_FUNCTION(typedArrayViewProtoFuncSort, (JSGlobalObject* globalObj
+     CALL_GENERIC_TYPEDARRAY_PROTOTYPE_FUNCTION(genericTypedArrayViewProtoFuncSort);
+ }
+ 
++// toSorted lives next to sort so that both share one genericTypedArrayViewProtoFuncSortImpl per type.
++JSC_DEFINE_HOST_FUNCTION(typedArrayViewProtoFuncToSorted, (JSGlobalObject* globalObject, CallFrame* callFrame))
++{
++    VM& vm = globalObject->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
++    JSValue thisValue = callFrame->thisValue();
++    if (!thisValue.isObject()) [[unlikely]]
++        return throwVMTypeError(globalObject, scope, "Receiver should be a typed array view but was not an object"_s);
++    scope.release();
++    CALL_GENERIC_TYPEDARRAY_PROTOTYPE_FUNCTION(genericTypedArrayViewProtoFuncToSorted);
++}
++
+ JSC_DEFINE_HOST_FUNCTION(typedArrayViewProtoFuncFill, (JSGlobalObject* globalObject, CallFrame* callFrame))
+ {
+     VM& vm = globalObject->vm();

@@ -211,6 +211,12 @@ The patches, in order:
   `charCodeAt` get their own code (`VM.cpp` keeps charCodeAt's intrinsic
   on the 68k C loop), and loop register copies keep doubles in fp2-fp6.
 
+- `0037-webcore-webgpu-only-when-enabled.patch`: WebGPU's bindings,
+  module and inspector paths build only with `ENABLE(WEBGPU)`, which the
+  Amiga port leaves off (its IDLs had no Conditional, so about 1.5 MB of
+  unused code was in the engine). `getContext("webgpu")` returns null and
+  `navigator.gpu` is absent, as before at run time.
+
 - `0038-jsc-m68k-jit-inline-small-functions.patch`: call sites whose
   call link holds a small JavaScript function (64 bytecode bytes or less,
   `m68kTemplateJITMaximumInlineSize`) get its code in line, behind a guard
@@ -222,6 +228,20 @@ The patches, in order:
   atom strings; `CodeBlock::bytecodeOffset` takes the CodeBlock's raw
   instructions pointer on 68k, which makes every slow path's
   setCurrentVPC cheaper.
+- `0040-webcore-unused-web-apis-only-when-enabled.patch`: WebTransport,
+  the Cookie Store API, Web Locks, the Screen Wake Lock API, the Shape
+  Detection API and speech recognition get build flags
+  (`ENABLE_WEB_TRANSPORT`, `ENABLE_COOKIE_STORE_API`, `ENABLE_WEB_LOCKS`,
+  `ENABLE_SCREEN_WAKE_LOCK`, `ENABLE_SHAPE_DETECTION`,
+  `ENABLE_SPEECH_RECOGNITION`, on by default), and the Amiga port turns
+  them off. Their settings were already off, so pages see no change.
+- `0041-webcore-web-sql-and-text-extraction-only-when-enabled.patch`: Web
+  SQL (`ENABLE_WEB_DATABASE`) and the page text extraction behind element
+  targeting (`ENABLE_TEXT_EXTRACTION`) get build flags, on by default; the
+  Amiga port turns them off. `openDatabase` was already off by setting.
+- `0042-jsc-m68k-typed-array-sort-shared.patch`: on 68k, TypedArray
+  `sort` and `toSorted` share one out-of-line sort per array type (they
+  were each inlining it, in different files): 467 KB less code.
 - `0043-jsc-m68k-jit-virtual-calls.patch`: a fix for 0035's polymorphic
   calls. A virtual call link (a site with more callees than a polymorphic
   stub holds, or a construct site whose callees have no call CodeBlock)

@@ -1,0 +1,4842 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 15:00:00 +0100
+Subject: [PATCH] WebCore: WebGPU only with ENABLE(WEBGPU)
+
+The Amiga port has no WebGPU (ENABLE_WEBGPU off, no WebGPU
+implementation), but WebCore still built its WebGPU bindings and module:
+their IDLs carried no Conditional, so 148 JSGPU* bindings, the GPU*
+classes and the inspector's WebGPU paths were all in the engine (about
+1.5 MB of 68k code). With this patch they build only with ENABLE(WEBGPU):
+
+- Every Modules/WebGPU IDL and GPUCanvasContext.idl is Conditional=WEBGPU,
+  so the generated bindings are empty without it, and Navigator's `gpu`
+  attribute goes with the NavigatorGPU mixin.
+- GPUCanvasContext leaves the RenderingContext and OffscreenRenderingContext
+  unions (IDL and C++), and getContext("webgpu") returns null.
+- The Modules/WebGPU sources and JSGPUErrorCustom.cpp build only with
+  ENABLE(WEBGPU); GPUDevice is an EventTarget only then.
+- Navigator keeps no GPU without a WebGPU implementation, as WorkerNavigator
+  already did.
+- The console's canvas recording and the inspector's canvas agent, canvas
+  call tracer, recording arguments and shader programs keep their WebGPU
+  paths only with ENABLE(WEBGPU); without it a shader program reports no
+  source and cannot be edited or highlighted.
+
+diff --git a/Source/WebCore/Modules/WebGPU/GPU.cpp b/Source/WebCore/Modules/WebGPU/GPU.cpp
+index a33d541d13d..c72aea91b6b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPU.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPU.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPU.h"
+ 
+ #include "GPUAdapter.h"
+@@ -100,3 +102,5 @@ RefPtr<GPUCompositorIntegration> GPU::createCompositorIntegration()
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPU.idl b/Source/WebCore/Modules/WebGPU/GPU.idl
+index 01ab9ba738d..e6585a5db74 100644
+--- a/Source/WebCore/Modules/WebGPU/GPU.idl
++++ b/Source/WebCore/Modules/WebGPU/GPU.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpu
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPUAdapter.cpp b/Source/WebCore/Modules/WebGPU/GPUAdapter.cpp
+index cdbce0ab407..33ec369e5b8 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUAdapter.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUAdapter.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUAdapter.h"
+ 
+ #include "Exception.h"
+@@ -146,3 +148,5 @@ Ref<GPUAdapterInfo> GPUAdapter::info()
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUAdapter.idl b/Source/WebCore/Modules/WebGPU/GPUAdapter.idl
+index 242dc28bea1..9d766ccad91 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUAdapter.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUAdapter.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpuadapter
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPUAdapterInfo.idl b/Source/WebCore/Modules/WebGPU/GPUAdapterInfo.idl
+index 3fe632a7739..16410680834 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUAdapterInfo.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUAdapterInfo.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpuadapterinfo
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPUAddressMode.idl b/Source/WebCore/Modules/WebGPU/GPUAddressMode.idl
+index b094b8c82a0..bec82aea306 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUAddressMode.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUAddressMode.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpuaddressmode
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUAddressMode {
+     "clamp-to-edge",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUAutoLayoutMode.idl b/Source/WebCore/Modules/WebGPU/GPUAutoLayoutMode.idl
+index 23e52861eae..cb2e88609d3 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUAutoLayoutMode.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUAutoLayoutMode.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpuautolayoutmode
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUAutoLayoutMode {
+     "auto"
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroup.cpp b/Source/WebCore/Modules/WebGPU/GPUBindGroup.cpp
+index df60b9ced6f..731f71d0826 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroup.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroup.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUBindGroup.h"
+ 
+ #include "GPUBindGroupLayout.h"
+@@ -66,3 +68,5 @@ GPUBindGroup::GPUBindGroup(Ref<WebGPU::BindGroup>&& backing, Ref<GPUBindGroupLay
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroup.idl b/Source/WebCore/Modules/WebGPU/GPUBindGroup.idl
+index 788ebe7783c..05b87c7c48a 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroup.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroup.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpubindgroup
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroupDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUBindGroupDescriptor.idl
+index b27843377f7..a0f9251709e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroupDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroupDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpubindgroupdescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUBindGroupDescriptor : GPUObjectDescriptorBase {
+     required GPUBindGroupLayout layout;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroupEntry.idl b/Source/WebCore/Modules/WebGPU/GPUBindGroupEntry.idl
+index f628d5a93be..10517f99a86 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroupEntry.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroupEntry.idl
+@@ -31,6 +31,7 @@ typedef [EnforceRange] unsigned long GPUIndex32;
+ typedef (GPUSampler or GPUTexture or GPUTextureView or GPUBuffer or GPUBufferBinding or GPUExternalTexture) GPUBindingResource;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUBindGroupEntry {
+     required GPUIndex32 binding;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayout.cpp b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayout.cpp
+index 205c14ebe67..317c9470f3c 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUBindGroupLayout.h"
+ 
+ #include "GPUDevice.h"
+@@ -59,3 +61,5 @@ void GPUBindGroupLayout::setLabel(String&& label)
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayout.idl b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayout.idl
+index 228a733d6b8..0ad6fda7871 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayout.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpubindgrouplayout
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutDescriptor.cpp
+index b337779883a..231822ffa8e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUBindGroupLayoutDescriptor.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -41,3 +43,5 @@ Ref<JSON::Object> GPUBindGroupLayoutDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutDescriptor.idl
+index d3d5ea179af..7c1d075c62b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpubindgrouplayoutdescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUBindGroupLayoutDescriptor : GPUObjectDescriptorBase {
+     required sequence<GPUBindGroupLayoutEntry> entries;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutEntry.cpp b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutEntry.cpp
+index 191b96b9083..bc1b4daa977 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutEntry.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutEntry.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUBindGroupLayoutEntry.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -49,3 +51,5 @@ Ref<JSON::Object> GPUBindGroupLayoutEntry::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutEntry.idl b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutEntry.idl
+index 21b3017d68f..72b7acecd12 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutEntry.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBindGroupLayoutEntry.idl
+@@ -30,6 +30,7 @@ typedef [EnforceRange] unsigned long GPUIndex32;
+ typedef [EnforceRange] unsigned long GPUShaderStageFlags;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUBindGroupLayoutEntry {
+     required GPUIndex32 binding;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBlendComponent.cpp b/Source/WebCore/Modules/WebGPU/GPUBlendComponent.cpp
+index 806bbb53fc4..9cf1adc8c0e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBlendComponent.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUBlendComponent.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUBlendComponent.h"
+ 
+ #include "JSGPUBlendFactor.h"
+@@ -42,3 +44,5 @@ Ref<JSON::Object> GPUBlendComponent::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBlendComponent.idl b/Source/WebCore/Modules/WebGPU/GPUBlendComponent.idl
+index 4d9b0d99605..d6148d71736 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBlendComponent.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBlendComponent.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpublendcomponent
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUBlendComponent {
+     GPUBlendOperation operation = "add";
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBlendFactor.idl b/Source/WebCore/Modules/WebGPU/GPUBlendFactor.idl
+index 4194e19be12..bd5eee63261 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBlendFactor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBlendFactor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpublendfactor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUBlendFactor {
+     "zero",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBlendOperation.idl b/Source/WebCore/Modules/WebGPU/GPUBlendOperation.idl
+index 936469663f5..5c74dc8d055 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBlendOperation.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBlendOperation.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpublendoperation
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUBlendOperation {
+     "add",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBlendState.cpp b/Source/WebCore/Modules/WebGPU/GPUBlendState.cpp
+index a56644eabdf..0bc77c48d04 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBlendState.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUBlendState.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUBlendState.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -39,3 +41,5 @@ Ref<JSON::Object> GPUBlendState::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBlendState.idl b/Source/WebCore/Modules/WebGPU/GPUBlendState.idl
+index 19a977933ce..ffd0442f6f6 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBlendState.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBlendState.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpublendstate
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUBlendState {
+     required GPUBlendComponent color;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBuffer.cpp b/Source/WebCore/Modules/WebGPU/GPUBuffer.cpp
+index 3333bc5a29d..fbfa07ec828 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBuffer.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUBuffer.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUBuffer.h"
+ 
+ #include "GPUDevice.h"
+@@ -256,3 +258,5 @@ void GPUBuffer::destroy(ScriptExecutionContext& scriptExecutionContext)
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBuffer.idl b/Source/WebCore/Modules/WebGPU/GPUBuffer.idl
+index c69d1ecebb8..a64db750dc8 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBuffer.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBuffer.idl
+@@ -32,6 +32,7 @@ typedef [EnforceRange] unsigned long GPUBufferUsageFlags;
+ 
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferBinding.idl b/Source/WebCore/Modules/WebGPU/GPUBufferBinding.idl
+index f4075fdf8bf..5515636a316 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBufferBinding.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBufferBinding.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long long GPUSize64;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUBufferBinding {
+     required GPUBuffer buffer;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferBindingLayout.cpp b/Source/WebCore/Modules/WebGPU/GPUBufferBindingLayout.cpp
+index 1820f4bf134..1292dda65ba 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBufferBindingLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUBufferBindingLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUBufferBindingLayout.h"
+ 
+ #include "JSGPUBufferBindingType.h"
+@@ -41,3 +43,5 @@ Ref<JSON::Object> GPUBufferBindingLayout::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferBindingLayout.idl b/Source/WebCore/Modules/WebGPU/GPUBufferBindingLayout.idl
+index 049b42bc692..9948dd21e9e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBufferBindingLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBufferBindingLayout.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long long GPUSize64;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUBufferBindingLayout {
+     GPUBufferBindingType type = "uniform";
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferBindingType.idl b/Source/WebCore/Modules/WebGPU/GPUBufferBindingType.idl
+index c68c4718398..c031d362dd0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBufferBindingType.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBufferBindingType.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpubufferbindingtype
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUBufferBindingType {
+     "uniform",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUBufferDescriptor.cpp
+index f257d5178ed..897d12088fa 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBufferDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUBufferDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUBufferDescriptor.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -40,3 +42,5 @@ Ref<JSON::Object> GPUBufferDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUBufferDescriptor.idl
+index 6420b5573c1..e376003a9e5 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBufferDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBufferDescriptor.idl
+@@ -30,6 +30,7 @@ typedef [EnforceRange] unsigned long long GPUSize64;
+ typedef [EnforceRange] unsigned long GPUBufferUsageFlags;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUBufferDescriptor : GPUObjectDescriptorBase {
+     required GPUSize64 size;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferMapState.idl b/Source/WebCore/Modules/WebGPU/GPUBufferMapState.idl
+index 0d801f11ac8..2e4dc295464 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBufferMapState.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBufferMapState.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpubuffermapstate
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUBufferMapState {
+     "unmapped",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUBufferUsage.idl b/Source/WebCore/Modules/WebGPU/GPUBufferUsage.idl
+index 75e7792dfb0..b5a87726f78 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUBufferUsage.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUBufferUsage.idl
+@@ -28,6 +28,7 @@
+ typedef [EnforceRange] unsigned long GPUBufferUsageFlags;
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext
+ ]
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCanvasAlphaMode.idl b/Source/WebCore/Modules/WebGPU/GPUCanvasAlphaMode.idl
+index fb4d4308d18..c65a8ffeb7b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCanvasAlphaMode.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCanvasAlphaMode.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpucanvascompositingalphamode
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUCanvasAlphaMode {
+     "opaque",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCanvasConfiguration.idl b/Source/WebCore/Modules/WebGPU/GPUCanvasConfiguration.idl
+index b37847733bb..64a2a12a109 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCanvasConfiguration.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCanvasConfiguration.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long GPUTextureUsageFlags;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCanvasToneMapping.idl b/Source/WebCore/Modules/WebGPU/GPUCanvasToneMapping.idl
+index 98582d594ff..ff713ec444b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCanvasToneMapping.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCanvasToneMapping.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpucanvastonemapping
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCanvasToneMappingMode.idl b/Source/WebCore/Modules/WebGPU/GPUCanvasToneMappingMode.idl
+index 3f6fac01dc9..830c088e05c 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCanvasToneMappingMode.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCanvasToneMappingMode.idl
+@@ -27,6 +27,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpucanvastonemappingmode
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ]
+ enum GPUCanvasToneMappingMode {
+diff --git a/Source/WebCore/Modules/WebGPU/GPUColorDict.cpp b/Source/WebCore/Modules/WebGPU/GPUColorDict.cpp
+index 5dab29eadf2..2eb56f8fcb9 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUColorDict.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUColorDict.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUColorDict.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -56,3 +58,5 @@ Ref<JSON::Value> toJSON(const GPUColor& color)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUColorDict.idl b/Source/WebCore/Modules/WebGPU/GPUColorDict.idl
+index 919bd1b48e2..7184fec15ce 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUColorDict.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUColorDict.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#typedefdef-gpucolor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUColorDict {
+     required double r;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUColorTargetState.cpp b/Source/WebCore/Modules/WebGPU/GPUColorTargetState.cpp
+index 174ebed1dd9..e2f3dc8d9ea 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUColorTargetState.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUColorTargetState.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUColorTargetState.h"
+ 
+ #include "JSGPUTextureFormat.h"
+@@ -42,3 +44,5 @@ Ref<JSON::Object> GPUColorTargetState::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUColorTargetState.idl b/Source/WebCore/Modules/WebGPU/GPUColorTargetState.idl
+index cdf30cc9093..ad2abe5ae23 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUColorTargetState.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUColorTargetState.idl
+@@ -29,6 +29,7 @@ typedef [EnforceRange] unsigned long GPUColorWriteFlags;
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpucolortargetstate
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUColorTargetState {
+     required GPUTextureFormat format;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUColorWrite.idl b/Source/WebCore/Modules/WebGPU/GPUColorWrite.idl
+index 9d048d47d25..b717181041a 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUColorWrite.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUColorWrite.idl
+@@ -28,6 +28,7 @@
+ typedef [EnforceRange] unsigned long GPUColorWriteFlags;
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext
+ ]
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.cpp b/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.cpp
+index f68176c2bf6..69b11219dfc 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUCommandBuffer.h"
+ 
+ namespace WebCore {
+@@ -60,3 +62,5 @@ void GPUCommandBuffer::setBacking(WebGPU::CommandEncoder& commandEncoder, WebGPU
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.idl b/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.idl
+index c9885713508..e599b0d1cd1 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCommandBuffer.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpucommandbuffer
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandBufferDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUCommandBufferDescriptor.idl
+index f8e8e497d90..21d8dae82b9 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCommandBufferDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCommandBufferDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpucommandbufferdescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUCommandBufferDescriptor : GPUObjectDescriptorBase {
+ };
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.cpp b/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.cpp
+index 405e2e5e0ef..be463a147a1 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUCommandEncoder.h"
+ 
+ #include "ExceptionOr.h"
+@@ -209,3 +211,5 @@ void GPUCommandEncoder::setBacking(WebGPU::CommandEncoder& newBacking)
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.idl b/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.idl
+index 60a671174c4..7c81f2b73e8 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCommandEncoder.idl
+@@ -33,6 +33,7 @@ typedef (sequence<GPUIntegerCoordinate> or GPUExtent3DDict) GPUExtent3D;
+ 
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandEncoderDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUCommandEncoderDescriptor.idl
+index 98219ea7d27..d091fce765f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCommandEncoderDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCommandEncoderDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpucommandencoderdescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUCommandEncoderDescriptor : GPUObjectDescriptorBase {
+ };
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCommandsMixin.idl b/Source/WebCore/Modules/WebGPU/GPUCommandsMixin.idl
+index 51e65187dd0..a2cbc3313b0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCommandsMixin.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCommandsMixin.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpucommandsmixin
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ]
+ interface mixin GPUCommandsMixin {
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCompareFunction.idl b/Source/WebCore/Modules/WebGPU/GPUCompareFunction.idl
+index b1c1739bf73..d3628c875d2 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCompareFunction.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCompareFunction.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpucomparefunction
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUCompareFunction {
+     "never",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCompilationInfo.cpp b/Source/WebCore/Modules/WebGPU/GPUCompilationInfo.cpp
+index 4c00837f41b..bd8fee32e0e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCompilationInfo.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUCompilationInfo.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUCompilationInfo.h"
+ 
+ namespace WebCore {
+@@ -36,3 +38,5 @@ Vector<Ref<GPUCompilationMessage>> GPUCompilationInfo::messages() const
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCompilationInfo.idl b/Source/WebCore/Modules/WebGPU/GPUCompilationInfo.idl
+index efb2718f9ba..986f1b16d73 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCompilationInfo.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCompilationInfo.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpucompilationinfo
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     Serializable,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCompilationMessage.cpp b/Source/WebCore/Modules/WebGPU/GPUCompilationMessage.cpp
+index 9b86829ffb9..55f6d6166b9 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCompilationMessage.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUCompilationMessage.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUCompilationMessage.h"
+ 
+ namespace WebCore {
+@@ -67,3 +69,5 @@ uint64_t GPUCompilationMessage::length() const
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCompilationMessage.idl b/Source/WebCore/Modules/WebGPU/GPUCompilationMessage.idl
+index bc855914cfd..6b9fa764c88 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCompilationMessage.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCompilationMessage.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpucompilationmessage
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     Serializable,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCompilationMessageType.idl b/Source/WebCore/Modules/WebGPU/GPUCompilationMessageType.idl
+index 3a65bb3a875..1ee6e6012f8 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCompilationMessageType.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCompilationMessageType.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpucompilationmessagetype
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUCompilationMessageType {
+     "error",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCompositorIntegration.cpp b/Source/WebCore/Modules/WebGPU/GPUCompositorIntegration.cpp
+index 69441554ea3..151c34ce257 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCompositorIntegration.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUCompositorIntegration.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUCompositorIntegration.h"
+ 
+ namespace WebCore {
+@@ -51,3 +53,5 @@ void GPUCompositorIntegration::updateContentsHeadroom(float headroom)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePassDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUComputePassDescriptor.cpp
+index a5c4dff1b68..edfd645a7cc 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUComputePassDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUComputePassDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUComputePassDescriptor.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -39,3 +41,5 @@ Ref<JSON::Object> GPUComputePassDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePassDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUComputePassDescriptor.idl
+index b62e9792501..b3694206b62 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUComputePassDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUComputePassDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpucomputepassdescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUComputePassDescriptor : GPUObjectDescriptorBase {
+     GPUComputePassTimestampWrites timestampWrites;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.cpp b/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.cpp
+index 65118bebb62..fbbd88104a6 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUComputePassEncoder.h"
+ 
+ #include "ExceptionOr.h"
+@@ -122,3 +124,5 @@ void GPUComputePassEncoder::insertDebugMarker(String&& markerLabel)
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.idl b/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.idl
+index cdd65c81580..e5fcdb1589e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUComputePassEncoder.idl
+@@ -31,6 +31,7 @@ typedef [EnforceRange] unsigned long long GPUSize64;
+ 
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.cpp b/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.cpp
+index 2d46588a125..240ae261967 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUComputePassTimestampWrites.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -42,3 +44,5 @@ Ref<JSON::Object> GPUComputePassTimestampWrites::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.idl b/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.idl
+index 5270b3d3ad7..b4de291d476 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUComputePassTimestampWrites.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long GPUSize32;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUComputePassTimestampWrites {
+     required GPUQuerySet querySet;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePipeline.cpp b/Source/WebCore/Modules/WebGPU/GPUComputePipeline.cpp
+index 839eabe5590..8f6b4c96cf1 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUComputePipeline.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUComputePipeline.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUComputePipeline.h"
+ 
+ #include "GPUBindGroupLayout.h"
+@@ -157,3 +159,5 @@ void GPUComputePipeline::updateShader(const String& source, CompletionHandler<vo
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePipeline.idl b/Source/WebCore/Modules/WebGPU/GPUComputePipeline.idl
+index 88158734d27..7f98525b48b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUComputePipeline.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUComputePipeline.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpucomputepipeline
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUComputePipelineDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUComputePipelineDescriptor.idl
+index 156af9d86dd..939ca699914 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUComputePipelineDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUComputePipelineDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpucomputepipelinedescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUComputePipelineDescriptor : GPUPipelineDescriptorBase {
+     required GPUProgrammableStage compute;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUCullMode.idl b/Source/WebCore/Modules/WebGPU/GPUCullMode.idl
+index 83b62a6e530..4a2478c056b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUCullMode.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUCullMode.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpucullmode
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUCullMode {
+     "none",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDebugCommandsMixin.idl b/Source/WebCore/Modules/WebGPU/GPUDebugCommandsMixin.idl
+index 79cf562774b..72b6a04a729 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDebugCommandsMixin.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDebugCommandsMixin.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpudebugcommandsmixin
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ]
+ interface mixin GPUDebugCommandsMixin {
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDepthStencilState.cpp b/Source/WebCore/Modules/WebGPU/GPUDepthStencilState.cpp
+index 76a6c0b7a01..1d87e2515b2 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDepthStencilState.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUDepthStencilState.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUDepthStencilState.h"
+ 
+ #include "JSGPUCompareFunction.h"
+@@ -53,3 +55,5 @@ Ref<JSON::Object> GPUDepthStencilState::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDepthStencilState.idl b/Source/WebCore/Modules/WebGPU/GPUDepthStencilState.idl
+index b9a239545e7..32650aa412e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDepthStencilState.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDepthStencilState.idl
+@@ -30,6 +30,7 @@ typedef [EnforceRange] unsigned long GPUStencilValue;
+ typedef [EnforceRange] long GPUDepthBias;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUDepthStencilState {
+     required GPUTextureFormat format;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDevice.cpp b/Source/WebCore/Modules/WebGPU/GPUDevice.cpp
+index 10ebca4e0d1..0d0ce612899 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDevice.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUDevice.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUDevice.h"
+ 
+ #include "ContextDestructionObserverInlines.h"
+@@ -878,3 +880,5 @@ Ref<GPUAdapterInfo> GPUDevice::adapterInfo() const
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDevice.h b/Source/WebCore/Modules/WebGPU/GPUDevice.h
+index cceb85101bc..397e49519d9 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDevice.h
++++ b/Source/WebCore/Modules/WebGPU/GPUDevice.h
+@@ -188,7 +188,9 @@ private:
+     RefPtr<GPUPipelineLayout> createAutoPipelineLayout();
+ 
+     // EventTarget.
++#if ENABLE(WEBGPU)
+     enum EventTargetInterfaceType eventTargetInterface() const final { return EventTargetInterfaceType::GPUDevice; }
++#endif
+     void refEventTarget() final { ref(); }
+     void derefEventTarget() final { deref(); }
+ 
+@@ -222,4 +224,6 @@ private:
+ 
+ } // namespace WebCore
+ 
++#if ENABLE(WEBGPU)
+ SPECIALIZE_TYPE_TRAITS_EVENTTARGET(GPUDevice)
++#endif
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDevice.idl b/Source/WebCore/Modules/WebGPU/GPUDevice.idl
+index 4e46be6c3a5..d8308e4787c 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDevice.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDevice.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpudevice
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     ActiveDOMObject,
+     Exposed=(Window,Worker),
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDeviceDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUDeviceDescriptor.idl
+index 6fdd7e81c84..1a3ebb846f8 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDeviceDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDeviceDescriptor.idl
+@@ -28,6 +28,7 @@
+ typedef [EnforceRange] unsigned long long GPUSize64;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUDeviceDescriptor : GPUObjectDescriptorBase {
+     sequence<GPUFeatureName> requiredFeatures = [];
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDeviceError.idl b/Source/WebCore/Modules/WebGPU/GPUDeviceError.idl
+index 20ad9134e5f..35ba4e701b0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDeviceError.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDeviceError.idl
+@@ -25,7 +25,9 @@
+ 
+ // https://gpuweb.github.io/gpuweb/#ref-for-gpudevice⑤⓪
+ 
+-partial interface GPUDevice {
++[
++    Conditional=WEBGPU
++] partial interface GPUDevice {
+     undefined pushErrorScope(GPUErrorFilter filter);
+     Promise<GPUError?> popErrorScope();
+ };
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDeviceLost.idl b/Source/WebCore/Modules/WebGPU/GPUDeviceLost.idl
+index e573de33175..c9971e10890 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDeviceLost.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDeviceLost.idl
+@@ -25,6 +25,8 @@
+ 
+ // https://gpuweb.github.io/gpuweb/#ref-for-gpudevice④⑨
+ 
+-partial interface GPUDevice {
++[
++    Conditional=WEBGPU
++] partial interface GPUDevice {
+     readonly attribute Promise<GPUDeviceLostInfo> lost;
+ };
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDeviceLostInfo.cpp b/Source/WebCore/Modules/WebGPU/GPUDeviceLostInfo.cpp
+index 33987578f4e..c68f7455f79 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDeviceLostInfo.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUDeviceLostInfo.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUDeviceLostInfo.h"
+ 
+ namespace WebCore {
+@@ -46,4 +48,4 @@ const String& GPUDeviceLostInfo::message() const
+ 
+ }
+ 
+-
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDeviceLostInfo.idl b/Source/WebCore/Modules/WebGPU/GPUDeviceLostInfo.idl
+index c272778d853..20c6cf65de3 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDeviceLostInfo.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDeviceLostInfo.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpudevicelostinfo
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDeviceLostReason.idl b/Source/WebCore/Modules/WebGPU/GPUDeviceLostReason.idl
+index 59bc0d5c442..7ec851c2719 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDeviceLostReason.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDeviceLostReason.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpudevicelostreason
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUDeviceLostReason {
+     "unknown",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDeviceUncapturedError.idl b/Source/WebCore/Modules/WebGPU/GPUDeviceUncapturedError.idl
+index 0cb6e6fd446..63e548658ed 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDeviceUncapturedError.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDeviceUncapturedError.idl
+@@ -24,5 +24,7 @@
+  */
+ 
+ // onuncapturederror moved to GPUDevice.idl
+-partial interface GPUDevice {
++[
++    Conditional=WEBGPU
++] partial interface GPUDevice {
+ };
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDrawElementImageDestination.cpp b/Source/WebCore/Modules/WebGPU/GPUDrawElementImageDestination.cpp
+index ba28ea65963..dbff85b9416 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDrawElementImageDestination.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUDrawElementImageDestination.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUDrawElementImageDestination.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -39,3 +41,5 @@ Ref<JSON::Object> GPUDrawElementImageDestination::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDrawElementImageDestination.idl b/Source/WebCore/Modules/WebGPU/GPUDrawElementImageDestination.idl
+index 27d106bd2e0..ab62df4de63 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDrawElementImageDestination.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDrawElementImageDestination.idl
+@@ -30,6 +30,7 @@ typedef (sequence<GPUIntegerCoordinate> or GPUExtent3DDict) GPUExtent3D;
+ 
+ // https://github.com/WICG/html-in-canvas
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=HTMLInCanvasEnabled,
+ ] dictionary GPUDrawElementImageDestination : GPUImageCopyTextureTagged {
+     GPUExtent3D size;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDrawElementImageSource.cpp b/Source/WebCore/Modules/WebGPU/GPUDrawElementImageSource.cpp
+index 0bb018074b3..1b41b8bc81f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDrawElementImageSource.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUDrawElementImageSource.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUDrawElementImageSource.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -46,3 +48,5 @@ Ref<JSON::Object> GPUDrawElementImageSource::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUDrawElementImageSource.idl b/Source/WebCore/Modules/WebGPU/GPUDrawElementImageSource.idl
+index 845cc6e303b..0203f124052 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUDrawElementImageSource.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUDrawElementImageSource.idl
+@@ -29,6 +29,7 @@ typedef (Element or CanvasElementImage) CanvasElementImageSource;
+ 
+ // https://github.com/WICG/html-in-canvas
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=HTMLInCanvasEnabled,
+ ] dictionary GPUDrawElementImageSource {
+     required CanvasElementImageSource source;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUError.idl b/Source/WebCore/Modules/WebGPU/GPUError.idl
+index 2dd36207f73..54f758ad35c 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUError.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUError.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpuerror
+ 
+ [
++    Conditional=WEBGPU,
+     CustomToJSObject,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+diff --git a/Source/WebCore/Modules/WebGPU/GPUErrorFilter.idl b/Source/WebCore/Modules/WebGPU/GPUErrorFilter.idl
+index 875440ae747..23a43446a27 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUErrorFilter.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUErrorFilter.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpuerrorfilter
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUErrorFilter {
+     "out-of-memory",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUExtent3DDict.cpp b/Source/WebCore/Modules/WebGPU/GPUExtent3DDict.cpp
+index d7549266f0a..3806a0508b1 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUExtent3DDict.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUExtent3DDict.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUExtent3DDict.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -55,3 +57,5 @@ Ref<JSON::Value> toJSON(const GPUExtent3D& extent)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUExtent3DDict.idl b/Source/WebCore/Modules/WebGPU/GPUExtent3DDict.idl
+index d74fdc6140c..fffe93872af 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUExtent3DDict.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUExtent3DDict.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long GPUIntegerCoordinate;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUExtent3DDict {
+     required GPUIntegerCoordinate width;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUExternalTexture.cpp b/Source/WebCore/Modules/WebGPU/GPUExternalTexture.cpp
+index 735b0e68cbf..229e4d9420e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUExternalTexture.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUExternalTexture.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUExternalTexture.h"
+ 
+ #include "GPUDevice.h"
+@@ -68,3 +70,5 @@ void GPUExternalTexture::undestroy()
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUExternalTexture.idl b/Source/WebCore/Modules/WebGPU/GPUExternalTexture.idl
+index d794303b7fe..3dc17f41c95 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUExternalTexture.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUExternalTexture.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpuexternaltexture
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUExternalTextureBindingLayout.cpp b/Source/WebCore/Modules/WebGPU/GPUExternalTextureBindingLayout.cpp
+index 453500eebe4..b035aa7c2a4 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUExternalTextureBindingLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUExternalTextureBindingLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUExternalTextureBindingLayout.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -36,3 +38,5 @@ Ref<JSON::Object> GPUExternalTextureBindingLayout::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUExternalTextureBindingLayout.idl b/Source/WebCore/Modules/WebGPU/GPUExternalTextureBindingLayout.idl
+index b7b664fc20d..83cdd72ca50 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUExternalTextureBindingLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUExternalTextureBindingLayout.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpuexternaltexturebindinglayout
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUExternalTextureBindingLayout {
+ };
+diff --git a/Source/WebCore/Modules/WebGPU/GPUExternalTextureDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUExternalTextureDescriptor.cpp
+index 167f34a96e4..3b61ea54b5a 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUExternalTextureDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUExternalTextureDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUExternalTextureDescriptor.h"
+ 
+ #include "JSPredefinedColorSpace.h"
+@@ -40,3 +42,5 @@ Ref<JSON::Object> GPUExternalTextureDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUExternalTextureDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUExternalTextureDescriptor.idl
+index 62c33b4d4cc..c23396a411f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUExternalTextureDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUExternalTextureDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpuexternaltexturedescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUExternalTextureDescriptor : GPUObjectDescriptorBase {
+ #if defined(ENABLE_VIDEO) && ENABLE_VIDEO
+diff --git a/Source/WebCore/Modules/WebGPU/GPUFeatureName.idl b/Source/WebCore/Modules/WebGPU/GPUFeatureName.idl
+index d222c412977..68dd57e2574 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUFeatureName.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUFeatureName.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpufeaturename
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUFeatureName {
+     "depth-clip-control",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUFilterMode.idl b/Source/WebCore/Modules/WebGPU/GPUFilterMode.idl
+index c57edd370e0..93cb5d098e4 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUFilterMode.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUFilterMode.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpufiltermode
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUFilterMode {
+     "nearest",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUFragmentState.cpp b/Source/WebCore/Modules/WebGPU/GPUFragmentState.cpp
+index 496a6e03eae..1f6176cfa1f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUFragmentState.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUFragmentState.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUFragmentState.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -45,3 +47,5 @@ Ref<JSON::Object> GPUFragmentState::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUFragmentState.idl b/Source/WebCore/Modules/WebGPU/GPUFragmentState.idl
+index 1a21b0ee1ef..4f4920975cb 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUFragmentState.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUFragmentState.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpufragmentstate
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUFragmentState : GPUProgrammableStage {
+     required sequence<GPUColorTargetState?> targets;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUFrontFace.idl b/Source/WebCore/Modules/WebGPU/GPUFrontFace.idl
+index a653de7aedf..5a32e3fb27b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUFrontFace.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUFrontFace.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpufrontface
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUFrontFace {
+     "ccw",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageCopyBuffer.cpp b/Source/WebCore/Modules/WebGPU/GPUImageCopyBuffer.cpp
+index dad4fdf34be..fe8138b0bc1 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageCopyBuffer.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUImageCopyBuffer.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUImageCopyBuffer.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -38,3 +40,5 @@ Ref<JSON::Object> GPUImageCopyBuffer::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageCopyBuffer.idl b/Source/WebCore/Modules/WebGPU/GPUImageCopyBuffer.idl
+index 6db02367fbd..954b7a476df 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageCopyBuffer.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUImageCopyBuffer.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpuimagecopybuffer
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUImageCopyBuffer : GPUImageDataLayout {
+     required GPUBuffer buffer;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageCopyExternalImage.cpp b/Source/WebCore/Modules/WebGPU/GPUImageCopyExternalImage.cpp
+index f16d7964b15..46500004d7e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageCopyExternalImage.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUImageCopyExternalImage.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUImageCopyExternalImage.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -41,3 +43,5 @@ Ref<JSON::Object> GPUImageCopyExternalImage::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageCopyExternalImage.idl b/Source/WebCore/Modules/WebGPU/GPUImageCopyExternalImage.idl
+index 9b8809d2d15..d033c4921c4 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageCopyExternalImage.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUImageCopyExternalImage.idl
+@@ -32,6 +32,7 @@ typedef (sequence<GPUIntegerCoordinate> or GPUOrigin2DDict) GPUOrigin2D;
+ // FIXME: This has been renamed to `GPUCopyExternalImageSourceInfo`.
+ // https://gpuweb.github.io/gpuweb/#gpucopyexternalimagesourceinfo
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUImageCopyExternalImage {
+     required (ImageBitmap or
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageCopyTexture.cpp b/Source/WebCore/Modules/WebGPU/GPUImageCopyTexture.cpp
+index 500a4c951df..7243decc228 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageCopyTexture.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUImageCopyTexture.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUImageCopyTexture.h"
+ 
+ #include "JSGPUTextureAspect.h"
+@@ -43,3 +45,5 @@ Ref<JSON::Object> GPUImageCopyTexture::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageCopyTexture.idl b/Source/WebCore/Modules/WebGPU/GPUImageCopyTexture.idl
+index 99ad7cfe526..b05ca246b7e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageCopyTexture.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUImageCopyTexture.idl
+@@ -32,6 +32,7 @@ typedef (sequence<GPUIntegerCoordinate> or GPUOrigin3DDict) GPUOrigin3D;
+ // FIXME: This has been rename to `GPUTexelCopyTextureInfo`
+ // https://gpuweb.github.io/gpuweb/#gputexelcopytextureinfo
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUImageCopyTexture {
+     required GPUTexture texture;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageCopyTextureTagged.cpp b/Source/WebCore/Modules/WebGPU/GPUImageCopyTextureTagged.cpp
+index 1fad5a8a227..da75b2abc80 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageCopyTextureTagged.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUImageCopyTextureTagged.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUImageCopyTextureTagged.h"
+ 
+ #include "JSPredefinedColorSpace.h"
+@@ -40,3 +42,5 @@ Ref<JSON::Object> GPUImageCopyTextureTagged::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageCopyTextureTagged.idl b/Source/WebCore/Modules/WebGPU/GPUImageCopyTextureTagged.idl
+index e212cd9927c..5016970da59 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageCopyTextureTagged.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUImageCopyTextureTagged.idl
+@@ -28,6 +28,7 @@
+ // FIXME: This has been rename to `GPUCopyExternalImageDestInfo`
+ // https://gpuweb.github.io/gpuweb/#gpucopyexternalimagedestinfo
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUImageCopyTextureTagged : GPUImageCopyTexture {
+     PredefinedColorSpace colorSpace = "srgb";
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageDataLayout.cpp b/Source/WebCore/Modules/WebGPU/GPUImageDataLayout.cpp
+index 91c3935071b..f5c1e35e5be 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageDataLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUImageDataLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUImageDataLayout.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -42,3 +44,5 @@ Ref<JSON::Object> GPUImageDataLayout::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUImageDataLayout.idl b/Source/WebCore/Modules/WebGPU/GPUImageDataLayout.idl
+index 263cf6c3863..3811b549e63 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUImageDataLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUImageDataLayout.idl
+@@ -32,6 +32,7 @@ typedef [EnforceRange] unsigned long long GPUSize64;
+ // FIXME: This has been rename to `GPUTexelCopyBufferLayout`
+ // https://gpuweb.github.io/gpuweb/#gputexelcopybufferlayout
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUImageDataLayout {
+     GPUSize64 offset = 0;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUIndexFormat.idl b/Source/WebCore/Modules/WebGPU/GPUIndexFormat.idl
+index d7977e1cd27..1132f1d9b44 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUIndexFormat.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUIndexFormat.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpuindexformat
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUIndexFormat {
+     "uint16",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUInternalError.cpp b/Source/WebCore/Modules/WebGPU/GPUInternalError.cpp
+index c1299b98707..2175202d5bf 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUInternalError.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUInternalError.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUInternalError.h"
+ 
+ namespace WebCore {
+@@ -37,4 +39,4 @@ const String& GPUInternalError::message() const
+ 
+ }
+ 
+-
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUInternalError.idl b/Source/WebCore/Modules/WebGPU/GPUInternalError.idl
+index 64d54c334f5..8a20ef836b9 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUInternalError.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUInternalError.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPULoadOp.idl b/Source/WebCore/Modules/WebGPU/GPULoadOp.idl
+index 69691c4110f..9ce8c6f7fd3 100644
+--- a/Source/WebCore/Modules/WebGPU/GPULoadOp.idl
++++ b/Source/WebCore/Modules/WebGPU/GPULoadOp.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpuloadop
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPULoadOp {
+     "load",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUMapMode.idl b/Source/WebCore/Modules/WebGPU/GPUMapMode.idl
+index 2a72f00a0fd..83117020714 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUMapMode.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUMapMode.idl
+@@ -28,6 +28,7 @@
+ typedef [EnforceRange] unsigned long GPUMapModeFlags;
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext
+ ]
+diff --git a/Source/WebCore/Modules/WebGPU/GPUMipmapFilterMode.idl b/Source/WebCore/Modules/WebGPU/GPUMipmapFilterMode.idl
+index c51634c3b19..90cac9fd3c1 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUMipmapFilterMode.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUMipmapFilterMode.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpufiltermode
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUMipmapFilterMode {
+     "nearest",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUMultisampleState.cpp b/Source/WebCore/Modules/WebGPU/GPUMultisampleState.cpp
+index 1a3a76f503e..1fc662586b6 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUMultisampleState.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUMultisampleState.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUMultisampleState.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -40,3 +42,5 @@ Ref<JSON::Object> GPUMultisampleState::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUMultisampleState.idl b/Source/WebCore/Modules/WebGPU/GPUMultisampleState.idl
+index 1e80790c1bb..58d9e9eac38 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUMultisampleState.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUMultisampleState.idl
+@@ -30,6 +30,7 @@ typedef [EnforceRange] unsigned long GPUSize32;
+ typedef [EnforceRange] unsigned long GPUSampleMask;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUMultisampleState {
+     GPUSize32 count = 1;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUObjectBase.idl b/Source/WebCore/Modules/WebGPU/GPUObjectBase.idl
+index 5edfaa364d4..a50d20ed16f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUObjectBase.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUObjectBase.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpuobjectbase
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ]
+ interface mixin GPUObjectBase {
+diff --git a/Source/WebCore/Modules/WebGPU/GPUObjectDescriptorBase.cpp b/Source/WebCore/Modules/WebGPU/GPUObjectDescriptorBase.cpp
+index 7348dc643f0..ff98656c5fd 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUObjectDescriptorBase.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUObjectDescriptorBase.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUObjectDescriptorBase.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -39,3 +41,5 @@ Ref<JSON::Object> GPUObjectDescriptorBase::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUObjectDescriptorBase.idl b/Source/WebCore/Modules/WebGPU/GPUObjectDescriptorBase.idl
+index 31b3a239eab..022d5d3b0a0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUObjectDescriptorBase.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUObjectDescriptorBase.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpuobjectdescriptorbase
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUObjectDescriptorBase {
+     USVString label;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUOrigin2DDict.cpp b/Source/WebCore/Modules/WebGPU/GPUOrigin2DDict.cpp
+index dd80530a8e1..b67efaf6b04 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUOrigin2DDict.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUOrigin2DDict.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUOrigin2DDict.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -54,3 +56,5 @@ Ref<JSON::Value> toJSON(const GPUOrigin2D& origin)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUOrigin2DDict.idl b/Source/WebCore/Modules/WebGPU/GPUOrigin2DDict.idl
+index 4b596969817..afa43a1a37d 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUOrigin2DDict.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUOrigin2DDict.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long GPUIntegerCoordinate;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUOrigin2DDict {
+     GPUIntegerCoordinate x = 0;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUOrigin3DDict.cpp b/Source/WebCore/Modules/WebGPU/GPUOrigin3DDict.cpp
+index 2647803a76e..28073488635 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUOrigin3DDict.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUOrigin3DDict.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUOrigin3DDict.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -55,3 +57,5 @@ Ref<JSON::Value> toJSON(const GPUOrigin3D& origin)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUOrigin3DDict.idl b/Source/WebCore/Modules/WebGPU/GPUOrigin3DDict.idl
+index d454ed8752d..65a5807cea1 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUOrigin3DDict.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUOrigin3DDict.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long GPUIntegerCoordinate;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUOrigin3DDict {
+     GPUIntegerCoordinate x = 0;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUOutOfMemoryError.idl b/Source/WebCore/Modules/WebGPU/GPUOutOfMemoryError.idl
+index c4c0788a171..580b70b7669 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUOutOfMemoryError.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUOutOfMemoryError.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpuoutofmemoryerror
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineBase.idl b/Source/WebCore/Modules/WebGPU/GPUPipelineBase.idl
+index ca28c82380b..b1ce14f1771 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineBase.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineBase.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ]
+ interface mixin GPUPipelineBase {
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineDescriptorBase.cpp b/Source/WebCore/Modules/WebGPU/GPUPipelineDescriptorBase.cpp
+index f801f7dfd9b..cb37b443900 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineDescriptorBase.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineDescriptorBase.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUPipelineDescriptorBase.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -45,3 +47,5 @@ Ref<JSON::Object> GPUPipelineDescriptorBase::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineDescriptorBase.idl b/Source/WebCore/Modules/WebGPU/GPUPipelineDescriptorBase.idl
+index 7eafecb4dd2..6e7ef1cea02 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineDescriptorBase.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineDescriptorBase.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpupipelinedescriptorbase
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUPipelineDescriptorBase : GPUObjectDescriptorBase {
+     required (GPUPipelineLayout or GPUAutoLayoutMode) layout;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineError.cpp b/Source/WebCore/Modules/WebGPU/GPUPipelineError.cpp
+index 7e7dbce5d80..0ea4fdba2a0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineError.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineError.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUPipelineError.h"
+ 
+ namespace WebCore {
+@@ -35,3 +37,5 @@ GPUPipelineError::GPUPipelineError(String&& message, GPUPipelineErrorInit reason
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineError.idl b/Source/WebCore/Modules/WebGPU/GPUPipelineError.idl
+index 598510c13d8..df27eda361a 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineError.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineError.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpupipelineerror
+ 
+ [
++    Conditional=WEBGPU,
+     Exposed=(Window),
+     SecureContext,
+     Serializable,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineErrorInit.idl b/Source/WebCore/Modules/WebGPU/GPUPipelineErrorInit.idl
+index 8be48b264ab..13e447520b3 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineErrorInit.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineErrorInit.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpupipelineerror
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUPipelineErrorInit {
+     required GPUPipelineErrorReason reason;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineErrorReason.idl b/Source/WebCore/Modules/WebGPU/GPUPipelineErrorReason.idl
+index bb354ca7c20..5c171485910 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineErrorReason.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineErrorReason.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpupipelineerrorreason
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUPipelineErrorReason {
+     "validation",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineLayout.cpp b/Source/WebCore/Modules/WebGPU/GPUPipelineLayout.cpp
+index e0cdbbb75b3..97cefa2a993 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUPipelineLayout.h"
+ 
+ #include "GPUDevice.h"
+@@ -58,3 +60,5 @@ void GPUPipelineLayout::setLabel(String&& label)
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineLayout.idl b/Source/WebCore/Modules/WebGPU/GPUPipelineLayout.idl
+index 4bccca4b078..abe37d45988 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineLayout.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpupipelinelayout
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineLayoutDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUPipelineLayoutDescriptor.cpp
+index 96f1930f379..2dd3ca26ff9 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineLayoutDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineLayoutDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUPipelineLayoutDescriptor.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -38,3 +40,5 @@ Ref<JSON::Object> GPUPipelineLayoutDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPipelineLayoutDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUPipelineLayoutDescriptor.idl
+index ecaa22c7327..1249802fb4f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPipelineLayoutDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPipelineLayoutDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpupipelinelayoutdescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUPipelineLayoutDescriptor : GPUObjectDescriptorBase {
+     required sequence<GPUBindGroupLayout?> bindGroupLayouts;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPowerPreference.idl b/Source/WebCore/Modules/WebGPU/GPUPowerPreference.idl
+index 46e7cffdedd..876f99390ee 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPowerPreference.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPowerPreference.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpupowerpreference
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUPowerPreference {
+     "low-power",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPresentationContext.cpp b/Source/WebCore/Modules/WebGPU/GPUPresentationContext.cpp
+index b1645a55a24..91c62ec46b6 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPresentationContext.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUPresentationContext.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUPresentationContext.h"
+ 
+ #include "GPUCanvasConfiguration.h"
+@@ -80,3 +82,5 @@ void GPUPresentationContext::present(uint32_t frameIndex, bool presentBacking)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPrimitiveState.cpp b/Source/WebCore/Modules/WebGPU/GPUPrimitiveState.cpp
+index 82f0c7f25d0..1fc3b2b21f2 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPrimitiveState.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUPrimitiveState.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUPrimitiveState.h"
+ 
+ #include "JSGPUCullMode.h"
+@@ -47,3 +49,5 @@ Ref<JSON::Object> GPUPrimitiveState::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPrimitiveState.idl b/Source/WebCore/Modules/WebGPU/GPUPrimitiveState.idl
+index 8a6229f0960..05f2251397e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPrimitiveState.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPrimitiveState.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpuprimitivestate
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUPrimitiveState {
+     GPUPrimitiveTopology topology = "triangle-list";
+diff --git a/Source/WebCore/Modules/WebGPU/GPUPrimitiveTopology.idl b/Source/WebCore/Modules/WebGPU/GPUPrimitiveTopology.idl
+index f3345d493ab..028869c7e69 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUPrimitiveTopology.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUPrimitiveTopology.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpuprimitivetopology
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUPrimitiveTopology {
+     "point-list",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUProgrammablePassEncoder.idl b/Source/WebCore/Modules/WebGPU/GPUProgrammablePassEncoder.idl
+index 461cca87e8d..c6a4960b47c 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUProgrammablePassEncoder.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUProgrammablePassEncoder.idl
+@@ -32,7 +32,8 @@ typedef [EnforceRange] unsigned long GPUIndex32;
+ typedef [EnforceRange] unsigned long GPUBufferDynamicOffset;
+ 
+ [
+-    EnabledBySetting=WebGPUEnabled
++    EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU
+ ]
+ interface mixin GPUProgrammablePassEncoder {
+     undefined setBindGroup(GPUIndex32 index, GPUBindGroup? bindGroup,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.cpp b/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.cpp
+index 47a2ab34564..b44469ef566 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUProgrammableStage.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -46,3 +48,5 @@ Ref<JSON::Object> GPUProgrammableStage::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.idl b/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.idl
+index a51dee69274..b114d2ff177 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUProgrammableStage.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpuprogrammablestage
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUProgrammableStage {
+     required GPUShaderModule module;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUQuerySet.cpp b/Source/WebCore/Modules/WebGPU/GPUQuerySet.cpp
+index c75b3e2e5ac..6d6c5b87d6d 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUQuerySet.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUQuerySet.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUQuerySet.h"
+ 
+ #include "GPUDevice.h"
+@@ -75,3 +77,5 @@ GPUSize32Out GPUQuerySet::count() const
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUQuerySet.idl b/Source/WebCore/Modules/WebGPU/GPUQuerySet.idl
+index b6c80690b77..7e469a809b0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUQuerySet.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUQuerySet.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpuqueryset
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUQuerySetDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUQuerySetDescriptor.cpp
+index bfa6b20b076..566f62ccd21 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUQuerySetDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUQuerySetDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUQuerySetDescriptor.h"
+ 
+ #include "JSGPUQueryType.h"
+@@ -40,3 +42,5 @@ Ref<JSON::Object> GPUQuerySetDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUQuerySetDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUQuerySetDescriptor.idl
+index a9ae9476673..53579ccf02f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUQuerySetDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUQuerySetDescriptor.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long GPUSize32;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUQuerySetDescriptor : GPUObjectDescriptorBase {
+     required GPUQueryType type;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUQueryType.idl b/Source/WebCore/Modules/WebGPU/GPUQueryType.idl
+index 9ebf314ef97..05c2287215d 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUQueryType.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUQueryType.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpuquerytype
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUQueryType {
+     "occlusion",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUQueue.cpp b/Source/WebCore/Modules/WebGPU/GPUQueue.cpp
+index 4a5431490a7..b04f5f8bb20 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUQueue.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUQueue.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUQueue.h"
+ 
+ #include "BitmapImage.h"
+@@ -1468,3 +1470,5 @@ ExceptionOr<void> GPUQueue::drawElementImageToTexture(const GPUDrawElementImageS
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUQueue.idl b/Source/WebCore/Modules/WebGPU/GPUQueue.idl
+index e6348392b9d..aec1670f640 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUQueue.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUQueue.idl
+@@ -33,6 +33,7 @@ typedef (sequence<GPUIntegerCoordinate> or GPUExtent3DDict) GPUExtent3D;
+ 
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUQueueDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUQueueDescriptor.idl
+index 127348c536d..69d5297882f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUQueueDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUQueueDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpuqueuedescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUQueueDescriptor : GPUObjectDescriptorBase {
+ };
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderBundle.cpp b/Source/WebCore/Modules/WebGPU/GPURenderBundle.cpp
+index d50a21f088c..3fe29df9499 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderBundle.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderBundle.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderBundle.h"
+ 
+ #include "GPUDevice.h"
+@@ -59,3 +61,5 @@ void GPURenderBundle::setLabel(String&& label)
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderBundle.idl b/Source/WebCore/Modules/WebGPU/GPURenderBundle.idl
+index 37d028d6cbc..39d3e16ffb0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderBundle.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderBundle.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpurenderbundle
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderBundleDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPURenderBundleDescriptor.idl
+index 0f67a518b36..a06ca057ffb 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderBundleDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderBundleDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpurenderbundledescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPURenderBundleDescriptor : GPUObjectDescriptorBase {
+ };
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoder.cpp b/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoder.cpp
+index ba0bd55dd5b..927306896b0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoder.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoder.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderBundleEncoder.h"
+ 
+ #include "ExceptionOr.h"
+@@ -164,3 +166,5 @@ ExceptionOr<Ref<GPURenderBundle>> GPURenderBundleEncoder::finish(const std::opti
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoder.idl b/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoder.idl
+index 0d9b7d6cecf..28723a23843 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoder.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoder.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpurenderbundleencoder
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoderDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoderDescriptor.cpp
+index 4881f5b23f4..885810927ef 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoderDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoderDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderBundleEncoderDescriptor.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -39,3 +41,5 @@ Ref<JSON::Object> GPURenderBundleEncoderDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoderDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoderDescriptor.idl
+index 8b1e69e6cd4..05f51e04eba 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoderDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderBundleEncoderDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpurenderbundleencoderdescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPURenderBundleEncoderDescriptor : GPURenderPassLayout {
+     boolean depthReadOnly = false;
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderEncoderBase.idl b/Source/WebCore/Modules/WebGPU/GPURenderEncoderBase.idl
+index c5837c7aa30..d6885e6eee2 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderEncoderBase.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderEncoderBase.idl
+@@ -33,7 +33,8 @@ typedef [EnforceRange] long GPUSignedOffset32;
+ 
+ // FIXME: Rename this to `GPURenderCommandsMixin` to match the latest specification.
+ [
+-    EnabledBySetting=WebGPUEnabled
++    EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU
+ ] interface mixin GPURenderEncoderBase {
+     undefined setPipeline(GPURenderPipeline pipeline);
+ 
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.cpp
+index 0559591265b..ddb2facbbda 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderPassColorAttachment.h"
+ 
+ #include "JSGPULoadOp.h"
+@@ -47,3 +49,5 @@ Ref<JSON::Object> GPURenderPassColorAttachment::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.idl b/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.idl
+index 72e2e5294a7..5b4d963421c 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassColorAttachment.idl
+@@ -30,6 +30,7 @@ typedef (sequence<double> or GPUColorDict) GPUColor;
+ typedef [EnforceRange] unsigned long GPUIntegerCoordinate;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPURenderPassColorAttachment {
+     required (GPUTexture or GPUTextureView) view;
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassDepthStencilAttachment.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPassDepthStencilAttachment.cpp
+index bab2243c33b..2543922341f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassDepthStencilAttachment.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassDepthStencilAttachment.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderPassDepthStencilAttachment.h"
+ 
+ #include "JSGPULoadOp.h"
+@@ -53,3 +55,5 @@ Ref<JSON::Object> GPURenderPassDepthStencilAttachment::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassDepthStencilAttachment.idl b/Source/WebCore/Modules/WebGPU/GPURenderPassDepthStencilAttachment.idl
+index bb305df22a9..8a73ea23494 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassDepthStencilAttachment.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassDepthStencilAttachment.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long GPUStencilValue;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPURenderPassDepthStencilAttachment {
+     required (GPUTexture or GPUTextureView) view;
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPassDescriptor.cpp
+index 5abbccb2c40..0cb8c7d5408 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderPassDescriptor.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -53,3 +55,5 @@ Ref<JSON::Object> GPURenderPassDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPURenderPassDescriptor.idl
+index 8a6c65c9701..bc7b302a2bd 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassDescriptor.idl
+@@ -28,6 +28,7 @@
+ // https://bugs.webkit.org/show_bug.cgi?id=232548 This shouldn't need to be here.
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPURenderPassDescriptor : GPUObjectDescriptorBase {
+     required sequence<GPURenderPassColorAttachment?> colorAttachments;
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.cpp
+index d0f39095e35..6899d4b7ec8 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderPassEncoder.h"
+ 
+ #include "ExceptionOr.h"
+@@ -263,3 +265,5 @@ void GPURenderPassEncoder::end()
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.idl b/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.idl
+index 7d5ac5ac89a..70dfc5fbc37 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassEncoder.idl
+@@ -33,6 +33,7 @@ typedef (sequence<double> or GPUColorDict) GPUColor;
+ 
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext,
+     CallTracer=InspectorCanvasCallTracer,
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.cpp
+index 27942573ba1..ea00af5d1f1 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderPassLayout.h"
+ 
+ #include "JSGPUTextureFormat.h"
+@@ -49,3 +51,5 @@ Ref<JSON::Object> GPURenderPassLayout::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.idl b/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.idl
+index 7af7fa6ca97..26c8b384daa 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassLayout.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long GPUSize32;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPURenderPassLayout : GPUObjectDescriptorBase {
+     required sequence<GPUTextureFormat?> colorFormats;
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassTimestampWrites.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPassTimestampWrites.cpp
+index 9965943898a..e410bf5a958 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassTimestampWrites.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassTimestampWrites.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderPassTimestampWrites.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -42,3 +44,5 @@ Ref<JSON::Object> GPURenderPassTimestampWrites::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPassTimestampWrites.idl b/Source/WebCore/Modules/WebGPU/GPURenderPassTimestampWrites.idl
+index 8ba8b0b6504..2772c061cd8 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPassTimestampWrites.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPassTimestampWrites.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long GPUSize32;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPURenderPassTimestampWrites {
+     required GPUQuerySet querySet;
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPipeline.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPipeline.cpp
+index fade68fe67e..4ac314573aa 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPipeline.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPipeline.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderPipeline.h"
+ 
+ #include "GPUBindGroupLayout.h"
+@@ -296,3 +298,5 @@ void GPURenderPipeline::updateShader(const String& source, bool updateVertexShad
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPipeline.idl b/Source/WebCore/Modules/WebGPU/GPURenderPipeline.idl
+index 36fd677bb85..242f058a147 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPipeline.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPipeline.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpurenderpipeline
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPipelineDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPURenderPipelineDescriptor.cpp
+index 1415286c3f3..eb35f7aad15 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPipelineDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPipelineDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPURenderPipelineDescriptor.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -46,3 +48,5 @@ Ref<JSON::Object> GPURenderPipelineDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPURenderPipelineDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPURenderPipelineDescriptor.idl
+index bf833ed52fa..6f0ac466191 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURenderPipelineDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURenderPipelineDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpurenderpipelinedescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPURenderPipelineDescriptor : GPUPipelineDescriptorBase {
+     required GPUVertexState vertex;
+diff --git a/Source/WebCore/Modules/WebGPU/GPURequestAdapterOptions.idl b/Source/WebCore/Modules/WebGPU/GPURequestAdapterOptions.idl
+index 717c39080f0..69a1893e7e0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPURequestAdapterOptions.idl
++++ b/Source/WebCore/Modules/WebGPU/GPURequestAdapterOptions.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpurequestadapteroptions
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPURequestAdapterOptions {
+     // Deliberately a DOMString rather than an enum: an unrecognized feature level has to resolve
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSampler.cpp b/Source/WebCore/Modules/WebGPU/GPUSampler.cpp
+index 01426f4c1af..1cab33a1889 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSampler.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUSampler.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUSampler.h"
+ 
+ #include "GPUDevice.h"
+@@ -58,3 +60,5 @@ void GPUSampler::setLabel(String&& label)
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSampler.idl b/Source/WebCore/Modules/WebGPU/GPUSampler.idl
+index 67e4d3aaa5a..a687e5809d3 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSampler.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUSampler.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpusampler
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSamplerBindingLayout.cpp b/Source/WebCore/Modules/WebGPU/GPUSamplerBindingLayout.cpp
+index 5decd8c81f4..8d9e3f851ba 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSamplerBindingLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUSamplerBindingLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUSamplerBindingLayout.h"
+ 
+ #include "JSGPUSamplerBindingType.h"
+@@ -39,3 +41,5 @@ Ref<JSON::Object> GPUSamplerBindingLayout::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSamplerBindingLayout.idl b/Source/WebCore/Modules/WebGPU/GPUSamplerBindingLayout.idl
+index 3d02a37673a..4e0fab66e82 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSamplerBindingLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUSamplerBindingLayout.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpusamplerbindinglayout
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUSamplerBindingLayout {
+     GPUSamplerBindingType type = "filtering";
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSamplerBindingType.idl b/Source/WebCore/Modules/WebGPU/GPUSamplerBindingType.idl
+index f6d0e729af3..60b5a2df1de 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSamplerBindingType.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUSamplerBindingType.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpusamplerbindingtype
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUSamplerBindingType {
+     "filtering",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSamplerDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUSamplerDescriptor.cpp
+index 67a4186bf80..b0ef91f2d92 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSamplerDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUSamplerDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUSamplerDescriptor.h"
+ 
+ #include "JSGPUAddressMode.h"
+@@ -52,3 +54,5 @@ Ref<JSON::Object> GPUSamplerDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSamplerDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUSamplerDescriptor.idl
+index 2dbc8ae0209..784463ff98f 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSamplerDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUSamplerDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpusamplerdescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUSamplerDescriptor : GPUObjectDescriptorBase {
+     GPUAddressMode addressModeU = "clamp-to-edge";
+diff --git a/Source/WebCore/Modules/WebGPU/GPUShaderModule.cpp b/Source/WebCore/Modules/WebGPU/GPUShaderModule.cpp
+index c2652c0a3f8..d203a385e64 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUShaderModule.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUShaderModule.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUShaderModule.h"
+ 
+ #include "GPUDevice.h"
+@@ -70,3 +72,5 @@ void GPUShaderModule::getCompilationInfo(CompilationInfoPromise&& promise)
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUShaderModule.idl b/Source/WebCore/Modules/WebGPU/GPUShaderModule.idl
+index 1186f7ba17e..8c99838185c 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUShaderModule.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUShaderModule.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpushadermodule
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUShaderModuleCompilationHint.cpp b/Source/WebCore/Modules/WebGPU/GPUShaderModuleCompilationHint.cpp
+index 9b8f695a900..b42abfc8bd1 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUShaderModuleCompilationHint.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUShaderModuleCompilationHint.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUShaderModuleCompilationHint.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -45,3 +47,5 @@ Ref<JSON::Object> GPUShaderModuleCompilationHint::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUShaderModuleCompilationHint.idl b/Source/WebCore/Modules/WebGPU/GPUShaderModuleCompilationHint.idl
+index 745e6ac72e8..17e89262b5d 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUShaderModuleCompilationHint.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUShaderModuleCompilationHint.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpushadermodulecompilationhint
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUShaderModuleCompilationHint {
+     required (GPUPipelineLayout or GPUAutoLayoutMode) layout;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUShaderModuleDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUShaderModuleDescriptor.cpp
+index 2de6ab90444..73deecc9b54 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUShaderModuleDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUShaderModuleDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUShaderModuleDescriptor.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -43,3 +45,5 @@ Ref<JSON::Object> GPUShaderModuleDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUShaderModuleDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUShaderModuleDescriptor.idl
+index 2c315485df2..27e03d78070 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUShaderModuleDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUShaderModuleDescriptor.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpushadermoduledescriptor
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUShaderModuleDescriptor : GPUObjectDescriptorBase {
+     required USVString code;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUShaderStage.idl b/Source/WebCore/Modules/WebGPU/GPUShaderStage.idl
+index 1a5f137d3e2..aa8f6e9fb4b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUShaderStage.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUShaderStage.idl
+@@ -28,6 +28,7 @@
+ typedef [EnforceRange] unsigned long GPUShaderStageFlags;
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext
+ ]
+diff --git a/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.cpp b/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.cpp
+index 53a1ce1fd5f..289f32f07e4 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUStencilFaceState.h"
+ 
+ #include "JSGPUCompareFunction.h"
+@@ -43,3 +45,5 @@ Ref<JSON::Object> GPUStencilFaceState::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.idl b/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.idl
+index 653b530e276..2bfd1302291 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUStencilFaceState.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpustencilfacestate
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUStencilFaceState {
+     GPUCompareFunction compare = "always";
+diff --git a/Source/WebCore/Modules/WebGPU/GPUStencilOperation.idl b/Source/WebCore/Modules/WebGPU/GPUStencilOperation.idl
+index bf9e5607a8a..9db0a4fc645 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUStencilOperation.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUStencilOperation.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpustenciloperation
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUStencilOperation {
+     "keep",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUStorageTextureAccess.idl b/Source/WebCore/Modules/WebGPU/GPUStorageTextureAccess.idl
+index e2a8bc42351..696d3442337 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUStorageTextureAccess.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUStorageTextureAccess.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpustoragetextureaccess
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUStorageTextureAccess {
+     "write-only",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUStorageTextureBindingLayout.cpp b/Source/WebCore/Modules/WebGPU/GPUStorageTextureBindingLayout.cpp
+index 4f21d2e4181..25bb22cf4d2 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUStorageTextureBindingLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUStorageTextureBindingLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUStorageTextureBindingLayout.h"
+ 
+ #include "JSGPUStorageTextureAccess.h"
+@@ -43,3 +45,5 @@ Ref<JSON::Object> GPUStorageTextureBindingLayout::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUStorageTextureBindingLayout.idl b/Source/WebCore/Modules/WebGPU/GPUStorageTextureBindingLayout.idl
+index 8ac9ea31a42..98e8646b85e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUStorageTextureBindingLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUStorageTextureBindingLayout.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpustoragetexturebindinglayout
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUStorageTextureBindingLayout {
+     GPUStorageTextureAccess access = "write-only";
+diff --git a/Source/WebCore/Modules/WebGPU/GPUStoreOp.idl b/Source/WebCore/Modules/WebGPU/GPUStoreOp.idl
+index b9c8afde4a5..88abeaf9509 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUStoreOp.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUStoreOp.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpustoreop
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUStoreOp {
+     "store",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSupportedFeatures.cpp b/Source/WebCore/Modules/WebGPU/GPUSupportedFeatures.cpp
+index 657eb16892f..5edee916c12 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSupportedFeatures.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUSupportedFeatures.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUSupportedFeatures.h"
+ #include "IDLTypes.h"
+ 
+@@ -36,3 +38,5 @@ void GPUSupportedFeatures::initializeSetLike(DOMSetAdapter& set) const
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSupportedFeatures.idl b/Source/WebCore/Modules/WebGPU/GPUSupportedFeatures.idl
+index b2999571db7..33c39a8e634 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSupportedFeatures.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUSupportedFeatures.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpusupportedfeatures
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSupportedLimits.cpp b/Source/WebCore/Modules/WebGPU/GPUSupportedLimits.cpp
+index 896f9b971ce..79370a31e9b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSupportedLimits.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUSupportedLimits.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUSupportedLimits.h"
+ 
+ namespace WebCore {
+@@ -204,3 +206,5 @@ uint32_t GPUSupportedLimits::maxStorageTexturesInVertexStage() const
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUSupportedLimits.idl b/Source/WebCore/Modules/WebGPU/GPUSupportedLimits.idl
+index f5c14d3d4cf..32c508e5c20 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUSupportedLimits.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUSupportedLimits.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpusupportedlimits
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTexture.cpp b/Source/WebCore/Modules/WebGPU/GPUTexture.cpp
+index 094320176fd..66b7d8d5016 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTexture.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUTexture.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUTexture.h"
+ 
+ #include "ExceptionOr.h"
+@@ -620,3 +622,5 @@ size_t GPUTexture::memoryCost() const
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTexture.idl b/Source/WebCore/Modules/WebGPU/GPUTexture.idl
+index e24bb20768f..be69b9c0fbc 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTexture.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTexture.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gputexture
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureAspect.idl b/Source/WebCore/Modules/WebGPU/GPUTextureAspect.idl
+index 574536f5ac6..40e534cd8c7 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureAspect.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureAspect.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gputextureaspect
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUTextureAspect {
+     "all",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureBindingLayout.cpp b/Source/WebCore/Modules/WebGPU/GPUTextureBindingLayout.cpp
+index bdfd641635b..5669895a1df 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureBindingLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureBindingLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUTextureBindingLayout.h"
+ 
+ #include "JSGPUTextureSampleType.h"
+@@ -42,3 +44,5 @@ Ref<JSON::Object> GPUTextureBindingLayout::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureBindingLayout.idl b/Source/WebCore/Modules/WebGPU/GPUTextureBindingLayout.idl
+index 3dbc5fef77a..39fc9fa202d 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureBindingLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureBindingLayout.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gputexturebindinglayout
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUTextureBindingLayout {
+     GPUTextureSampleType sampleType = "float";
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUTextureDescriptor.cpp
+index 08413857628..7430e5e9c4c 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUTextureDescriptor.h"
+ 
+ #include "JSGPUTextureDimension.h"
+@@ -57,3 +59,5 @@ Ref<JSON::Object> GPUTextureDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUTextureDescriptor.idl
+index b85894dbe1a..979e90694e4 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureDescriptor.idl
+@@ -32,6 +32,7 @@ typedef (sequence<GPUIntegerCoordinate> or GPUExtent3DDict) GPUExtent3D;
+ typedef [EnforceRange] unsigned long GPUTextureUsageFlags;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUTextureDescriptor : GPUObjectDescriptorBase {
+     required GPUExtent3D size;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureDimension.idl b/Source/WebCore/Modules/WebGPU/GPUTextureDimension.idl
+index 2d3bd714373..3a4da312c8e 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureDimension.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureDimension.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gputexturedimension
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUTextureDimension {
+     "1d",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureFormat.idl b/Source/WebCore/Modules/WebGPU/GPUTextureFormat.idl
+index f54c90d5630..308f26e4ac2 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureFormat.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureFormat.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gputextureformat
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUTextureFormat {
+     // 8-bit formats
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureSampleType.idl b/Source/WebCore/Modules/WebGPU/GPUTextureSampleType.idl
+index 4e449451aeb..f2df6f28d8d 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureSampleType.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureSampleType.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gputexturesampletype
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUTextureSampleType {
+     "float",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureUsage.idl b/Source/WebCore/Modules/WebGPU/GPUTextureUsage.idl
+index 59a7d1f98cd..6a63e5ec795 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureUsage.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureUsage.idl
+@@ -28,6 +28,7 @@
+ typedef [EnforceRange] unsigned long GPUTextureUsageFlags;
+ [
+     EnabledBySetting=WebGPUEnabled,
++    Conditional=WEBGPU,
+     Exposed=(Window,Worker),
+     SecureContext
+ ]
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureView.cpp b/Source/WebCore/Modules/WebGPU/GPUTextureView.cpp
+index 6890bea4453..91c27929e9b 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureView.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureView.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUTextureView.h"
+ 
+ #include "GPUDevice.h"
+@@ -60,3 +62,5 @@ void GPUTextureView::setLabel(String&& label)
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureView.idl b/Source/WebCore/Modules/WebGPU/GPUTextureView.idl
+index 1cf9f71207a..6f5899f664a 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureView.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureView.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gputextureview
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureViewDescriptor.cpp b/Source/WebCore/Modules/WebGPU/GPUTextureViewDescriptor.cpp
+index 4f39bdd86bf..43987e9eb23 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureViewDescriptor.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureViewDescriptor.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUTextureViewDescriptor.h"
+ 
+ #include "JSGPUTextureAspect.h"
+@@ -52,3 +54,5 @@ Ref<JSON::Object> GPUTextureViewDescriptor::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureViewDescriptor.idl b/Source/WebCore/Modules/WebGPU/GPUTextureViewDescriptor.idl
+index e18ac44aaa2..834633b34d6 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureViewDescriptor.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureViewDescriptor.idl
+@@ -30,6 +30,7 @@ typedef [EnforceRange] unsigned long GPUIntegerCoordinate;
+ typedef [EnforceRange] unsigned long GPUTextureUsageFlags;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+diff --git a/Source/WebCore/Modules/WebGPU/GPUTextureViewDimension.idl b/Source/WebCore/Modules/WebGPU/GPUTextureViewDimension.idl
+index 9232b53091a..c5228054078 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUTextureViewDimension.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUTextureViewDimension.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gputextureviewdimension
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUTextureViewDimension {
+     "1d",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEvent.cpp b/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEvent.cpp
+index 6a6b90452a5..1918e0d26b9 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEvent.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEvent.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUUncapturedErrorEvent.h"
+ 
+ #include <wtf/TZoneMallocInlines.h>
+@@ -45,4 +47,4 @@ GPUError& GPUUncapturedErrorEvent::error() const
+ 
+ }
+ 
+-
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEvent.idl b/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEvent.idl
+index 4d1824f8a05..2a49ac74119 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEvent.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEvent.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpuuncapturederrorevent
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEventInit.idl b/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEventInit.idl
+index fb245c1c79b..ca02bfc52bd 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEventInit.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUUncapturedErrorEventInit.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpuuncapturederroreventinit
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUUncapturedErrorEventInit : EventInit {
+     required GPUError error;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUValidationError.cpp b/Source/WebCore/Modules/WebGPU/GPUValidationError.cpp
+index ffac909fbd3..e81424bd4b9 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUValidationError.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUValidationError.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUValidationError.h"
+ 
+ namespace WebCore {
+@@ -37,4 +39,4 @@ const String& GPUValidationError::message() const
+ 
+ }
+ 
+-
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUValidationError.idl b/Source/WebCore/Modules/WebGPU/GPUValidationError.idl
+index 1608f38138a..b722e240da0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUValidationError.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUValidationError.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/WebGPU/GPUVertexAttribute.cpp b/Source/WebCore/Modules/WebGPU/GPUVertexAttribute.cpp
+index 4ffe0143235..fb75ea9e8b0 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUVertexAttribute.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUVertexAttribute.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUVertexAttribute.h"
+ 
+ #include "JSGPUVertexFormat.h"
+@@ -41,3 +43,5 @@ Ref<JSON::Object> GPUVertexAttribute::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUVertexAttribute.idl b/Source/WebCore/Modules/WebGPU/GPUVertexAttribute.idl
+index 78cc079e59d..8c59524519d 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUVertexAttribute.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUVertexAttribute.idl
+@@ -30,6 +30,7 @@ typedef [EnforceRange] unsigned long GPUIndex32;
+ typedef [EnforceRange] unsigned long long GPUSize64;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUVertexAttribute {
+     required GPUVertexFormat format;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUVertexBufferLayout.cpp b/Source/WebCore/Modules/WebGPU/GPUVertexBufferLayout.cpp
+index 6a4011ee3d0..d3a98312e58 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUVertexBufferLayout.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUVertexBufferLayout.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUVertexBufferLayout.h"
+ 
+ #include "JSGPUVertexStepMode.h"
+@@ -45,3 +47,5 @@ Ref<JSON::Object> GPUVertexBufferLayout::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUVertexBufferLayout.idl b/Source/WebCore/Modules/WebGPU/GPUVertexBufferLayout.idl
+index 2efba0ec1ac..f85d02d1df2 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUVertexBufferLayout.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUVertexBufferLayout.idl
+@@ -29,6 +29,7 @@
+ typedef [EnforceRange] unsigned long long GPUSize64;
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUVertexBufferLayout {
+     required GPUSize64 arrayStride;
+diff --git a/Source/WebCore/Modules/WebGPU/GPUVertexFormat.idl b/Source/WebCore/Modules/WebGPU/GPUVertexFormat.idl
+index 9be8a29a0a2..e05c96f9866 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUVertexFormat.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUVertexFormat.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpuvertexformat
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUVertexFormat {
+     "uint8",
+diff --git a/Source/WebCore/Modules/WebGPU/GPUVertexState.cpp b/Source/WebCore/Modules/WebGPU/GPUVertexState.cpp
+index f1b6504bf5f..30b757b4896 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUVertexState.cpp
++++ b/Source/WebCore/Modules/WebGPU/GPUVertexState.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "GPUVertexState.h"
+ 
+ #include <wtf/JSONValues.h>
+@@ -47,3 +49,5 @@ Ref<JSON::Object> GPUVertexState::toJSON() const
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/GPUVertexState.idl b/Source/WebCore/Modules/WebGPU/GPUVertexState.idl
+index c0cf46c4745..34b73963d25 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUVertexState.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUVertexState.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#dictdef-gpuvertexstate
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ] dictionary GPUVertexState : GPUProgrammableStage {
+     sequence<GPUVertexBufferLayout?> buffers = [];
+diff --git a/Source/WebCore/Modules/WebGPU/GPUVertexStepMode.idl b/Source/WebCore/Modules/WebGPU/GPUVertexStepMode.idl
+index a558aafdf8b..d05097b1c75 100644
+--- a/Source/WebCore/Modules/WebGPU/GPUVertexStepMode.idl
++++ b/Source/WebCore/Modules/WebGPU/GPUVertexStepMode.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#enumdef-gpuvertexstepmode
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled
+ ] enum GPUVertexStepMode {
+     "vertex",
+diff --git a/Source/WebCore/Modules/WebGPU/NavigatorGPU.idl b/Source/WebCore/Modules/WebGPU/NavigatorGPU.idl
+index 3f7b6bd33a9..00fc66894be 100644
+--- a/Source/WebCore/Modules/WebGPU/NavigatorGPU.idl
++++ b/Source/WebCore/Modules/WebGPU/NavigatorGPU.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#navigatorgpu
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+ ]
+ interface mixin NavigatorGPU {
+diff --git a/Source/WebCore/Modules/WebGPU/WGSLLanguageFeatures.cpp b/Source/WebCore/Modules/WebGPU/WGSLLanguageFeatures.cpp
+index bd5956cd2ee..45c273031b6 100644
+--- a/Source/WebCore/Modules/WebGPU/WGSLLanguageFeatures.cpp
++++ b/Source/WebCore/Modules/WebGPU/WGSLLanguageFeatures.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "WGSLLanguageFeatures.h"
+ 
+ #include "IDLTypes.h"
+@@ -42,3 +44,5 @@ void WGSLLanguageFeatures::initializeSetLike(DOMSetAdapter& set) const
+ }
+ 
+ }
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/Modules/WebGPU/WGSLLanguageFeatures.idl b/Source/WebCore/Modules/WebGPU/WGSLLanguageFeatures.idl
+index 7f897af4ba4..ef73605bb57 100644
+--- a/Source/WebCore/Modules/WebGPU/WGSLLanguageFeatures.idl
++++ b/Source/WebCore/Modules/WebGPU/WGSLLanguageFeatures.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEBGPU,
+     EnabledBySetting=WebGPUEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/bindings/js/JSGPUErrorCustom.cpp b/Source/WebCore/bindings/js/JSGPUErrorCustom.cpp
+index b877297bc34..661222abdbd 100644
+--- a/Source/WebCore/bindings/js/JSGPUErrorCustom.cpp
++++ b/Source/WebCore/bindings/js/JSGPUErrorCustom.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEBGPU)
+ #include "JSGPUError.h"
+ 
+ #include "GPUInternalError.h"
+@@ -60,3 +62,5 @@ JSValue toJS(JSGlobalObject* lexicalGlobalObject, JSDOMGlobalObject* globalObjec
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEBGPU)
+diff --git a/Source/WebCore/bindings/js/WebCoreJSClientData.cpp b/Source/WebCore/bindings/js/WebCoreJSClientData.cpp
+index fed33a3c121..c10e5a6e749 100644
+--- a/Source/WebCore/bindings/js/WebCoreJSClientData.cpp
++++ b/Source/WebCore/bindings/js/WebCoreJSClientData.cpp
+@@ -37,7 +37,9 @@
+ #include "JSDOMWindow.h"
+ #include "JSDOMWindowProperties.h"
+ #include "JSDedicatedWorkerGlobalScope.h"
++#if ENABLE(WEBGPU)
+ #include "JSGPUPipelineError.h"
++#endif
+ #include "JSIDBSerializationGlobalObject.h"
+ #include "JSObservableArray.h"
+ #include "JSPaintWorkletGlobalScope.h"
+@@ -110,7 +112,9 @@ JSHeapData::JSHeapData(Heap& heap)
+ #if ENABLE(MEDIA_STREAM)
+     , m_heapCellTypeForJSOverconstrainedError(JSC::IsoHeapCellType::Args<JSOverconstrainedError>())
+ #endif
++#if ENABLE(WEBGPU)
+     , m_heapCellTypeForJSGPUPipelineError(JSC::IsoHeapCellType::Args<JSGPUPipelineError>())
++#endif
+     , m_heapCellTypeForJSWebTransportError(JSC::IsoHeapCellType::Args<JSWebTransportError>())
+     , m_domBuiltinConstructorSpace ISO_SUBSPACE_INIT(heap, heap.cellHeapCellType, JSDOMBuiltinConstructorBase)
+     , m_domConstructorSpace ISO_SUBSPACE_INIT(heap, heap.cellHeapCellType, JSDOMConstructorBase)
+diff --git a/Source/WebCore/bindings/js/WebCoreJSClientData.h b/Source/WebCore/bindings/js/WebCoreJSClientData.h
+index aeb5145ba1a..178c4e29beb 100644
+--- a/Source/WebCore/bindings/js/WebCoreJSClientData.h
++++ b/Source/WebCore/bindings/js/WebCoreJSClientData.h
+@@ -107,7 +107,9 @@ public:
+ #if ENABLE(MEDIA_STREAM)
+     JSC::IsoHeapCellType m_heapCellTypeForJSOverconstrainedError;
+ #endif
++#if ENABLE(WEBGPU)
+     JSC::IsoHeapCellType m_heapCellTypeForJSGPUPipelineError;
++#endif
+     JSC::IsoHeapCellType m_heapCellTypeForJSWebTransportError;
+ 
+ private:
+diff --git a/Source/WebCore/dom/Document.cpp b/Source/WebCore/dom/Document.cpp
+index cfbeb11c93c..f3d35be1b59 100644
+--- a/Source/WebCore/dom/Document.cpp
++++ b/Source/WebCore/dom/Document.cpp
+@@ -8760,8 +8760,10 @@ std::optional<RenderingContext> Document::getCSSCanvasContext(const String& type
+     if (RefPtr renderingContext = dynamicDowncast<ImageBitmapRenderingContext>(*context))
+         return RenderingContext { renderingContext.releaseNonNull() };
+ 
++#if ENABLE(WEBGPU)
+     if (RefPtr renderingContext = dynamicDowncast<GPUCanvasContext>(*context))
+         return RenderingContext { renderingContext.releaseNonNull() };
++#endif
+ 
+     return RenderingContext { downcast<CanvasRenderingContext2D>(*context) };
+ }
+diff --git a/Source/WebCore/dom/Document.h b/Source/WebCore/dom/Document.h
+index 50f0e071c4b..c9bb4606e70 100644
+--- a/Source/WebCore/dom/Document.h
++++ b/Source/WebCore/dom/Document.h
+@@ -426,7 +426,9 @@ using RenderingContext = Variant<
+     Ref<WebGLRenderingContext>,
+     Ref<WebGL2RenderingContext>,
+ #endif
++#if ENABLE(WEBGPU)
+     Ref<GPUCanvasContext>,
++#endif
+     Ref<ImageBitmapRenderingContext>,
+     Ref<CanvasRenderingContext2D>
+ >;
+diff --git a/Source/WebCore/dom/Document.idl b/Source/WebCore/dom/Document.idl
+index d02b86e5870..4c7365aad17 100644
+--- a/Source/WebCore/dom/Document.idl
++++ b/Source/WebCore/dom/Document.idl
+@@ -23,7 +23,9 @@ typedef (
+     WebGLRenderingContext or
+     WebGL2RenderingContext or
+ #endif
++#if defined(ENABLE_WEBGPU) && ENABLE_WEBGPU
+     GPUCanvasContext or
++#endif
+     ImageBitmapRenderingContext or 
+     CanvasRenderingContext2D) RenderingContext;
+ 
+diff --git a/Source/WebCore/dom/EventInterfaces.in b/Source/WebCore/dom/EventInterfaces.in
+index 677f2e8a4fb..a88a38f2f79 100644
+--- a/Source/WebCore/dom/EventInterfaces.in
++++ b/Source/WebCore/dom/EventInterfaces.in
+@@ -110,5 +110,5 @@ XRReferenceSpaceEvent conditional=WEBXR
+ XRSessionEvent conditional=WEBXR
+ NotificationEvent conditional=NOTIFICATION_EVENT
+ ContentVisibilityAutoStateChangeEvent
+-GPUUncapturedErrorEvent
++GPUUncapturedErrorEvent conditional=WEBGPU
+ CanvasPaintEvent
+diff --git a/Source/WebCore/dom/EventTargetFactory.in b/Source/WebCore/dom/EventTargetFactory.in
+index ec7469a0b58..d823788946a 100644
+--- a/Source/WebCore/dom/EventTargetFactory.in
++++ b/Source/WebCore/dom/EventTargetFactory.in
+@@ -20,7 +20,7 @@ DOMWindow
+ EventSource
+ FileReader
+ FontFaceSet
+-GPUDevice
++GPUDevice conditional=WEBGPU
+ IDBDatabase
+ IDBOpenDBRequest
+ IDBRequest
+diff --git a/Source/WebCore/html/HTMLCanvasElement.cpp b/Source/WebCore/html/HTMLCanvasElement.cpp
+index 9ca0df74c9d..4d8848b0234 100644
+--- a/Source/WebCore/html/HTMLCanvasElement.cpp
++++ b/Source/WebCore/html/HTMLCanvasElement.cpp
+@@ -322,11 +322,13 @@ ExceptionOr<std::optional<RenderingContext>> HTMLCanvasElement::getContext(JSC::
+         }
+ #endif
+ 
++#if ENABLE(WEBGPU)
+         if (RefPtr context = dynamicDowncast<GPUCanvasContext>(m_context.get())) {
+             if (!isWebGPUType(contextId))
+                 return { std::nullopt };
+             return { context.releaseNonNull() };
+         }
++#endif
+ 
+         ASSERT_NOT_REACHED();
+         return std::optional<RenderingContext> { std::nullopt };
+@@ -395,6 +397,7 @@ ExceptionOr<std::optional<RenderingContext>> HTMLCanvasElement::getContext(JSC::
+     }
+ #endif
+ 
++#if ENABLE(WEBGPU)
+     if (isWebGPUType(contextId)) {
+         RefPtr<GPU> gpu;
+         if (RefPtr window = document().window()) {
+@@ -406,6 +409,7 @@ ExceptionOr<std::optional<RenderingContext>> HTMLCanvasElement::getContext(JSC::
+             return { std::nullopt };
+         return { context.releaseNonNull() };
+     }
++#endif
+ 
+     return std::optional<RenderingContext> { std::nullopt };
+ }
+@@ -423,12 +427,14 @@ RefPtr<CanvasRenderingContext> HTMLCanvasElement::getContext(const String& type)
+         return getContextWebGL(HTMLCanvasElement::toWebGLVersion(type));
+ #endif
+ 
++#if ENABLE(WEBGPU)
+     if (HTMLCanvasElement::isWebGPUType(type)) {
+         RefPtr<GPU> gpu;
+         if (RefPtr window = document().window())
+             gpu = protect(window->navigator())->gpu();
+         return getContextWebGPU(type, gpu);
+     }
++#endif
+ 
+     return nullptr;
+ }
+@@ -574,6 +580,7 @@ bool HTMLCanvasElement::isWebGPUType(const String& type)
+     return type == "webgpu"_s;
+ }
+ 
++#if ENABLE(WEBGPU)
+ GPUCanvasContext* HTMLCanvasElement::createContextWebGPU(const String& type, GPU* gpu)
+ {
+     ASSERT_UNUSED(type, HTMLCanvasElement::isWebGPUType(type));
+@@ -608,6 +615,7 @@ GPUCanvasContext* HTMLCanvasElement::getContextWebGPU(const String& type, GPU* g
+ 
+     return dynamicDowncast<GPUCanvasContext>(m_context.get());
+ }
++#endif
+ 
+ std::optional<FloatRect> HTMLCanvasElement::computeDirtyRectangleIfNeeded(const std::optional<FloatRect>& rect) const
+ {
+diff --git a/Source/WebCore/html/HTMLCanvasElement.h b/Source/WebCore/html/HTMLCanvasElement.h
+index 85f4d52b623..4241873c4cb 100644
+--- a/Source/WebCore/html/HTMLCanvasElement.h
++++ b/Source/WebCore/html/HTMLCanvasElement.h
+@@ -114,8 +114,10 @@ public:
+     ImageBitmapRenderingContext* getContextBitmapRenderer(const String&, ImageBitmapRenderingContextSettings&&);
+ 
+     static bool isWebGPUType(const String&);
++#if ENABLE(WEBGPU)
+     GPUCanvasContext* createContextWebGPU(const String&, GPU*);
+     GPUCanvasContext* getContextWebGPU(const String&, GPU*);
++#endif
+ 
+     WEBCORE_EXPORT ExceptionOr<UncachedString> toDataURL(const String& mimeType, JSC::JSValue quality);
+     WEBCORE_EXPORT ExceptionOr<UncachedString> toDataURL(const String& mimeType);
+diff --git a/Source/WebCore/html/HTMLCanvasElement.idl b/Source/WebCore/html/HTMLCanvasElement.idl
+index 24661caa4df..e54fd275236 100644
+--- a/Source/WebCore/html/HTMLCanvasElement.idl
++++ b/Source/WebCore/html/HTMLCanvasElement.idl
+@@ -31,7 +31,9 @@ typedef (
+     WebGLRenderingContext or
+     WebGL2RenderingContext or
+ #endif
++#if defined(ENABLE_WEBGPU) && ENABLE_WEBGPU
+     GPUCanvasContext or
++#endif
+     ImageBitmapRenderingContext or 
+     CanvasRenderingContext2D) RenderingContext;
+ 
+diff --git a/Source/WebCore/html/OffscreenCanvas.h b/Source/WebCore/html/OffscreenCanvas.h
+index 92b507a4bde..cb02528c69f 100644
+--- a/Source/WebCore/html/OffscreenCanvas.h
++++ b/Source/WebCore/html/OffscreenCanvas.h
+@@ -76,7 +76,9 @@ using OffscreenRenderingContext = Variant<
+     Ref<WebGLRenderingContext>,
+     Ref<WebGL2RenderingContext>,
+ #endif
++#if ENABLE(WEBGPU)
+     Ref<GPUCanvasContext>,
++#endif
+     Ref<ImageBitmapRenderingContext>,
+     Ref<OffscreenCanvasRenderingContext2D>
+ >;
+diff --git a/Source/WebCore/html/OffscreenCanvas.idl b/Source/WebCore/html/OffscreenCanvas.idl
+index 44258da0204..1cbd9b0c5cf 100644
+--- a/Source/WebCore/html/OffscreenCanvas.idl
++++ b/Source/WebCore/html/OffscreenCanvas.idl
+@@ -28,7 +28,9 @@ typedef (
+     WebGLRenderingContext or
+     WebGL2RenderingContext or
+ #endif
++#if defined(ENABLE_WEBGPU) && ENABLE_WEBGPU
+     GPUCanvasContext or
++#endif
+     ImageBitmapRenderingContext or
+     OffscreenCanvasRenderingContext2D) OffscreenRenderingContext;
+ 
+diff --git a/Source/WebCore/html/canvas/GPUCanvasContext.idl b/Source/WebCore/html/canvas/GPUCanvasContext.idl
+index 58247b6ac84..dbc22a16253 100644
+--- a/Source/WebCore/html/canvas/GPUCanvasContext.idl
++++ b/Source/WebCore/html/canvas/GPUCanvasContext.idl
+@@ -26,6 +26,7 @@
+ // https://gpuweb.github.io/gpuweb/#gpucanvascontext
+ 
+ [
++    Conditional=WEBGPU,
+     ActiveDOMObject,
+     EnabledBySetting=WebGPUEnabled,
+     ReportExtraMemoryCost,
+diff --git a/Source/WebCore/inspector/InspectorCanvas.cpp b/Source/WebCore/inspector/InspectorCanvas.cpp
+index 4aede4ab0ed..434e962dc24 100644
+--- a/Source/WebCore/inspector/InspectorCanvas.cpp
++++ b/Source/WebCore/inspector/InspectorCanvas.cpp
+@@ -64,7 +64,9 @@
+ #include "JSCanvasTextBaseline.h"
+ #include "JSDOMWrapperCache.h"
+ #include "JSExecState.h"
++#if ENABLE(WEBGPU)
+ #include "JSGPUDevice.h"
++#endif
+ #include "JSImageBitmapRenderingContext.h"
+ #include "JSImageSmoothingQuality.h"
+ #include "JSPredefinedColorSpace.h"
+@@ -100,10 +102,12 @@ Ref<InspectorCanvas> InspectorCanvas::create(CanvasRenderingContext& context)
+     return adoptRef(*new InspectorCanvas(context));
+ }
+ 
++#if ENABLE(WEBGPU)
+ Ref<InspectorCanvas> InspectorCanvas::create(GPUDevice& device)
+ {
+     return adoptRef(*new InspectorCanvas(device));
+ }
++#endif
+ 
+ InspectorCanvas::~InspectorCanvas() = default;
+ 
+@@ -119,27 +123,38 @@ CanvasRenderingContext* InspectorCanvas::canvasContext() const
+     return context ? context->ptr() : nullptr;
+ }
+ 
++#if ENABLE(WEBGPU)
+ InspectorCanvas::InspectorCanvas(GPUDevice& device)
+     : m_identifier(makeString("canvas:"_s, IdentifiersFactory::createIdentifier()))
+     , m_context(device)
+ {
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ GPUDevice* InspectorCanvas::deviceContext() const
+ {
+     auto* device = std::get_if<WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>>(&m_context);
+     return device ? device->ptr() : nullptr;
+ }
++#else
++GPUDevice* InspectorCanvas::deviceContext() const
++{
++    return nullptr;
++}
++#endif
+ 
+ bool InspectorCanvas::hasActiveInspectorCanvasCallTracer() const
+ {
+     return WTF::switchOn(m_context,
+         [](const WeakRef<CanvasRenderingContext>& context) {
+             return context->hasActiveInspectorCanvasCallTracer();
+-        },
+-        [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& device) {
++        }
++#if ENABLE(WEBGPU)
++        , [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& device) {
+             return device->hasActiveInspectorCanvasCallTracer();
+         }
++#endif
+     );
+ }
+ 
+@@ -148,18 +163,22 @@ void InspectorCanvas::setHasActiveInspectorCanvasCallTracer(bool active)
+     WTF::switchOn(m_context,
+         [active](const WeakRef<CanvasRenderingContext>& context) {
+             context->setHasActiveInspectorCanvasCallTracer(active);
+-        },
+-        [active](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& device) {
++        }
++#if ENABLE(WEBGPU)
++        , [active](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& device) {
+             device->setHasActiveInspectorCanvasCallTracer(active);
+         }
++#endif
+     );
+ }
+ 
++#if ENABLE(WEBGPU)
+ static bool canvasContextMatchesDevice(const CanvasRenderingContext& context, const GPUDevice& device)
+ {
+     auto* gpuCanvasContext = dynamicDowncast<GPUCanvasContext>(context);
+     return gpuCanvasContext && gpuCanvasContext->device() == &device;
+ }
++#endif
+ 
+ HashSet<HTMLCanvasElement*> InspectorCanvas::canvasElements() const
+ {
+@@ -171,8 +190,9 @@ HashSet<HTMLCanvasElement*> InspectorCanvas::canvasElements() const
+             if (RefPtr canvasElement = dynamicDowncast<HTMLCanvasElement>(context->canvasBase()))
+                 canvasElements.add(canvasElement);
+             return canvasElements;
+-        },
+-        [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
++        }
++#if ENABLE(WEBGPU)
++        , [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
+             Ref device = weakDevice;
+ 
+             HashSet<HTMLCanvasElement*> canvasElements;
+@@ -186,6 +206,7 @@ HashSet<HTMLCanvasElement*> InspectorCanvas::canvasElements() const
+             }
+             return canvasElements;
+         }
++#endif
+     );
+ }
+ 
+@@ -195,8 +216,9 @@ Vector<IntSize> InspectorCanvas::sizes() const
+         [](const WeakRef<CanvasRenderingContext>& weakContext) -> Vector<IntSize> {
+             Ref context = weakContext;
+             return { context->canvasBase().size() };
+-        },
+-        [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
++        }
++#if ENABLE(WEBGPU)
++        , [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
+             Ref device = weakDevice;
+ 
+             Vector<IntSize> sizes;
+@@ -209,6 +231,7 @@ Vector<IntSize> InspectorCanvas::sizes() const
+             }
+             return sizes;
+         }
++#endif
+     );
+ }
+ 
+@@ -224,8 +247,9 @@ Vector<String> InspectorCanvas::cssCanvasNames() const
+                     cssCanvasNames.append(cssCanvasName);
+             }
+             return cssCanvasNames;
+-        },
+-        [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
++        }
++#if ENABLE(WEBGPU)
++        , [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
+             Ref device = weakDevice;
+ 
+             Vector<String> cssCanvasNames;
+@@ -242,6 +266,7 @@ Vector<String> InspectorCanvas::cssCanvasNames() const
+             }
+             return cssCanvasNames;
+         }
++#endif
+     );
+ 
+     std::ranges::sort(cssCanvasNames, codePointCompareLessThan);
+@@ -254,11 +279,13 @@ ScriptExecutionContext* InspectorCanvas::scriptExecutionContext() const
+         [](const WeakRef<CanvasRenderingContext>& weakContext) {
+             Ref context = weakContext;
+             return protect(context->canvasBase())->scriptExecutionContext();
+-        },
+-        [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
++        }
++#if ENABLE(WEBGPU)
++        , [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
+             Ref device = weakDevice;
+             return device->scriptExecutionContext();
+         }
++#endif
+     );
+ }
+ 
+@@ -285,11 +312,13 @@ JSC::JSValue InspectorCanvas::resolveContext(JSC::JSGlobalObject* exec)
+                 return toJS(exec, globalObject, downcast<WebGL2RenderingContext>(context));
+ #endif
+             RELEASE_ASSERT_NOT_REACHED();
+-        },
+-        [&](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
++        }
++#if ENABLE(WEBGPU)
++        , [&](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
+             Ref device = weakDevice;
+             return toJS(exec, globalObject, device);
+         }
++#endif
+     );
+ }
+ 
+@@ -299,8 +328,9 @@ HashSet<Ref<Element>> InspectorCanvas::cssCanvasClientNodes() const
+         [](const WeakRef<CanvasRenderingContext>& weakContext) {
+             Ref context = weakContext;
+             return protect(context->canvasBase())->cssCanvasClients();
+-        },
+-        [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
++        }
++#if ENABLE(WEBGPU)
++        , [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
+             Ref device = weakDevice;
+             HashSet<Ref<Element>> cssCanvasClientNodes;
+             Locker locker { CanvasRenderingContext::instancesLock() };
+@@ -313,6 +343,7 @@ HashSet<Ref<Element>> InspectorCanvas::cssCanvasClientNodes() const
+             }
+             return cssCanvasClientNodes;
+         }
++#endif
+     );
+ }
+ 
+@@ -323,8 +354,9 @@ size_t InspectorCanvas::memoryCost() const
+             Ref context = weakContext;
+ 
+             return context->memoryCost();
+-        },
+-        [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) -> size_t {
++        }
++#if ENABLE(WEBGPU)
++        , [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) -> size_t {
+             Ref device = weakDevice;
+ 
+             CheckedSize memoryCost = device->memoryCost();
+@@ -336,6 +368,7 @@ size_t InspectorCanvas::memoryCost() const
+             }
+             return memoryCost;
+         }
++#endif
+     );
+ }
+ 
+@@ -692,8 +725,9 @@ Ref<Inspector::Protocol::Canvas::Canvas> InspectorCanvas::buildObjectForCanvas(b
+                 result->setContextAttributes(attributes.releaseNonNull());
+ 
+             return result;
+-        },
+-        [&](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
++        }
++#if ENABLE(WEBGPU)
++        , [&](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) {
+             Ref device = weakDevice;
+ 
+             auto result = Inspector::Protocol::Canvas::Canvas::create()
+@@ -711,6 +745,7 @@ Ref<Inspector::Protocol::Canvas::Canvas> InspectorCanvas::buildObjectForCanvas(b
+ 
+             return result;
+         }
++#endif
+     );
+ 
+     if (auto sizes = this->sizes(); !sizes.isEmpty()) {
+@@ -811,8 +846,9 @@ Inspector::Protocol::ErrorStringOr<String> InspectorCanvas::getContentAsDataURL(
+         [](const WeakRef<CanvasRenderingContext>& weakContext) {
+             Ref context = weakContext;
+             return getContentAsDataURL(context);
+-        },
+-        [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) -> Inspector::Protocol::ErrorStringOr<String> {
++        }
++#if ENABLE(WEBGPU)
++        , [](const WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>& weakDevice) -> Inspector::Protocol::ErrorStringOr<String> {
+             Ref device = weakDevice;
+             RefPtr<CanvasRenderingContext> context;
+             {
+@@ -831,6 +867,7 @@ Inspector::Protocol::ErrorStringOr<String> InspectorCanvas::getContentAsDataURL(
+                 return makeUnexpected("GPUDevice must be configured for one <canvas>."_s);
+             return getContentAsDataURL(*context);
+         }
++#endif
+     );
+ }
+ 
+diff --git a/Source/WebCore/inspector/InspectorCanvas.h b/Source/WebCore/inspector/InspectorCanvas.h
+index 2fe6b7c45bf..3528dee5d53 100644
+--- a/Source/WebCore/inspector/InspectorCanvas.h
++++ b/Source/WebCore/inspector/InspectorCanvas.h
+@@ -161,8 +161,10 @@ private:
+     String m_identifier;
+ 
+     Variant<
+-        WeakRef<CanvasRenderingContext>,
+-        WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>
++        WeakRef<CanvasRenderingContext>
++#if ENABLE(WEBGPU)
++        , WeakRef<GPUDevice, WeakPtrImplWithEventTargetData>
++#endif
+     > m_context;
+ 
+     RefPtr<Inspector::Protocol::Recording::InitialState> m_initialState;
+diff --git a/Source/WebCore/inspector/InspectorCanvasArguments.cpp b/Source/WebCore/inspector/InspectorCanvasArguments.cpp
+index f0b9db9b64e..ffc1b0bf146 100644
+--- a/Source/WebCore/inspector/InspectorCanvasArguments.cpp
++++ b/Source/WebCore/inspector/InspectorCanvasArguments.cpp
+@@ -80,6 +80,8 @@ static Ref<JSON::ArrayOf<JSON::Value>> process(InspectorCanvas& inspectorCanvas,
+     return process(*processed);
+ }
+ 
++#if ENABLE(WEBGPU)
++
+ static Ref<JSON::Object> process(InspectorCanvas& inspectorCanvas, const GPUFragmentState& state)
+ {
+     Ref object = state.toJSON();
+@@ -302,6 +304,8 @@ static Ref<JSON::Object> process(InspectorCanvas& inspectorCanvas, const GPURend
+     return object;
+ }
+ 
++#endif // ENABLE(WEBGPU)
++
+ static std::optional<InspectorCanvasProcessedArgument> processJSON(Ref<JSON::Value>&& valueIndex, RecordingSwizzleType swizzleType = RecordingSwizzleType::JSON)
+ {
+     return { { WTF::move(valueIndex), swizzleType } };
+@@ -319,6 +323,8 @@ auto InspectorCanvasArgumentProcessor<IDLDictionary<CanvasDrawElementImageOption
+     return { { JSON::Value::create(argument.preserveElementGeometry), RecordingSwizzleType::Boolean } };
+ }
+ 
++#if ENABLE(WEBGPU)
++
+ auto InspectorCanvasArgumentProcessor<IDLDictionary<GPUComputePassDescriptor>>::operator()(InspectorCanvas& context, const GPUComputePassDescriptor& argument) -> std::optional<InspectorCanvasProcessedArgument>
+ {
+     return processJSON(context.valueIndexForData(process(context, argument)->toJSONString()), RecordingSwizzleType::GPUComputePassDescriptor);
+@@ -389,6 +395,8 @@ auto InspectorCanvasArgumentProcessor<IDLDictionary<GPUShaderModuleDescriptor>>:
+     return processJSON(context.valueIndexForData(process(context, argument)->toJSONString()), RecordingSwizzleType::GPUShaderModuleDescriptor);
+ }
+ 
++#endif // ENABLE(WEBGPU)
++
+ auto InspectorCanvasArgumentProcessor<IDLDictionary<DOMMatrix2DInit>>::operator()(InspectorCanvas&, const DOMMatrix2DInit& argument) -> std::optional<InspectorCanvasProcessedArgument>
+ {
+     auto array = JSON::ArrayOf<double>::create();
+diff --git a/Source/WebCore/inspector/InspectorCanvasCallTracer.cpp b/Source/WebCore/inspector/InspectorCanvasCallTracer.cpp
+index 630b8da74fe..b325070d96f 100644
+--- a/Source/WebCore/inspector/InspectorCanvasCallTracer.cpp
++++ b/Source/WebCore/inspector/InspectorCanvasCallTracer.cpp
+@@ -49,6 +49,7 @@ static InspectorCanvasAgent* enabledCanvasAgent(CanvasRenderingContext& canvasRe
+     return agents->enabledCanvasAgent();
+ }
+ 
++#if ENABLE(WEBGPU)
+ static InspectorCanvasAgent* enabledCanvasAgent(GPUDevice& device)
+ {
+     ASSERT(InspectorInstrumentationPublic::hasFrontends());
+@@ -61,6 +62,7 @@ static InspectorCanvasAgent* enabledCanvasAgent(GPUDevice& device)
+     ASSERT(agents->enabledCanvasAgent());
+     return agents->enabledCanvasAgent();
+ }
++#endif
+ 
+ RefPtr<InspectorCanvas> InspectorCanvasCallTracer::enabledInspectorCanvas(CanvasRenderingContext& canvasRenderingContext)
+ {
+@@ -70,6 +72,7 @@ RefPtr<InspectorCanvas> InspectorCanvasCallTracer::enabledInspectorCanvas(Canvas
+     return canvasAgent->findInspectorCanvas(canvasRenderingContext);
+ }
+ 
++#if ENABLE(WEBGPU)
+ RefPtr<InspectorCanvas> InspectorCanvasCallTracer::enabledInspectorCanvas(GPUDevice& device)
+ {
+     CheckedPtr canvasAgent = enabledCanvasAgent(device);
+@@ -77,6 +80,7 @@ RefPtr<InspectorCanvas> InspectorCanvasCallTracer::enabledInspectorCanvas(GPUDev
+         return nullptr;
+     return canvasAgent->findInspectorCanvas(device);
+ }
++#endif
+ 
+ void InspectorCanvasCallTracer::recordAction(CanvasRenderingContext& canvasRenderingContext, String&& name, InspectorCanvasProcessedArguments&& arguments)
+ {
+@@ -97,17 +101,21 @@ void InspectorCanvasCallTracer::recordAction(CanvasRenderingContext& canvasRende
+         canvasAgent->recordAction(canvasRenderingContext, WTF::move(receiver), WTF::move(name), WTF::move(arguments));
+ }
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasCallTracer::recordAction(GPUDevice& device, String&& name, InspectorCanvasProcessedArguments&& arguments)
+ {
+     if (CheckedPtr canvasAgent = enabledCanvasAgent(device))
+         canvasAgent->recordAction(device, WTF::move(name), WTF::move(arguments));
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasCallTracer::recordAction(GPUDevice& device, ProcessedArgument&& receiver, String&& name, InspectorCanvasProcessedArguments&& arguments)
+ {
+     if (CheckedPtr canvasAgent = enabledCanvasAgent(device))
+         canvasAgent->recordAction(device, WTF::move(receiver), WTF::move(name), WTF::move(arguments));
+ }
++#endif
+ 
+ void InspectorCanvasCallTracer::recordActionResult(CanvasRenderingContext& canvasRenderingContext, ProcessedArgument&& result)
+ {
+@@ -122,10 +130,12 @@ void InspectorCanvasCallTracer::recordActionResult(const CanvasBase& canvasBase,
+     recordActionResult(context, WTF::move(result));
+ }
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasCallTracer::recordActionResult(GPUDevice& device, ProcessedArgument&& result)
+ {
+     if (CheckedPtr canvasAgent = enabledCanvasAgent(device))
+         canvasAgent->recordActionResult(device, WTF::move(result));
+ }
++#endif
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/inspector/InspectorInstrumentation.cpp b/Source/WebCore/inspector/InspectorInstrumentation.cpp
+index c9485057e31..1093e5c68d6 100644
+--- a/Source/WebCore/inspector/InspectorInstrumentation.cpp
++++ b/Source/WebCore/inspector/InspectorInstrumentation.cpp
+@@ -1169,11 +1169,13 @@ void InspectorInstrumentation::consoleStartRecordingCanvasImpl(InstrumentingAgen
+         canvasAgent->consoleStartRecordingCanvas(context, exec, options);
+ }
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::consoleStartRecordingCanvasImpl(InstrumentingAgents& instrumentingAgents, GPUDevice& device, JSC::JSGlobalObject& exec, JSC::JSObject* options)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->consoleStartRecordingCanvas(device, exec, options);
+ }
++#endif
+ 
+ void InspectorInstrumentation::consoleStopRecordingCanvasImpl(InstrumentingAgents& instrumentingAgents, CanvasRenderingContext& context)
+ {
+@@ -1181,11 +1183,13 @@ void InspectorInstrumentation::consoleStopRecordingCanvasImpl(InstrumentingAgent
+         canvasAgent->consoleStopRecordingCanvas(context);
+ }
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::consoleStopRecordingCanvasImpl(InstrumentingAgents& instrumentingAgents, GPUDevice& device)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->consoleStopRecordingCanvas(device);
+ }
++#endif
+ 
+ void InspectorInstrumentation::didDispatchDOMStorageEventImpl(InstrumentingAgents& instrumentingAgents, const String& key, const String& oldValue, const String& newValue, StorageType storageType, const SecurityOrigin& securityOrigin)
+ {
+@@ -1264,6 +1268,7 @@ void InspectorInstrumentation::didChangeCSSCanvasClientNodesImpl(InstrumentingAg
+ {
+     CheckedPtr<PageCanvasAgent> pageCanvasAgent;
+ 
++#if ENABLE(WEBGPU)
+     if (RefPtr gpuCanvasContext = dynamicDowncast<GPUCanvasContext>(canvasBase.renderingContext())) {
+         RefPtr device = gpuCanvasContext->device();
+         if (!device)
+@@ -1275,6 +1280,7 @@ void InspectorInstrumentation::didChangeCSSCanvasClientNodesImpl(InstrumentingAg
+ 
+         pageCanvasAgent = agents->enabledPageCanvasAgent();
+     } else
++#endif
+         pageCanvasAgent = instrumentingAgents.enabledPageCanvasAgent();
+ 
+     if (pageCanvasAgent)
+@@ -1291,6 +1297,7 @@ void InspectorInstrumentation::didChangeCanvasSizeImpl(InstrumentingAgents& inst
+ {
+     CheckedPtr<InspectorCanvasAgent> canvasAgent;
+ 
++#if ENABLE(WEBGPU)
+     if (RefPtr gpuCanvasContext = dynamicDowncast<GPUCanvasContext>(context)) {
+         RefPtr device = gpuCanvasContext->device();
+         if (!device)
+@@ -1302,6 +1309,7 @@ void InspectorInstrumentation::didChangeCanvasSizeImpl(InstrumentingAgents& inst
+ 
+         canvasAgent = agents->enabledCanvasAgent();
+     } else
++#endif
+         canvasAgent = instrumentingAgents.enabledCanvasAgent();
+ 
+     if (canvasAgent)
+@@ -1361,67 +1369,87 @@ bool InspectorInstrumentation::isWebGLProgramHighlightedImpl(InstrumentingAgents
+ }
+ #endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::didCreateWebGPUDeviceImpl(InstrumentingAgents& instrumentingAgents, GPUDevice& device)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->didCreateWebGPUDevice(device);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::willDestroyWebGPUDeviceImpl(InstrumentingAgents& instrumentingAgents, GPUDevice& device)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->willDestroyWebGPUDevice(device);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::didChangeGPUDeviceClientNodesImpl(InstrumentingAgents& instrumentingAgents, GPUDevice& device)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->didChangeGPUDeviceClientNodes(device);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::didChangeWebGPUMemoryImpl(InstrumentingAgents& instrumentingAgents, GPUDevice& device)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->didChangeWebGPUMemory(device);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::didCreateWebGPUComputePipelineImpl(InstrumentingAgents& instrumentingAgents, GPUDevice& device, GPUComputePipeline& pipeline)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->didCreateWebGPUComputePipeline(device, pipeline);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::willDestroyWebGPUComputePipelineImpl(InstrumentingAgents& instrumentingAgents, GPUComputePipeline& pipeline)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->willDestroyWebGPUComputePipeline(pipeline);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::didCreateWebGPURenderPipelineImpl(InstrumentingAgents& instrumentingAgents, GPUDevice& device, GPURenderPipeline& pipeline)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->didCreateWebGPURenderPipeline(device, pipeline);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorInstrumentation::willDestroyWebGPURenderPipelineImpl(InstrumentingAgents& instrumentingAgents, GPURenderPipeline& pipeline)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         canvasAgent->willDestroyWebGPURenderPipeline(pipeline);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ bool InspectorInstrumentation::isWebGPURenderPipelineDisabledImpl(InstrumentingAgents& instrumentingAgents, GPURenderPipeline& pipeline)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         return canvasAgent->isWebGPURenderPipelineDisabled(pipeline);
+     return false;
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ RefPtr<WebGPU::RenderPipeline> InspectorInstrumentation::renderPipelineForWebGPUHighlightingImpl(InstrumentingAgents& instrumentingAgents, GPURenderPipeline& pipeline, unsigned canvasColorAttachmentMask)
+ {
+     if (CheckedPtr canvasAgent = instrumentingAgents.enabledCanvasAgent())
+         return canvasAgent->renderPipelineForWebGPUHighlighting(pipeline, canvasColorAttachmentMask);
+     return nullptr;
+ }
++#endif
+ 
+ void InspectorInstrumentation::willApplyKeyframeEffectImpl(InstrumentingAgents& instrumentingAgents, const Styleable& target, KeyframeEffect& effect, const ComputedEffectTiming& computedTiming)
+ {
+diff --git a/Source/WebCore/inspector/InspectorShaderProgram.cpp b/Source/WebCore/inspector/InspectorShaderProgram.cpp
+index 27fe05c6738..ffeb446be29 100644
+--- a/Source/WebCore/inspector/InspectorShaderProgram.cpp
++++ b/Source/WebCore/inspector/InspectorShaderProgram.cpp
+@@ -144,10 +144,15 @@ String InspectorShaderProgram::requestShaderSource(Inspector::Protocol::Canvas::
+         }
+ #endif // ENABLE(WEBGL)
+         , [&](const WeakRef<GPUComputePipeline>& weakPipeline) {
++#if ENABLE(WEBGPU)
+             Ref pipeline = weakPipeline.get();
+             return shaderType == Inspector::Protocol::Canvas::ShaderType::Compute ? pipeline->shaderSource() : nullString();
++#else
++            return nullString();
++#endif
+         }
+         , [&](const WeakRef<GPURenderPipeline>& weakPipeline) {
++#if ENABLE(WEBGPU)
+             Ref pipeline = weakPipeline.get();
+             switch (shaderType) {
+             case Inspector::Protocol::Canvas::ShaderType::Vertex:
+@@ -160,6 +165,9 @@ String InspectorShaderProgram::requestShaderSource(Inspector::Protocol::Canvas::
+ 
+             ASSERT_NOT_REACHED();
+             return nullString();
++#else
++            return nullString();
++#endif
+         }
+     );
+ }
+@@ -205,6 +213,7 @@ void InspectorShaderProgram::updateShader(Inspector::Protocol::Canvas::ShaderTyp
+         }
+ #endif // ENABLE(WEBGL)
+         , [&](const WeakRef<GPUComputePipeline>& weakPipeline) {
++#if ENABLE(WEBGPU)
+             Ref pipeline = weakPipeline.get();
+             switch (shaderType) {
+             case Inspector::Protocol::Canvas::ShaderType::Vertex:
+@@ -217,8 +226,12 @@ void InspectorShaderProgram::updateShader(Inspector::Protocol::Canvas::ShaderTyp
+             }
+ 
+             RELEASE_ASSERT_NOT_REACHED();
++#else
++            completionHandler(false);
++#endif
+         }
+         , [&](const WeakRef<GPURenderPipeline>& weakPipeline) {
++#if ENABLE(WEBGPU)
+             Ref pipeline = weakPipeline.get();
+             auto didUpdateShader = [protectedThis = Ref { *this }, completionHandler = WTF::move(completionHandler)](bool updated) mutable {
+                 if (!updated) {
+@@ -249,6 +262,9 @@ void InspectorShaderProgram::updateShader(Inspector::Protocol::Canvas::ShaderTyp
+             }
+ 
+             RELEASE_ASSERT_NOT_REACHED();
++#else
++            completionHandler(false);
++#endif
+         }
+     );
+ }
+@@ -278,7 +294,11 @@ bool InspectorShaderProgram::setHighlighted(bool highlighted)
+ #endif // ENABLE(WEBGL)
+         , [](const WeakRef<GPUComputePipeline>&) { return false; }
+         , [](const WeakRef<GPURenderPipeline>& weakPipeline) {
++#if ENABLE(WEBGPU)
+             return !weakPipeline->fragmentShaderSource().isNull();
++#else
++            return false;
++#endif
+         }
+     );
+     if (!supported)
+@@ -311,6 +331,7 @@ void InspectorShaderProgram::requestRenderPipelineForHighlighting(unsigned canva
+         return;
+     }
+ 
++#if ENABLE(WEBGPU)
+     RefPtr pipeline = renderPipeline();
+     if (!pipeline) {
+         completionHandler();
+@@ -328,6 +349,9 @@ void InspectorShaderProgram::requestRenderPipelineForHighlighting(unsigned canva
+         }
+         completionHandler();
+     });
++#else
++    completionHandler();
++#endif
+ }
+ 
+ RefPtr<WebGPU::RenderPipeline> InspectorShaderProgram::renderPipelineForHighlighting(unsigned canvasColorAttachmentMask)
+@@ -359,13 +383,17 @@ Ref<Inspector::Protocol::Canvas::ShaderProgram> InspectorShaderProgram::buildObj
+         , [](const WeakRef<WebGLProgram>&) { }
+ #endif // ENABLE(WEBGL)
+         , [&](const WeakRef<GPUComputePipeline>& weakPipeline) {
++#if ENABLE(WEBGPU)
+             Ref pipeline = weakPipeline.get();
+ 
+             programType = Inspector::Protocol::Canvas::ProgramType::Compute;
+ 
+             name = pipeline->label();
++#else
++#endif
+         }
+         , [&](const WeakRef<GPURenderPipeline>& weakPipeline) {
++#if ENABLE(WEBGPU)
+             Ref pipeline = weakPipeline.get();
+ 
+             const String& fragmentShaderSource = pipeline->fragmentShaderSource();
+@@ -375,6 +403,8 @@ Ref<Inspector::Protocol::Canvas::ShaderProgram> InspectorShaderProgram::buildObj
+                 sharesVertexFragmentShader = pipeline->sharesVertexFragmentShader();
+ 
+             name = pipeline->label();
++#else
++#endif
+         }
+     );
+     auto payload = Inspector::Protocol::Canvas::ShaderProgram::create()
+diff --git a/Source/WebCore/inspector/agents/InspectorCanvasAgent.cpp b/Source/WebCore/inspector/agents/InspectorCanvasAgent.cpp
+index 53a7a614033..d5483da46f4 100644
+--- a/Source/WebCore/inspector/agents/InspectorCanvasAgent.cpp
++++ b/Source/WebCore/inspector/agents/InspectorCanvasAgent.cpp
+@@ -173,6 +173,7 @@ void InspectorCanvasAgent::internalEnable()
+         }
+     }
+ 
++#if ENABLE(WEBGPU)
+     Vector<WeakPtr<GPUDevice, WeakPtrImplWithEventTargetData>> devices;
+     {
+         Locker locker { GPUDevice::instancesLock() };
+@@ -191,6 +192,8 @@ void InspectorCanvasAgent::internalEnable()
+             bindCanvas(*device, false);
+     }
+ 
++#endif
++
+ #if ENABLE(WEBGL)
+     {
+         Locker locker { WebGLProgram::instancesLock() };
+@@ -205,6 +208,7 @@ void InspectorCanvasAgent::internalEnable()
+     }
+ #endif
+ 
++#if ENABLE(WEBGPU)
+     Vector<std::pair<WeakPtr<GPUComputePipeline>, WeakPtr<GPUDevice, WeakPtrImplWithEventTargetData>>> computePipelines;
+     {
+         Locker locker { GPUComputePipeline::instancesLock() };
+@@ -240,6 +244,7 @@ void InspectorCanvasAgent::internalEnable()
+         if (pipeline && device)
+             didCreateWebGPURenderPipeline(*device, *pipeline);
+     }
++#endif
+ }
+ 
+ void InspectorCanvasAgent::internalDisable()
+@@ -428,12 +433,14 @@ void InspectorCanvasAgent::didCreateCanvasRenderingContext(CanvasRenderingContex
+ void InspectorCanvasAgent::didChangeCanvasSize(CanvasRenderingContext& context)
+ {
+     RefPtr<InspectorCanvas> inspectorCanvas;
++#if ENABLE(WEBGPU)
+     if (WeakPtr gpuCanvasContext = dynamicDowncast<GPUCanvasContext>(context)) {
+         WeakPtr device = gpuCanvasContext->device();
+         if (!device)
+             return;
+         inspectorCanvas = findInspectorCanvas(*device);
+     } else
++#endif
+         inspectorCanvas = findInspectorCanvas(context);
+ 
+     ASSERT(inspectorCanvas);
+@@ -446,12 +453,14 @@ void InspectorCanvasAgent::didChangeCanvasSize(CanvasRenderingContext& context)
+ void InspectorCanvasAgent::didChangeCanvasMemory(const CanvasRenderingContext& context)
+ {
+     RefPtr<InspectorCanvas> inspectorCanvas;
++#if ENABLE(WEBGPU)
+     if (WeakPtr gpuCanvasContext = dynamicDowncast<GPUCanvasContext>(context)) {
+         WeakPtr device = gpuCanvasContext->device();
+         if (!device)
+             return;
+         inspectorCanvas = findInspectorCanvas(*device);
+     } else
++#endif
+         inspectorCanvas = findInspectorCanvas(context);
+ 
+     ASSERT(inspectorCanvas);
+@@ -502,6 +511,7 @@ void InspectorCanvasAgent::didFinishRecordingCanvasFrame(CanvasRenderingContext&
+     didFinishRecordingCanvasFrame(*inspectorCanvas, forceDispatch);
+ }
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::didFinishRecordingCanvasFrame(GPUDevice& device, bool forceDispatch)
+ {
+     if (!device.hasActiveInspectorCanvasCallTracer())
+@@ -514,6 +524,7 @@ void InspectorCanvasAgent::didFinishRecordingCanvasFrame(GPUDevice& device, bool
+ 
+     didFinishRecordingCanvasFrame(*inspectorCanvas, forceDispatch);
+ }
++#endif
+ 
+ void InspectorCanvasAgent::didFinishRecordingCanvasFrame(InspectorCanvas& inspectorCanvas, bool forceDispatch)
+ {
+@@ -551,6 +562,7 @@ void InspectorCanvasAgent::consoleStartRecordingCanvas(CanvasRenderingContext& c
+     consoleStartRecordingCanvas(*inspectorCanvas, exec, options);
+ }
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::consoleStartRecordingCanvas(GPUDevice& device, JSC::JSGlobalObject& exec, JSC::JSObject* options)
+ {
+     RefPtr inspectorCanvas = findInspectorCanvas(device);
+@@ -560,6 +572,7 @@ void InspectorCanvasAgent::consoleStartRecordingCanvas(GPUDevice& device, JSC::J
+ 
+     consoleStartRecordingCanvas(*inspectorCanvas, exec, options);
+ }
++#endif
+ 
+ void InspectorCanvasAgent::consoleStartRecordingCanvas(InspectorCanvas& inspectorCanvas, JSC::JSGlobalObject& exec, JSC::JSObject* options)
+ {
+@@ -583,10 +596,12 @@ void InspectorCanvasAgent::consoleStopRecordingCanvas(CanvasRenderingContext& co
+     didFinishRecordingCanvasFrame(context, true);
+ }
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::consoleStopRecordingCanvas(GPUDevice& device)
+ {
+     didFinishRecordingCanvasFrame(device, true);
+ }
++#endif
+ 
+ #if ENABLE(WEBGL)
+ 
+@@ -644,6 +659,7 @@ bool InspectorCanvasAgent::isWebGLProgramHighlighted(WebGLProgram& program)
+ 
+ #endif // ENABLE(WEBGL)
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::didCreateWebGPUDevice(GPUDevice& device)
+ {
+     if (findInspectorCanvas(device)) {
+@@ -659,7 +675,9 @@ void InspectorCanvasAgent::didCreateWebGPUDevice(GPUDevice& device)
+         startRecording(inspectorCanvas, Inspector::Protocol::Recording::Initiator::AutoCapture, WTF::move(recordingOptions));
+     }
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::willDestroyWebGPUDevice(GPUDevice& device)
+ {
+     RefPtr inspectorCanvas = findInspectorCanvas(device);
+@@ -668,7 +686,9 @@ void InspectorCanvasAgent::willDestroyWebGPUDevice(GPUDevice& device)
+ 
+     unbindCanvas(*inspectorCanvas);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::didChangeGPUDeviceClientNodes(GPUDevice& device)
+ {
+     RefPtr inspectorCanvas = findInspectorCanvas(device);
+@@ -677,7 +697,9 @@ void InspectorCanvasAgent::didChangeGPUDeviceClientNodes(GPUDevice& device)
+ 
+     dispatchCanvasSizeChanged(*inspectorCanvas);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::didChangeWebGPUMemory(GPUDevice& device)
+ {
+     RefPtr inspectorCanvas = findInspectorCanvas(device);
+@@ -686,7 +708,9 @@ void InspectorCanvasAgent::didChangeWebGPUMemory(GPUDevice& device)
+ 
+     m_frontendDispatcher->canvasMemoryChanged(inspectorCanvas->identifier(), inspectorCanvas->memoryCost());
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::didCreateWebGPUComputePipeline(GPUDevice& device, GPUComputePipeline& pipeline)
+ {
+     auto inspectorCanvas = findInspectorCanvas(device);
+@@ -699,7 +723,9 @@ void InspectorCanvasAgent::didCreateWebGPUComputePipeline(GPUDevice& device, GPU
+     m_identifierToInspectorProgram.set(inspectorProgram->identifier(), WTF::move(inspectorProgramRef));
+     m_frontendDispatcher->programCreated(inspectorProgram->buildObjectForShaderProgram());
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::willDestroyWebGPUComputePipeline(GPUComputePipeline& pipeline)
+ {
+     auto inspectorProgram = findInspectorProgram(pipeline);
+@@ -708,7 +734,9 @@ void InspectorCanvasAgent::willDestroyWebGPUComputePipeline(GPUComputePipeline&
+ 
+     unbindProgram(*inspectorProgram);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::didCreateWebGPURenderPipeline(GPUDevice& device, GPURenderPipeline& pipeline)
+ {
+     auto inspectorCanvas = findInspectorCanvas(device);
+@@ -721,7 +749,9 @@ void InspectorCanvasAgent::didCreateWebGPURenderPipeline(GPUDevice& device, GPUR
+     m_identifierToInspectorProgram.set(inspectorProgram->identifier(), WTF::move(inspectorProgramRef));
+     m_frontendDispatcher->programCreated(inspectorProgram->buildObjectForShaderProgram());
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::willDestroyWebGPURenderPipeline(GPURenderPipeline& pipeline)
+ {
+     auto inspectorProgram = findInspectorProgram(pipeline);
+@@ -730,7 +760,9 @@ void InspectorCanvasAgent::willDestroyWebGPURenderPipeline(GPURenderPipeline& pi
+ 
+     unbindProgram(*inspectorProgram);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ bool InspectorCanvasAgent::isWebGPURenderPipelineDisabled(GPURenderPipeline& pipeline)
+ {
+     RefPtr inspectorProgram = findInspectorProgram(pipeline);
+@@ -740,7 +772,9 @@ bool InspectorCanvasAgent::isWebGPURenderPipelineDisabled(GPURenderPipeline& pip
+ 
+     return inspectorProgram->disabled();
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ RefPtr<WebGPU::RenderPipeline> InspectorCanvasAgent::renderPipelineForWebGPUHighlighting(GPURenderPipeline& pipeline, unsigned canvasColorAttachmentMask)
+ {
+     RefPtr inspectorProgram = findInspectorProgram(pipeline);
+@@ -749,6 +783,7 @@ RefPtr<WebGPU::RenderPipeline> InspectorCanvasAgent::renderPipelineForWebGPUHigh
+         return nullptr;
+     return inspectorProgram->renderPipelineForHighlighting(canvasColorAttachmentMask);
+ }
++#endif
+ 
+ void InspectorCanvasAgent::recordAction(CanvasRenderingContext& canvasRenderingContext, String&& name, InspectorCanvasProcessedArguments&& arguments)
+ {
+@@ -778,6 +813,7 @@ void InspectorCanvasAgent::recordAction(CanvasRenderingContext& canvasRenderingC
+         didFinishRecordingCanvasFrame(canvasRenderingContext, true);
+ }
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::recordAction(GPUDevice& device, String&& name, InspectorCanvasProcessedArguments&& arguments)
+ {
+     ASSERT(device.hasActiveInspectorCanvasCallTracer());
+@@ -793,7 +829,9 @@ void InspectorCanvasAgent::recordAction(GPUDevice& device, String&& name, Inspec
+     if (!inspectorCanvas->hasBufferSpace())
+         didFinishRecordingCanvasFrame(device, true);
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::recordAction(GPUDevice& device, InspectorCanvasProcessedArgument&& receiver, String&& name, InspectorCanvasProcessedArguments&& arguments)
+ {
+     ASSERT(device.hasActiveInspectorCanvasCallTracer());
+@@ -809,6 +847,7 @@ void InspectorCanvasAgent::recordAction(GPUDevice& device, InspectorCanvasProces
+     if (!inspectorCanvas->hasBufferSpace())
+         didFinishRecordingCanvasFrame(device, true);
+ }
++#endif
+ 
+ void InspectorCanvasAgent::recordActionResult(CanvasRenderingContext& canvasRenderingContext, InspectorCanvasProcessedArgument&& result)
+ {
+@@ -825,6 +864,7 @@ void InspectorCanvasAgent::recordActionResult(CanvasRenderingContext& canvasRend
+         didFinishRecordingCanvasFrame(canvasRenderingContext, true);
+ }
+ 
++#if ENABLE(WEBGPU)
+ void InspectorCanvasAgent::recordActionResult(GPUDevice& device, InspectorCanvasProcessedArgument&& result)
+ {
+     ASSERT(device.hasActiveInspectorCanvasCallTracer());
+@@ -839,6 +879,7 @@ void InspectorCanvasAgent::recordActionResult(GPUDevice& device, InspectorCanvas
+     if (!inspectorCanvas->hasBufferSpace())
+         didFinishRecordingCanvasFrame(device, true);
+ }
++#endif
+ 
+ void InspectorCanvasAgent::scheduleRecordingCanvasFrame(InspectorCanvas& inspectorCanvas)
+ {
+@@ -859,8 +900,10 @@ void InspectorCanvasAgent::scheduleRecordingCanvasFrame(InspectorCanvas& inspect
+ 
+                     if (RefPtr canvasRenderingContext = inspectorCanvas->canvasContext(); canvasRenderingContext && canvasRenderingContext->hasActiveInspectorCanvasCallTracer())
+                         canvasAgent->didFinishRecordingCanvasFrame(*canvasRenderingContext);
++#if ENABLE(WEBGPU)
+                     else if (RefPtr device = inspectorCanvas->deviceContext(); device && device->hasActiveInspectorCanvasCallTracer())
+                         canvasAgent->didFinishRecordingCanvasFrame(*device);
++#endif
+                 }
+ 
+                 canvasAgent->m_recordingCanvasIdentifiers.clear();
+@@ -970,6 +1013,7 @@ InspectorCanvas& InspectorCanvasAgent::bindCanvas(CanvasRenderingContext& contex
+     return inspectorCanvas.unsafeGet();
+ }
+ 
++#if ENABLE(WEBGPU)
+ InspectorCanvas& InspectorCanvasAgent::bindCanvas(GPUDevice& device, bool captureBacktrace)
+ {
+     auto inspectorCanvas = InspectorCanvas::create(device);
+@@ -979,6 +1023,7 @@ InspectorCanvas& InspectorCanvasAgent::bindCanvas(GPUDevice& device, bool captur
+ 
+     return inspectorCanvas.unsafeGet();
+ }
++#endif
+ 
+ Ref<Inspector::Protocol::Canvas::Canvas> InspectorCanvasAgent::buildObjectForCanvas(InspectorCanvas& inspectorCanvas, bool captureBacktrace)
+ {
+@@ -1048,6 +1093,7 @@ RefPtr<InspectorCanvas> InspectorCanvasAgent::findInspectorCanvas(const CanvasRe
+     return nullptr;
+ }
+ 
++#if ENABLE(WEBGPU)
+ RefPtr<InspectorCanvas> InspectorCanvasAgent::findInspectorCanvas(const GPUDevice& device)
+ {
+     for (auto& inspectorCanvas : m_identifierToInspectorCanvas.values()) {
+@@ -1056,6 +1102,7 @@ RefPtr<InspectorCanvas> InspectorCanvasAgent::findInspectorCanvas(const GPUDevic
+     }
+     return nullptr;
+ }
++#endif
+ 
+ void InspectorCanvasAgent::unbindProgram(InspectorShaderProgram& inspectorProgram)
+ {
+@@ -1094,6 +1141,7 @@ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(WebGLP
+ 
+ #endif // ENABLE(WEBGL)
+ 
++#if ENABLE(WEBGPU)
+ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPUComputePipeline& pipeline)
+ {
+     for (auto& inspectorProgram : m_identifierToInspectorProgram.values()) {
+@@ -1102,7 +1150,9 @@ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPUCom
+     }
+     return nullptr;
+ }
++#endif
+ 
++#if ENABLE(WEBGPU)
+ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPURenderPipeline& pipeline)
+ {
+     for (auto& inspectorProgram : m_identifierToInspectorProgram.values()) {
+@@ -1111,5 +1161,6 @@ RefPtr<InspectorShaderProgram> InspectorCanvasAgent::findInspectorProgram(GPURen
+     }
+     return nullptr;
+ }
++#endif
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/inspector/agents/InspectorCanvasAgent.h b/Source/WebCore/inspector/agents/InspectorCanvasAgent.h
+index 206e663c43c..a55297fd070 100644
+--- a/Source/WebCore/inspector/agents/InspectorCanvasAgent.h
++++ b/Source/WebCore/inspector/agents/InspectorCanvasAgent.h
+@@ -118,7 +118,9 @@ public:
+ #endif // ENABLE(WEBGL)
+     void didCreateWebGPUDevice(GPUDevice&);
+     void willDestroyWebGPUDevice(GPUDevice&);
++#if ENABLE(WEBGPU)
+     virtual void didChangeGPUDeviceClientNodes(GPUDevice&);
++#endif
+     void didChangeWebGPUMemory(GPUDevice&);
+     void didCreateWebGPUComputePipeline(GPUDevice&, GPUComputePipeline&);
+     void willDestroyWebGPUComputePipeline(GPUComputePipeline&);
+diff --git a/Source/WebCore/inspector/agents/page/PageCanvasAgent.cpp b/Source/WebCore/inspector/agents/page/PageCanvasAgent.cpp
+index ecb71b6c376..66641c4ee98 100644
+--- a/Source/WebCore/inspector/agents/page/PageCanvasAgent.cpp
++++ b/Source/WebCore/inspector/agents/page/PageCanvasAgent.cpp
+@@ -171,12 +171,14 @@ void PageCanvasAgent::didChangeCSSCanvasClientNodes(CanvasBase& canvasBase)
+     }
+ 
+     RefPtr<InspectorCanvas> inspectorCanvas;
++#if ENABLE(WEBGPU)
+     if (WeakPtr gpuCanvasContext = dynamicDowncast<GPUCanvasContext>(*context)) {
+         WeakPtr device = gpuCanvasContext->device();
+         if (!device)
+             return;
+         inspectorCanvas = findInspectorCanvas(*device);
+     } else
++#endif
+         inspectorCanvas = findInspectorCanvas(*context);
+ 
+     ASSERT(inspectorCanvas);
+@@ -186,6 +188,7 @@ void PageCanvasAgent::didChangeCSSCanvasClientNodes(CanvasBase& canvasBase)
+     dispatchCSSCanvasClientNodesChanged(*inspectorCanvas);
+ }
+ 
++#if ENABLE(WEBGPU)
+ void PageCanvasAgent::didChangeGPUDeviceClientNodes(GPUDevice& device)
+ {
+     InspectorCanvasAgent::didChangeGPUDeviceClientNodes(device);
+@@ -198,6 +201,7 @@ void PageCanvasAgent::didChangeGPUDeviceClientNodes(GPUDevice& device)
+     dispatchCSSCanvasClientNodesChanged(*inspectorCanvas);
+     dispatchNodesChanged(*inspectorCanvas);
+ }
++#endif
+ 
+ void PageCanvasAgent::dispatchNodesChanged(InspectorCanvas& inspectorCanvas)
+ {
+diff --git a/Source/WebCore/inspector/agents/page/PageCanvasAgent.h b/Source/WebCore/inspector/agents/page/PageCanvasAgent.h
+index ce1297b7562..f442f5ca3ef 100644
+--- a/Source/WebCore/inspector/agents/page/PageCanvasAgent.h
++++ b/Source/WebCore/inspector/agents/page/PageCanvasAgent.h
+@@ -49,7 +49,9 @@ public:
+     // InspectorInstrumentation
+     void frameNavigated(LocalFrame&);
+     void didChangeCSSCanvasClientNodes(CanvasBase&);
++#if ENABLE(WEBGPU)
+     void didChangeGPUDeviceClientNodes(GPUDevice&) override;
++#endif
+ 
+ private:
+     bool enabled() const override;
+diff --git a/Source/WebCore/page/FrameConsoleClient.cpp b/Source/WebCore/page/FrameConsoleClient.cpp
+index b7f32f82252..fee19775a01 100644
+--- a/Source/WebCore/page/FrameConsoleClient.cpp
++++ b/Source/WebCore/page/FrameConsoleClient.cpp
+@@ -56,7 +56,9 @@
+ #include "JSDOMGlobalObject.h"
+ #include "JSDOMRectReadOnly.h"
+ #include "JSExecState.h"
++#if ENABLE(WEBGPU)
+ #include "JSGPUDevice.h"
++#endif
+ #include "JSHTMLCanvasElement.h"
+ #include "JSImageBitmap.h"
+ #include "JSImageBitmapRenderingContext.h"
+@@ -341,8 +343,10 @@ void FrameConsoleClient::record(JSC::JSGlobalObject* lexicalGlobalObject, Ref<Sc
+         JSC::VM& vm = lexicalGlobalObject->vm();
+         if (RefPtr context = canvasRenderingContext(vm, target))
+             InspectorInstrumentation::consoleStartRecordingCanvas(*context, *lexicalGlobalObject, objectArgumentAt(arguments, 1));
++#if ENABLE(WEBGPU)
+         else if (RefPtr device = JSGPUDevice::toWrapped(vm, target))
+             InspectorInstrumentation::consoleStartRecordingCanvas(*device, *lexicalGlobalObject, objectArgumentAt(arguments, 1));
++#endif
+     }
+ }
+ 
+@@ -355,8 +359,10 @@ void FrameConsoleClient::recordEnd(JSC::JSGlobalObject* lexicalGlobalObject, Ref
+         JSC::VM& vm = lexicalGlobalObject->vm();
+         if (RefPtr context = canvasRenderingContext(vm, target))
+             InspectorInstrumentation::consoleStopRecordingCanvas(*context);
++#if ENABLE(WEBGPU)
+         else if (RefPtr device = JSGPUDevice::toWrapped(vm, target))
+             InspectorInstrumentation::consoleStopRecordingCanvas(*device);
++#endif
+     }
+ }
+ 
+diff --git a/Source/WebCore/page/Navigator.cpp b/Source/WebCore/page/Navigator.cpp
+index 580290f2eb0..a4a67e3745a 100644
+--- a/Source/WebCore/page/Navigator.cpp
++++ b/Source/WebCore/page/Navigator.cpp
+@@ -389,9 +389,11 @@ GPU* Navigator::gpu()
+ 
+         lazyInitialize(m_gpuForWebGPU, GPU::create(*gpu));
+     }
+-#endif
+ 
+     return m_gpuForWebGPU.get();
++#else
++    return nullptr;
++#endif
+ }
+ 
+ Page* Navigator::page()
+diff --git a/Source/WebCore/page/Navigator.h b/Source/WebCore/page/Navigator.h
+index 2bc6da74d65..ab632bb82d5 100644
+--- a/Source/WebCore/page/Navigator.h
++++ b/Source/WebCore/page/Navigator.h
+@@ -93,6 +93,8 @@ private:
+     mutable String m_userAgent;
+     mutable String m_platform;
+     mutable RefPtr<NavigatorUAData> m_navigatorUAData;
++#if HAVE(WEBGPU_IMPLEMENTATION)
+     const RefPtr<GPU> m_gpuForWebGPU;
++#endif
+ };
+ }
+diff --git a/Source/WebCore/workers/WorkerConsoleClient.cpp b/Source/WebCore/workers/WorkerConsoleClient.cpp
+index b57e93b9736..3281314a734 100644
+--- a/Source/WebCore/workers/WorkerConsoleClient.cpp
++++ b/Source/WebCore/workers/WorkerConsoleClient.cpp
+@@ -35,7 +35,9 @@
+ #include "InspectorInstrumentation.h"
+ #include "IntRect.h"
+ #include "JSDOMGlobalObject.h"
++#if ENABLE(WEBGPU)
+ #include "JSGPUDevice.h"
++#endif
+ #include "JSImageBitmap.h"
+ #include "JSImageBitmapRenderingContext.h"
+ #include "JSImageData.h"
+@@ -189,8 +191,10 @@ void WorkerConsoleClient::record(JSC::JSGlobalObject* lexicalGlobalObject, Ref<S
+         JSC::VM& vm = lexicalGlobalObject->vm();
+         if (RefPtr context = canvasRenderingContext(vm, target))
+             InspectorInstrumentation::consoleStartRecordingCanvas(*context, *lexicalGlobalObject, objectArgumentAt(arguments, 1));
++#if ENABLE(WEBGPU)
+         else if (RefPtr device = JSGPUDevice::toWrapped(vm, target))
+             InspectorInstrumentation::consoleStartRecordingCanvas(*device, *lexicalGlobalObject, objectArgumentAt(arguments, 1));
++#endif
+     }
+ }
+ 
+@@ -203,8 +207,10 @@ void WorkerConsoleClient::recordEnd(JSC::JSGlobalObject* lexicalGlobalObject, Re
+         JSC::VM& vm = lexicalGlobalObject->vm();
+         if (RefPtr context = canvasRenderingContext(vm, target))
+             InspectorInstrumentation::consoleStopRecordingCanvas(*context);
++#if ENABLE(WEBGPU)
+         else if (RefPtr device = JSGPUDevice::toWrapped(vm, target))
+             InspectorInstrumentation::consoleStopRecordingCanvas(*device);
++#endif
+     }
+ }
+ 
