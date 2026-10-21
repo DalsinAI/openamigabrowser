@@ -6,6 +6,50 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 21 Oct 2026, property shape tables, getters, strings, loop doubles (patch 0036)
+
+get_by_id sites keep a table of the last four structures they saw, with
+own values, getters (own, or on an unchanged prototype; called as op_call
+calls) and missing properties; a garbage collection clears the entries
+of structures that died. Strings get their own code for `s[i]`, `.length`
+(flat strings and ropes) and `charCodeAt`. Loop register copies keep
+doubles in fp2-fp6. `lab/correct9.js` (one site seeing six shapes, own
+and prototype getters, prototypes changing and losing the property,
+missing properties, throwing getters, native getters, proxies, shapes
+dying across gc(), primitives, classes with super, dictionaries),
+`lab/correct10.js` (characters and codes of 8- and 16-bit strings,
+out-of-range indexes, ropes, `.length` of non-strings at the same site,
+charCodeAt replaced, called on other receivers and through `.call`) and
+`lab/correct11.js` (double loops with NaN, -0, Infinity, int32 overflow,
+doubles that turn into ints and strings, read by closures, left by
+exceptions, more doubles than FPU registers) print what node prints with
+the JIT on and off, as do correct.js-correct8.js.
+
+This lab build is a fresh one (GCC 14, jsc start-up 5.5 M, taken off
+below), so its counts differ a little from the sections below.
+
+| test | interpreter (M) | 0035 (M) | 0036 (M) | 0036 vs 0035 | vs interpreter |
+|---|---:|---:|---:|---:|---:|
+| page-lexer    |  79.6 |  27.5 |  18.6 | 1.47x | 4.3x |
+| page-vdom     | 156.7 |  74.2 |  61.6 | 1.20x | 2.5x |
+| page-events   | 263.9 |  95.7 |  94.4 | 1.01x | 2.8x |
+| page-json     |  51.0 |  38.8 |  38.8 | 1.00x | 1.3x |
+| page-template |  97.0 |  79.4 |  79.0 | 1.01x | 1.2x |
+| double-loop   |  46.4 |   6.7 |   3.8 | 1.78x | 12.3x |
+| closures      |  18.1 |   7.2 |   6.9 | 1.04x | 2.6x |
+| array (sort)  | 102.2 |  64.8 |  63.5 | 1.02x | 1.6x |
+| int-loop      |  91.2 |   6.0 |   6.1 | 1.00x | 15.1x |
+| calls         |  96.1 |  12.0 |  12.0 | 1.00x | 8.0x |
+| properties    |  94.2 |  12.5 |  12.5 | 1.00x | 7.5x |
+| arrays        |  62.3 |   7.4 |   7.5 | 0.99x | 8.3x |
+| strings       |   8.8 |   5.4 |   5.4 | 1.00x | 1.6x |
+
+arrays is about 1% slower (the string path after the array path costs
+a check). What the page tests still spend: for-in enumeration, array
+builtins (push, `in`, put_by_val_direct), get_by_val with string keys
+on objects, `arguments`, string `+=` (C++ ropes), and regular
+expressions and JSON in C++.
+
 ## 21 Oct 2026, compares, new objects, polymorphic calls, scopes (patch 0035)
 
 A real-page benchmark (`page/`: virtual DOM diff, HTML templating, JSON,
