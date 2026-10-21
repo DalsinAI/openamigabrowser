@@ -3501,6 +3501,20 @@ index 50f0e071c4b..c9bb4606e70 100644
      Ref<ImageBitmapRenderingContext>,
      Ref<CanvasRenderingContext2D>
  >;
+diff --git a/Source/WebCore/dom/Document.idl b/Source/WebCore/dom/Document.idl
+index d02b86e5870..4c7365aad17 100644
+--- a/Source/WebCore/dom/Document.idl
++++ b/Source/WebCore/dom/Document.idl
+@@ -23,7 +23,9 @@ typedef (
+     WebGLRenderingContext or
+     WebGL2RenderingContext or
+ #endif
++#if defined(ENABLE_WEBGPU) && ENABLE_WEBGPU
+     GPUCanvasContext or
++#endif
+     ImageBitmapRenderingContext or 
+     CanvasRenderingContext2D) RenderingContext;
+ 
 diff --git a/Source/WebCore/dom/EventTargetFactory.in b/Source/WebCore/dom/EventTargetFactory.in
 index ec7469a0b58..d823788946a 100644
 --- a/Source/WebCore/dom/EventTargetFactory.in
