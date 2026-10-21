@@ -16,7 +16,7 @@ that used it had the JIT on in both modes. Mean ms per run:
 
 | page | JIT on | JIT off | speed-up |
 |---|---:|---:|---:|
-| page-vdom | 42.6 | 117.0 | 2.7x |
+| page-vdom | 42.6 | 116.9 | 2.7x |
 | page-lexer | 24.5 | 54.3 | 2.2x |
 | page-json | 40.8 | 45.9 | 1.13x |
 | page-template | 110.9 | 123.4 | 1.11x |
