@@ -1,0 +1,1865 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 15:30:00 +0100
+Subject: [PATCH] WebCore: five unused web APIs only when enabled
+
+WebCore always built WebTransport, the Cookie Store API, Web Locks, the
+Screen Wake Lock API and the Shape Detection API: they had no build flag,
+only run-time settings, so their bindings and classes were in the Amiga
+engine although nothing on the Amiga can use them (no HTTP/3, no wake
+lock, no detectors) and their settings are off. This patch gives each one
+a feature flag, on by default as before, and the Amiga port turns all
+five off:
+
+- ENABLE_WEB_TRANSPORT, ENABLE_COOKIE_STORE_API, ENABLE_WEB_LOCKS,
+  ENABLE_SCREEN_WAKE_LOCK and ENABLE_SHAPE_DETECTION (WebKitFeatures.cmake
+  and PlatformEnable.h, both default on; OptionsAmiga.cmake sets them off).
+- Every IDL in Modules/webtransport, cookie-store, web-locks,
+  screen-wake-lock and ShapeDetection carries its Conditional, as do the
+  ServiceWorkerGlobalScope cookieStore and ServiceWorkerRegistration
+  cookies attributes, and the event target and event interface lists.
+- Those modules' sources build only with their flag, except
+  WebTransportSession.cpp, which the empty socket provider still needs.
+- Window and ServiceWorkerGlobalScope keep no CookieStore, a service worker
+  registration no CookieStoreManager (nor its cookie change subscription
+  calls), a navigator no WebLockManager and a document no WakeLockManager
+  without the flag; WebTransportError's heap cell type goes with
+  WebTransport.
+
+diff --git a/Source/WTF/wtf/PlatformEnable.h b/Source/WTF/wtf/PlatformEnable.h
+index 9c73a375b32..27611564301 100644
+--- a/Source/WTF/wtf/PlatformEnable.h
++++ b/Source/WTF/wtf/PlatformEnable.h
+@@ -637,6 +637,26 @@
+ #define ENABLE_WEBXR_WEBGPU_BY_DEFAULT 0
+ #endif
+ 
++#if !defined(ENABLE_COOKIE_STORE_API)
++#define ENABLE_COOKIE_STORE_API 1
++#endif
++
++#if !defined(ENABLE_SCREEN_WAKE_LOCK)
++#define ENABLE_SCREEN_WAKE_LOCK 1
++#endif
++
++#if !defined(ENABLE_SHAPE_DETECTION)
++#define ENABLE_SHAPE_DETECTION 1
++#endif
++
++#if !defined(ENABLE_WEB_LOCKS)
++#define ENABLE_WEB_LOCKS 1
++#endif
++
++#if !defined(ENABLE_WEB_TRANSPORT)
++#define ENABLE_WEB_TRANSPORT 1
++#endif
++
+ #if !defined(ENABLE_WEBGPU)
+ #define ENABLE_WEBGPU PLATFORM(COCOA)
+ #endif
+diff --git a/Source/WebCore/Modules/ShapeDetection/BarcodeDetector.cpp b/Source/WebCore/Modules/ShapeDetection/BarcodeDetector.cpp
+index 66079b452cc..cf45cdafd7e 100644
+--- a/Source/WebCore/Modules/ShapeDetection/BarcodeDetector.cpp
++++ b/Source/WebCore/Modules/ShapeDetection/BarcodeDetector.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SHAPE_DETECTION)
+ #include "BarcodeDetector.h"
+ 
+ #include "BarcodeDetectorOptions.h"
+@@ -122,3 +124,5 @@ void BarcodeDetector::detect(ScriptExecutionContext& scriptExecutionContext, Ima
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SHAPE_DETECTION)
+diff --git a/Source/WebCore/Modules/ShapeDetection/BarcodeDetector.idl b/Source/WebCore/Modules/ShapeDetection/BarcodeDetector.idl
+index 9b1f735f579..e94d015494d 100644
+--- a/Source/WebCore/Modules/ShapeDetection/BarcodeDetector.idl
++++ b/Source/WebCore/Modules/ShapeDetection/BarcodeDetector.idl
+@@ -45,6 +45,7 @@ typedef (HTMLImageElement
+ typedef (CanvasImageSource or Blob or ImageData) ImageBitmapSource;
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/ShapeDetection/BarcodeDetectorOptions.idl b/Source/WebCore/Modules/ShapeDetection/BarcodeDetectorOptions.idl
+index 45a257c02ba..a0ca8344bba 100644
+--- a/Source/WebCore/Modules/ShapeDetection/BarcodeDetectorOptions.idl
++++ b/Source/WebCore/Modules/ShapeDetection/BarcodeDetectorOptions.idl
+@@ -26,6 +26,7 @@
+ // https://wicg.github.io/shape-detection-api/#dictdef-barcodedetectoroptions
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection,
+ ] dictionary BarcodeDetectorOptions {
+     sequence<BarcodeFormat> formats;
+diff --git a/Source/WebCore/Modules/ShapeDetection/BarcodeFormat.idl b/Source/WebCore/Modules/ShapeDetection/BarcodeFormat.idl
+index aedab114c81..1368bb05cec 100644
+--- a/Source/WebCore/Modules/ShapeDetection/BarcodeFormat.idl
++++ b/Source/WebCore/Modules/ShapeDetection/BarcodeFormat.idl
+@@ -26,6 +26,7 @@
+ // https://wicg.github.io/shape-detection-api/#enumdef-barcodeformat
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection
+ ]
+ enum BarcodeFormat {
+diff --git a/Source/WebCore/Modules/ShapeDetection/DetectedBarcode.idl b/Source/WebCore/Modules/ShapeDetection/DetectedBarcode.idl
+index fe6530aa38a..bc876c154c5 100644
+--- a/Source/WebCore/Modules/ShapeDetection/DetectedBarcode.idl
++++ b/Source/WebCore/Modules/ShapeDetection/DetectedBarcode.idl
+@@ -26,6 +26,7 @@
+ // https://wicg.github.io/shape-detection-api/#dictdef-detectedbarcode
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection,
+     JSGenerateToJSObject,
+ ] dictionary DetectedBarcode {
+diff --git a/Source/WebCore/Modules/ShapeDetection/DetectedFace.idl b/Source/WebCore/Modules/ShapeDetection/DetectedFace.idl
+index 3ce01f3d459..c254f421947 100644
+--- a/Source/WebCore/Modules/ShapeDetection/DetectedFace.idl
++++ b/Source/WebCore/Modules/ShapeDetection/DetectedFace.idl
+@@ -26,6 +26,7 @@
+ // https://wicg.github.io/shape-detection-api/#dictdef-detectedface
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection,
+     JSGenerateToJSObject,
+ ] dictionary DetectedFace {
+diff --git a/Source/WebCore/Modules/ShapeDetection/DetectedText.idl b/Source/WebCore/Modules/ShapeDetection/DetectedText.idl
+index 91ab34a9f1b..938916e952c 100644
+--- a/Source/WebCore/Modules/ShapeDetection/DetectedText.idl
++++ b/Source/WebCore/Modules/ShapeDetection/DetectedText.idl
+@@ -26,6 +26,7 @@
+ // https://wicg.github.io/shape-detection-api/text.html#dictdef-detectedtext
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection,
+     JSGenerateToJSObject,
+ ] dictionary DetectedText {
+diff --git a/Source/WebCore/Modules/ShapeDetection/FaceDetector.cpp b/Source/WebCore/Modules/ShapeDetection/FaceDetector.cpp
+index 92b3e86c517..fbfc8cca348 100644
+--- a/Source/WebCore/Modules/ShapeDetection/FaceDetector.cpp
++++ b/Source/WebCore/Modules/ShapeDetection/FaceDetector.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SHAPE_DETECTION)
+ #include "FaceDetector.h"
+ 
+ #include "Chrome.h"
+@@ -95,3 +97,5 @@ void FaceDetector::detect(ScriptExecutionContext& scriptExecutionContext, ImageB
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SHAPE_DETECTION)
+diff --git a/Source/WebCore/Modules/ShapeDetection/FaceDetector.idl b/Source/WebCore/Modules/ShapeDetection/FaceDetector.idl
+index d6bda743133..f375c8af7bd 100644
+--- a/Source/WebCore/Modules/ShapeDetection/FaceDetector.idl
++++ b/Source/WebCore/Modules/ShapeDetection/FaceDetector.idl
+@@ -45,6 +45,7 @@ typedef (HTMLImageElement
+ typedef (CanvasImageSource or Blob or ImageData) ImageBitmapSource;
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/ShapeDetection/FaceDetectorOptions.idl b/Source/WebCore/Modules/ShapeDetection/FaceDetectorOptions.idl
+index 9b003804506..bb8e7b73fe9 100644
+--- a/Source/WebCore/Modules/ShapeDetection/FaceDetectorOptions.idl
++++ b/Source/WebCore/Modules/ShapeDetection/FaceDetectorOptions.idl
+@@ -26,6 +26,7 @@
+ // https://wicg.github.io/shape-detection-api/#dictdef-facedetectoroptions
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection,
+ ] dictionary FaceDetectorOptions {
+     [ImplementationDefaultValue=65535] unsigned short maxDetectedFaces;
+diff --git a/Source/WebCore/Modules/ShapeDetection/Landmark.idl b/Source/WebCore/Modules/ShapeDetection/Landmark.idl
+index 41fd1aab685..1e6ad50ed33 100644
+--- a/Source/WebCore/Modules/ShapeDetection/Landmark.idl
++++ b/Source/WebCore/Modules/ShapeDetection/Landmark.idl
+@@ -26,6 +26,7 @@
+ // https://wicg.github.io/shape-detection-api/#dictdef-landmark
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection,
+     JSGenerateToJSObject,
+ ] dictionary Landmark {
+diff --git a/Source/WebCore/Modules/ShapeDetection/LandmarkType.idl b/Source/WebCore/Modules/ShapeDetection/LandmarkType.idl
+index 9527224ea64..f89410d32ad 100644
+--- a/Source/WebCore/Modules/ShapeDetection/LandmarkType.idl
++++ b/Source/WebCore/Modules/ShapeDetection/LandmarkType.idl
+@@ -26,6 +26,7 @@
+ // https://wicg.github.io/shape-detection-api/#enumdef-landmarktype
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection
+ ]
+ enum LandmarkType {
+diff --git a/Source/WebCore/Modules/ShapeDetection/Point2D.idl b/Source/WebCore/Modules/ShapeDetection/Point2D.idl
+index c086b0f6ecc..4b2182e8b18 100644
+--- a/Source/WebCore/Modules/ShapeDetection/Point2D.idl
++++ b/Source/WebCore/Modules/ShapeDetection/Point2D.idl
+@@ -26,6 +26,7 @@
+ // https://w3c.github.io/mediacapture-image/#dictdef-point2d
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     JSGenerateToJSObject,
+ ] dictionary Point2D {
+     double x = 0.0;
+diff --git a/Source/WebCore/Modules/ShapeDetection/TextDetector.cpp b/Source/WebCore/Modules/ShapeDetection/TextDetector.cpp
+index 80d7db6b654..3331306fa05 100644
+--- a/Source/WebCore/Modules/ShapeDetection/TextDetector.cpp
++++ b/Source/WebCore/Modules/ShapeDetection/TextDetector.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SHAPE_DETECTION)
+ #include "TextDetector.h"
+ 
+ #include "Chrome.h"
+@@ -94,3 +96,5 @@ void TextDetector::detect(ScriptExecutionContext& scriptExecutionContext, ImageB
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SHAPE_DETECTION)
+diff --git a/Source/WebCore/Modules/ShapeDetection/TextDetector.idl b/Source/WebCore/Modules/ShapeDetection/TextDetector.idl
+index 67bef5c9b8b..e5fbe7a1d73 100644
+--- a/Source/WebCore/Modules/ShapeDetection/TextDetector.idl
++++ b/Source/WebCore/Modules/ShapeDetection/TextDetector.idl
+@@ -45,6 +45,7 @@ typedef (HTMLImageElement
+ typedef (CanvasImageSource or Blob or ImageData) ImageBitmapSource;
+ 
+ [
++    Conditional=SHAPE_DETECTION,
+     EnabledBySetting=ShapeDetection,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/cookie-store/CookieChangeEvent.cpp b/Source/WebCore/Modules/cookie-store/CookieChangeEvent.cpp
+index 5c652920912..e59a526b463 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieChangeEvent.cpp
++++ b/Source/WebCore/Modules/cookie-store/CookieChangeEvent.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(COOKIE_STORE_API)
+ #include "CookieChangeEvent.h"
+ 
+ #include <wtf/TZoneMallocInlines.h>
+@@ -47,3 +49,5 @@ CookieChangeEvent::CookieChangeEvent(const AtomString& type, Init&& initializer,
+ CookieChangeEvent::~CookieChangeEvent() = default;
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(COOKIE_STORE_API)
+diff --git a/Source/WebCore/Modules/cookie-store/CookieChangeEvent.idl b/Source/WebCore/Modules/cookie-store/CookieChangeEvent.idl
+index b0889a17857..75801904d3d 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieChangeEvent.idl
++++ b/Source/WebCore/Modules/cookie-store/CookieChangeEvent.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://cookiestore.spec.whatwg.org/#cookiechangeevent
+ [
++    Conditional=COOKIE_STORE_API,
+     EnabledBySetting=CookieStoreAPIEnabled,
+     Exposed=Window,
+     SecureContext
+diff --git a/Source/WebCore/Modules/cookie-store/CookieChangeEventInit.idl b/Source/WebCore/Modules/cookie-store/CookieChangeEventInit.idl
+index 3067a4b5206..eb31210bfcc 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieChangeEventInit.idl
++++ b/Source/WebCore/Modules/cookie-store/CookieChangeEventInit.idl
+@@ -27,6 +27,7 @@
+ typedef sequence<CookieListItem> CookieList;
+ 
+ // https://cookiestore.spec.whatwg.org/#dictdef-cookiechangeeventinit
++[Conditional=COOKIE_STORE_API]
+ dictionary CookieChangeEventInit : EventInit {
+     CookieList changed;
+     CookieList deleted;
+diff --git a/Source/WebCore/Modules/cookie-store/CookieInit.idl b/Source/WebCore/Modules/cookie-store/CookieInit.idl
+index 1c931481c2c..83a666a8b66 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieInit.idl
++++ b/Source/WebCore/Modules/cookie-store/CookieInit.idl
+@@ -26,6 +26,7 @@
+ typedef double DOMHighResTimeStamp;
+ 
+ // https://cookiestore.spec.whatwg.org/#dictdef-cookieinit
++[Conditional=COOKIE_STORE_API]
+ dictionary CookieInit {
+     required USVString name;
+     required USVString value;
+diff --git a/Source/WebCore/Modules/cookie-store/CookieListItem.idl b/Source/WebCore/Modules/cookie-store/CookieListItem.idl
+index 1779bb5d627..819ba29a1a0 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieListItem.idl
++++ b/Source/WebCore/Modules/cookie-store/CookieListItem.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://cookiestore.spec.whatwg.org/#dictdef-cookielistitem
+ [
++    Conditional=COOKIE_STORE_API,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+ ] dictionary CookieListItem {
+diff --git a/Source/WebCore/Modules/cookie-store/CookieSameSite.idl b/Source/WebCore/Modules/cookie-store/CookieSameSite.idl
+index 0aa98dffc7b..99559e119fa 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieSameSite.idl
++++ b/Source/WebCore/Modules/cookie-store/CookieSameSite.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://cookiestore.spec.whatwg.org/#enumdef-cookiesamesite
+ 
++[Conditional=COOKIE_STORE_API]
+ enum CookieSameSite {
+     "strict",
+     "lax",
+diff --git a/Source/WebCore/Modules/cookie-store/CookieStore.cpp b/Source/WebCore/Modules/cookie-store/CookieStore.cpp
+index 770759bef49..dbbb2cee834 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieStore.cpp
++++ b/Source/WebCore/Modules/cookie-store/CookieStore.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(COOKIE_STORE_API)
+ #include "CookieStore.h"
+ 
+ #include "ContextDestructionObserverInlines.h"
+@@ -660,3 +662,5 @@ RefPtr<DeferredPromise> CookieStore::takePromise(uint64_t promiseIdentifier)
+ }
+ 
+ }
++
++#endif // ENABLE(COOKIE_STORE_API)
+diff --git a/Source/WebCore/Modules/cookie-store/CookieStore.idl b/Source/WebCore/Modules/cookie-store/CookieStore.idl
+index e2cc3c53f58..2201b98c43b 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieStore.idl
++++ b/Source/WebCore/Modules/cookie-store/CookieStore.idl
+@@ -28,6 +28,7 @@ typedef sequence<CookieListItem> CookieList;
+ 
+ // https://cookiestore.spec.whatwg.org/#cookiestore
+ [
++    Conditional=COOKIE_STORE_API,
+     ActiveDOMObject,
+     EnabledBySetting=CookieStoreAPIEnabled,
+     Exposed=(ServiceWorker,Window),
+diff --git a/Source/WebCore/Modules/cookie-store/CookieStoreDeleteOptions.idl b/Source/WebCore/Modules/cookie-store/CookieStoreDeleteOptions.idl
+index 0b5f0470e4f..30f9a974b2d 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieStoreDeleteOptions.idl
++++ b/Source/WebCore/Modules/cookie-store/CookieStoreDeleteOptions.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ // https://cookiestore.spec.whatwg.org/#dictdef-cookiestoredeleteoptions
++[Conditional=COOKIE_STORE_API]
+ dictionary CookieStoreDeleteOptions {
+     required USVString name;
+     USVString? domain = null;
+diff --git a/Source/WebCore/Modules/cookie-store/CookieStoreGetOptions.idl b/Source/WebCore/Modules/cookie-store/CookieStoreGetOptions.idl
+index 9c75d032b54..0ccf373dd0a 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieStoreGetOptions.idl
++++ b/Source/WebCore/Modules/cookie-store/CookieStoreGetOptions.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://cookiestore.spec.whatwg.org/#dictdef-cookiestoregetoptions
+ [
++    Conditional=COOKIE_STORE_API,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+ ] dictionary CookieStoreGetOptions {
+diff --git a/Source/WebCore/Modules/cookie-store/CookieStoreManager.cpp b/Source/WebCore/Modules/cookie-store/CookieStoreManager.cpp
+index 028f61b673c..b6c9d586fd2 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieStoreManager.cpp
++++ b/Source/WebCore/Modules/cookie-store/CookieStoreManager.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(COOKIE_STORE_API)
+ #include "CookieStoreManager.h"
+ 
+ #include "CookieStoreGetOptions.h"
+@@ -78,3 +80,5 @@ void CookieStoreManager::getSubscriptions(Ref<DeferredPromise>&& promise)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(COOKIE_STORE_API)
+diff --git a/Source/WebCore/Modules/cookie-store/CookieStoreManager.idl b/Source/WebCore/Modules/cookie-store/CookieStoreManager.idl
+index 462eb60a501..e3e2b34538d 100644
+--- a/Source/WebCore/Modules/cookie-store/CookieStoreManager.idl
++++ b/Source/WebCore/Modules/cookie-store/CookieStoreManager.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://cookiestore.spec.whatwg.org/#cookiestoremanager
+ [
++    Conditional=COOKIE_STORE_API,
+     EnabledBySetting=CookieStoreAPIEnabled&CookieStoreManagerEnabled,
+     Exposed=(ServiceWorker,Window),
+     SecureContext
+diff --git a/Source/WebCore/Modules/cookie-store/DOMWindow+CookieStore.idl b/Source/WebCore/Modules/cookie-store/DOMWindow+CookieStore.idl
+index 71bd964fb04..d08464449d7 100644
+--- a/Source/WebCore/Modules/cookie-store/DOMWindow+CookieStore.idl
++++ b/Source/WebCore/Modules/cookie-store/DOMWindow+CookieStore.idl
+@@ -25,6 +25,7 @@
+  
+ // https://cookiestore.spec.whatwg.org/#Window
+ [
++    Conditional=COOKIE_STORE_API,
+     EnabledBySetting=CookieStoreAPIEnabled,
+     SecureContext
+ ] partial interface DOMWindow {
+diff --git a/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEvent.cpp b/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEvent.cpp
+index 3f0cf125d28..103ddee4ad3 100644
+--- a/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEvent.cpp
++++ b/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEvent.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(COOKIE_STORE_API)
+ #include "ExtendableCookieChangeEvent.h"
+ 
+ #include <wtf/TZoneMallocInlines.h>
+@@ -47,3 +49,5 @@ ExtendableCookieChangeEvent::ExtendableCookieChangeEvent(const AtomString& type,
+ ExtendableCookieChangeEvent::~ExtendableCookieChangeEvent() = default;
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(COOKIE_STORE_API)
+diff --git a/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEvent.idl b/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEvent.idl
+index 9f28c859625..d00a9b3ca52 100644
+--- a/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEvent.idl
++++ b/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEvent.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://cookiestore.spec.whatwg.org/#extendablecookiechangeevent
+ [
++    Conditional=COOKIE_STORE_API,
+     EnabledBySetting=CookieStoreAPIEnabled&CookieStoreManagerEnabled,
+     Exposed=ServiceWorker
+ ] interface ExtendableCookieChangeEvent : ExtendableEvent {
+diff --git a/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEventInit.idl b/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEventInit.idl
+index a6e0440e3b7..aa26d0d2684 100644
+--- a/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEventInit.idl
++++ b/Source/WebCore/Modules/cookie-store/ExtendableCookieChangeEventInit.idl
+@@ -27,6 +27,7 @@
+ typedef sequence<CookieListItem> CookieList;
+ 
+ // https://cookiestore.spec.whatwg.org/#dictdef-extendablecookiechangeeventinit
++[Conditional=COOKIE_STORE_API]
+ dictionary ExtendableCookieChangeEventInit : ExtendableEventInit {
+     CookieList changed;
+     CookieList deleted;
+diff --git a/Source/WebCore/Modules/screen-wake-lock/Navigator+ScreenWakeLock.idl b/Source/WebCore/Modules/screen-wake-lock/Navigator+ScreenWakeLock.idl
+index 1d85de27dfb..e388a686168 100644
+--- a/Source/WebCore/Modules/screen-wake-lock/Navigator+ScreenWakeLock.idl
++++ b/Source/WebCore/Modules/screen-wake-lock/Navigator+ScreenWakeLock.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=SCREEN_WAKE_LOCK,
+     EnabledBySetting=ScreenWakeLockAPIEnabled,
+     ImplementedBy=NavigatorScreenWakeLock,
+     SecureContext
+diff --git a/Source/WebCore/Modules/screen-wake-lock/NavigatorScreenWakeLock.cpp b/Source/WebCore/Modules/screen-wake-lock/NavigatorScreenWakeLock.cpp
+index d1bd5b048bb..55b5c001759 100644
+--- a/Source/WebCore/Modules/screen-wake-lock/NavigatorScreenWakeLock.cpp
++++ b/Source/WebCore/Modules/screen-wake-lock/NavigatorScreenWakeLock.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SCREEN_WAKE_LOCK)
+ #include "NavigatorScreenWakeLock.h"
+ 
+ #include "ContextDestructionObserverInlines.h"
+@@ -67,3 +69,5 @@ WakeLock& NavigatorScreenWakeLock::wakeLock()
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SCREEN_WAKE_LOCK)
+diff --git a/Source/WebCore/Modules/screen-wake-lock/WakeLock.cpp b/Source/WebCore/Modules/screen-wake-lock/WakeLock.cpp
+index 25b924386ef..5c3c8cd6305 100644
+--- a/Source/WebCore/Modules/screen-wake-lock/WakeLock.cpp
++++ b/Source/WebCore/Modules/screen-wake-lock/WakeLock.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SCREEN_WAKE_LOCK)
+ #include "WakeLock.h"
+ 
+ #include "ClientOrigin.h"
+@@ -109,3 +111,5 @@ Document* WakeLock::document()
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SCREEN_WAKE_LOCK)
+diff --git a/Source/WebCore/Modules/screen-wake-lock/WakeLock.idl b/Source/WebCore/Modules/screen-wake-lock/WakeLock.idl
+index 841062f2cbc..85a959e9482 100644
+--- a/Source/WebCore/Modules/screen-wake-lock/WakeLock.idl
++++ b/Source/WebCore/Modules/screen-wake-lock/WakeLock.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=SCREEN_WAKE_LOCK,
+     EnabledBySetting=ScreenWakeLockAPIEnabled,
+     Exposed=(Window),
+     SecureContext
+diff --git a/Source/WebCore/Modules/screen-wake-lock/WakeLockManager.cpp b/Source/WebCore/Modules/screen-wake-lock/WakeLockManager.cpp
+index 129c178c673..1c77b595f64 100644
+--- a/Source/WebCore/Modules/screen-wake-lock/WakeLockManager.cpp
++++ b/Source/WebCore/Modules/screen-wake-lock/WakeLockManager.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SCREEN_WAKE_LOCK)
+ #include "WakeLockManager.h"
+ 
+ #include "ContextDestructionObserverInlines.h"
+@@ -118,3 +120,5 @@ void WakeLockManager::releaseAllLocks(WakeLockType type)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SCREEN_WAKE_LOCK)
+diff --git a/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.cpp b/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.cpp
+index ddb91e4fb90..c677c518273 100644
+--- a/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.cpp
++++ b/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(SCREEN_WAKE_LOCK)
+ #include "WakeLockSentinel.h"
+ 
+ #include "ContextDestructionObserverInlines.h"
+@@ -86,3 +88,5 @@ void WakeLockSentinel::eventListenersDidChange()
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(SCREEN_WAKE_LOCK)
+diff --git a/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.idl b/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.idl
+index e53a1dda434..49f1fd958e5 100644
+--- a/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.idl
++++ b/Source/WebCore/Modules/screen-wake-lock/WakeLockSentinel.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=SCREEN_WAKE_LOCK,
+     ActiveDOMObject,
+     EnabledBySetting=ScreenWakeLockAPIEnabled,
+     Exposed=(Window),
+diff --git a/Source/WebCore/Modules/screen-wake-lock/WakeLockType.idl b/Source/WebCore/Modules/screen-wake-lock/WakeLockType.idl
+index 52d941d94b0..32dfefb46d2 100644
+--- a/Source/WebCore/Modules/screen-wake-lock/WakeLockType.idl
++++ b/Source/WebCore/Modules/screen-wake-lock/WakeLockType.idl
+@@ -23,4 +23,5 @@
+  * THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++[Conditional=SCREEN_WAKE_LOCK]
+ enum WakeLockType { "screen" };
+diff --git a/Source/WebCore/Modules/web-locks/NavigatorLocks.idl b/Source/WebCore/Modules/web-locks/NavigatorLocks.idl
+index 62d235a5b14..99a53000a50 100644
+--- a/Source/WebCore/Modules/web-locks/NavigatorLocks.idl
++++ b/Source/WebCore/Modules/web-locks/NavigatorLocks.idl
+@@ -23,6 +23,7 @@
+  */
+ 
+ [
++    Conditional=WEB_LOCKS,
+     EnabledBySetting=WebLocksAPIEnabled,
+     SecureContext
+ ] interface mixin NavigatorLocks {
+diff --git a/Source/WebCore/Modules/web-locks/WebLock.cpp b/Source/WebCore/Modules/web-locks/WebLock.cpp
+index 1ba3a94c379..ca175527e15 100644
+--- a/Source/WebCore/Modules/web-locks/WebLock.cpp
++++ b/Source/WebCore/Modules/web-locks/WebLock.cpp
+@@ -23,6 +23,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_LOCKS)
+ #include "WebLock.h"
+ 
+ namespace WebCore {
+@@ -40,3 +42,5 @@ WebLock::WebLock(WebLockIdentifier identifier, const String& name, WebLockMode m
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_LOCKS)
+diff --git a/Source/WebCore/Modules/web-locks/WebLock.idl b/Source/WebCore/Modules/web-locks/WebLock.idl
+index 26247d8b4ca..8bdaf9fae9a 100644
+--- a/Source/WebCore/Modules/web-locks/WebLock.idl
++++ b/Source/WebCore/Modules/web-locks/WebLock.idl
+@@ -23,6 +23,7 @@
+  */
+ 
+ [
++    Conditional=WEB_LOCKS,
+     EnabledBySetting=WebLocksAPIEnabled,
+     Exposed=(Window,Worker),
+     InterfaceName=Lock,
+diff --git a/Source/WebCore/Modules/web-locks/WebLockGrantedCallback.idl b/Source/WebCore/Modules/web-locks/WebLockGrantedCallback.idl
+index 5303e080986..5e03affc7f6 100644
+--- a/Source/WebCore/Modules/web-locks/WebLockGrantedCallback.idl
++++ b/Source/WebCore/Modules/web-locks/WebLockGrantedCallback.idl
+@@ -24,5 +24,6 @@
+ 
+ // https://w3c.github.io/web-locks/#callbackdef-lockgrantedcallback
+ [
++    Conditional=WEB_LOCKS,
+     GenerateIsReachable=ImplScriptExecutionContext
+ ] callback WebLockGrantedCallback = Promise<any> (WebLock? webLock);
+diff --git a/Source/WebCore/Modules/web-locks/WebLockManager.cpp b/Source/WebCore/Modules/web-locks/WebLockManager.cpp
+index c6277a74716..2de511b3d9b 100644
+--- a/Source/WebCore/Modules/web-locks/WebLockManager.cpp
++++ b/Source/WebCore/Modules/web-locks/WebLockManager.cpp
+@@ -23,6 +23,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_LOCKS)
+ #include "WebLockManager.h"
+ 
+ #include "ContextDestructionObserverInlines.h"
+@@ -409,3 +411,5 @@ void WebLockManager::suspend(ReasonForSuspension reason)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_LOCKS)
+diff --git a/Source/WebCore/Modules/web-locks/WebLockManager.idl b/Source/WebCore/Modules/web-locks/WebLockManager.idl
+index 3352685ced1..89bb36155e9 100644
+--- a/Source/WebCore/Modules/web-locks/WebLockManager.idl
++++ b/Source/WebCore/Modules/web-locks/WebLockManager.idl
+@@ -23,6 +23,7 @@
+  */
+ 
+ [
++    Conditional=WEB_LOCKS,
+     ActiveDOMObject,
+     EnabledBySetting=WebLocksAPIEnabled,
+     Exposed=(Window,Worker),
+@@ -35,6 +36,7 @@
+     Promise<WebLockManagerSnapshot> query();
+ };
+ 
++[Conditional=WEB_LOCKS]
+ dictionary WebLockOptions {
+     WebLockMode mode = "exclusive";
+     boolean ifAvailable = false;
+diff --git a/Source/WebCore/Modules/web-locks/WebLockManagerSnapshot.idl b/Source/WebCore/Modules/web-locks/WebLockManagerSnapshot.idl
+index e99ff3d4b78..4ae47bbfdd2 100644
+--- a/Source/WebCore/Modules/web-locks/WebLockManagerSnapshot.idl
++++ b/Source/WebCore/Modules/web-locks/WebLockManagerSnapshot.idl
+@@ -23,6 +23,7 @@
+  */
+ 
+ [
++    Conditional=WEB_LOCKS,
+     JSGenerateToJSObject,
+ ] dictionary WebLockManagerSnapshot {
+     sequence<WebLockInfo> held;
+@@ -30,6 +31,7 @@
+ };
+ 
+ [
++    Conditional=WEB_LOCKS,
+     JSGenerateToJSObject,
+ ] dictionary WebLockInfo {
+     DOMString name;
+diff --git a/Source/WebCore/Modules/web-locks/WebLockMode.idl b/Source/WebCore/Modules/web-locks/WebLockMode.idl
+index 8a305c84180..214ffe49268 100644
+--- a/Source/WebCore/Modules/web-locks/WebLockMode.idl
++++ b/Source/WebCore/Modules/web-locks/WebLockMode.idl
+@@ -22,4 +22,5 @@
+  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++[Conditional=WEB_LOCKS]
+ enum WebLockMode { "shared", "exclusive" };
+diff --git a/Source/WebCore/Modules/web-locks/WebLockRegistry.cpp b/Source/WebCore/Modules/web-locks/WebLockRegistry.cpp
+index 09d520b9ff8..5b90e10f4e6 100644
+--- a/Source/WebCore/Modules/web-locks/WebLockRegistry.cpp
++++ b/Source/WebCore/Modules/web-locks/WebLockRegistry.cpp
+@@ -23,6 +23,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_LOCKS)
+ #include "WebLockRegistry.h"
+ 
+ #include "Exception.h"
+@@ -315,3 +317,5 @@ void LocalWebLockRegistry::clientsAreGoingAway(ProcessIdentifier processIdentifi
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_LOCKS)
+diff --git a/Source/WebCore/Modules/webtransport/DatagramByteSource.cpp b/Source/WebCore/Modules/webtransport/DatagramByteSource.cpp
+index 237d5ed3cef..e34798d61cf 100644
+--- a/Source/WebCore/Modules/webtransport/DatagramByteSource.cpp
++++ b/Source/WebCore/Modules/webtransport/DatagramByteSource.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "DatagramByteSource.h"
+ 
+ #include "JSDOMGlobalObject.h"
+@@ -195,3 +197,5 @@ void DatagramByteSource::error(JSC::JSGlobalObject& globalObject, JSC::JSValue v
+     }
+ }
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/DatagramSink.cpp b/Source/WebCore/Modules/webtransport/DatagramSink.cpp
+index 97298e6aab6..390dea7b10c 100644
+--- a/Source/WebCore/Modules/webtransport/DatagramSink.cpp
++++ b/Source/WebCore/Modules/webtransport/DatagramSink.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "DatagramSink.h"
+ 
+ #include "Exception.h"
+@@ -130,3 +132,5 @@ void DatagramSink::close(JSDOMGlobalObject&, DOMPromiseDeferred<void>&& promise)
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/DatagramSource.cpp b/Source/WebCore/Modules/webtransport/DatagramSource.cpp
+index 261f68f03e7..d3ae2165423 100644
+--- a/Source/WebCore/Modules/webtransport/DatagramSource.cpp
++++ b/Source/WebCore/Modules/webtransport/DatagramSource.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "DatagramSource.h"
+ 
+ #include "Exception.h"
+@@ -129,3 +131,5 @@ void DatagramDefaultSource::error(JSC::JSGlobalObject& globalObject, JSC::JSValu
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransport.cpp b/Source/WebCore/Modules/webtransport/WebTransport.cpp
+index 33e0643a2a3..fce4d0b672c 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransport.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransport.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransport.h"
+ 
+ #include "BufferSource.h"
+@@ -724,3 +726,5 @@ void WebTransport::receiveStreamClosed(WebTransportStreamIdentifier identifier)
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransport.idl b/Source/WebCore/Modules/webtransport/WebTransport.idl
+index 36f01cee6ea..44c1aa18f77 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransport.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransport.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     ActiveDOMObject,
+     EnabledBySetting=WebTransportEnabled,
+     Exposed=(Window,Worker),
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStream.cpp b/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStream.cpp
+index 5f93e148b15..405bd20fb5b 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStream.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStream.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportBidirectionalStream.h"
+ 
+ #include "WebTransportReceiveStream.h"
+@@ -43,3 +45,5 @@ WebTransportBidirectionalStream::WebTransportBidirectionalStream(Ref<WebTranspor
+ WebTransportBidirectionalStream::~WebTransportBidirectionalStream() = default;
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStream.idl b/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStream.idl
+index 4508e9d9c9b..63d9282a490 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStream.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStream.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStreamSource.cpp b/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStreamSource.cpp
+index 2b029dee3f9..13d0e25cac2 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStreamSource.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportBidirectionalStreamSource.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportBidirectionalStreamSource.h"
+ 
+ #include "JSWebTransportBidirectionalStream.h"
+@@ -51,3 +53,5 @@ bool WebTransportBidirectionalStreamSource::receiveIncomingStream(JSC::JSGlobalO
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportCloseInfo.idl b/Source/WebCore/Modules/webtransport/WebTransportCloseInfo.idl
+index 580d4d7910d..f0161659ff3 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportCloseInfo.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportCloseInfo.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://w3c.github.io/webtransport/#dictdef-webtransportcloseinfo
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportCongestionControl.idl b/Source/WebCore/Modules/webtransport/WebTransportCongestionControl.idl
+index 4963f7ea141..2195794e395 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportCongestionControl.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportCongestionControl.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+ ] enum WebTransportCongestionControl {
+     "default",
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportConnectionStats.idl b/Source/WebCore/Modules/webtransport/WebTransportConnectionStats.idl
+index 47bc71d4abb..f40d0d27f48 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportConnectionStats.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportConnectionStats.idl
+@@ -27,6 +27,7 @@ typedef double DOMHighResTimeStamp;
+ 
+ // https://w3c.github.io/webtransport/#dictdef-webtransportconnectionstats
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportDatagramDuplexStream.cpp b/Source/WebCore/Modules/webtransport/WebTransportDatagramDuplexStream.cpp
+index e87b13e9353..8bed352fa87 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportDatagramDuplexStream.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportDatagramDuplexStream.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportDatagramDuplexStream.h"
+ 
+ #include "ExceptionOr.h"
+@@ -125,3 +127,5 @@ void WebTransportDatagramDuplexStream::setOutgoingMaxBufferedDatagrams(uint32_t
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportDatagramDuplexStream.idl b/Source/WebCore/Modules/webtransport/WebTransportDatagramDuplexStream.idl
+index c6ec500780f..1fa599697be 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportDatagramDuplexStream.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportDatagramDuplexStream.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportDatagramStats.idl b/Source/WebCore/Modules/webtransport/WebTransportDatagramStats.idl
+index 388275366be..312834683fc 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportDatagramStats.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportDatagramStats.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://w3c.github.io/webtransport/#dictdef-webtransportdatagramstats
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportDatagramsWritable.cpp b/Source/WebCore/Modules/webtransport/WebTransportDatagramsWritable.cpp
+index 4a1c17b01ae..20f8d87fcc6 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportDatagramsWritable.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportDatagramsWritable.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportDatagramsWritable.h"
+ 
+ #include "DatagramSink.h"
+@@ -90,3 +92,5 @@ void WebTransportDatagramsWritable::setSendOrder(int64_t order)
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportDatagramsWritable.idl b/Source/WebCore/Modules/webtransport/WebTransportDatagramsWritable.idl
+index fca08891ce3..9fe704dcd8d 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportDatagramsWritable.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportDatagramsWritable.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     Exposed=(Window,Worker),
+     SecureContext,
+     Transferable,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportError.cpp b/Source/WebCore/Modules/webtransport/WebTransportError.cpp
+index a4e0f760bec..ddb1a6d94d7 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportError.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportError.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportError.h"
+ 
+ namespace WebCore {
+@@ -55,3 +57,5 @@ std::optional<unsigned> WebTransportError::streamErrorCode()
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportError.idl b/Source/WebCore/Modules/webtransport/WebTransportError.idl
+index 569f2bf3115..e39b3232798 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportError.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportError.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     Exposed=(Window,Worker),
+     Serializable,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportErrorOptions.idl b/Source/WebCore/Modules/webtransport/WebTransportErrorOptions.idl
+index b84c9b3b41f..7269984a5b3 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportErrorOptions.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportErrorOptions.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://w3c.github.io/webtransport/#dictdef-webtransporterroroptions
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+ ] dictionary WebTransportErrorOptions {
+     WebTransportErrorSource source = "stream";
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportErrorSource.idl b/Source/WebCore/Modules/webtransport/WebTransportErrorSource.idl
+index dad3d0cb9ad..ab65661e529 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportErrorSource.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportErrorSource.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+ ] enum WebTransportErrorSource {
+     "stream",
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportHash.idl b/Source/WebCore/Modules/webtransport/WebTransportHash.idl
+index b0f0f4f64c6..7b38f9823b3 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportHash.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportHash.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://w3c.github.io/webtransport/#dictdef-webtransporthash
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+ ] dictionary WebTransportHash {
+     required DOMString algorithm;
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportHeaderValidation.cpp b/Source/WebCore/Modules/webtransport/WebTransportHeaderValidation.cpp
+index bfcd14776fc..b4b9e68e933 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportHeaderValidation.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportHeaderValidation.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportHeaderValidation.h"
+ 
+ #include "ExceptionOr.h"
+@@ -95,3 +97,5 @@ bool areValidWebTransportHeaders(const Vector<KeyValuePair<String, String>>& hea
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportOptions.idl b/Source/WebCore/Modules/webtransport/WebTransportOptions.idl
+index f151f3e178d..4feeedbc1e3 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportOptions.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportOptions.idl
+@@ -27,6 +27,7 @@ typedef (sequence<sequence<ByteString>> or record<ByteString, ByteString>) Heade
+ 
+ // https://w3c.github.io/webtransport/#dictdef-webtransportoptions
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+ ] dictionary WebTransportOptions {
+     boolean allowPooling = false;
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportReceiveStream.cpp b/Source/WebCore/Modules/webtransport/WebTransportReceiveStream.cpp
+index 8d9371522d1..8374f433c1d 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportReceiveStream.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportReceiveStream.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportReceiveStream.h"
+ 
+ #include "JSDOMConvertDictionary.h"
+@@ -83,3 +85,5 @@ void WebTransportReceiveStream::getStats(ScriptExecutionContext& context, Ref<De
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportReceiveStream.idl b/Source/WebCore/Modules/webtransport/WebTransportReceiveStream.idl
+index c969acc2db9..472cca8de6e 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportReceiveStream.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportReceiveStream.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamByteSource.cpp b/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamByteSource.cpp
+index 614c43f0cdd..7d05b0b0da7 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamByteSource.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamByteSource.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportReceiveStreamByteSource.h"
+ 
+ #include "JSDOMException.h"
+@@ -207,3 +209,5 @@ void WebTransportReceiveStreamByteSource::cancel(JSC::JSValue reason, Ref<Deferr
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamSource.cpp b/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamSource.cpp
+index 72a2f0e982e..214baeaead7 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamSource.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamSource.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportReceiveStreamSource.h"
+ 
+ #include "JSDOMException.h"
+@@ -65,3 +67,5 @@ void WebTransportReceiveStreamSource::doCancel(JSC::JSValue)
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamStats.idl b/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamStats.idl
+index cbfd2071b42..a8ca20aa998 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamStats.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportReceiveStreamStats.idl
+@@ -26,6 +26,7 @@
+ typedef double DOMHighResTimeStamp;
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportReliabilityMode.idl b/Source/WebCore/Modules/webtransport/WebTransportReliabilityMode.idl
+index 34d3a0a4651..d5e2bc83551 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportReliabilityMode.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportReliabilityMode.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+ ] enum WebTransportReliabilityMode {
+     "pending",
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportSendGroup.cpp b/Source/WebCore/Modules/webtransport/WebTransportSendGroup.cpp
+index 8bfc12eebe9..1fba063d679 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportSendGroup.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportSendGroup.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportSendGroup.h"
+ 
+ #include "JSDOMConvertDictionary.h"
+@@ -65,3 +67,5 @@ RefPtr<WebTransport> WebTransportSendGroup::transport()
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportSendGroup.idl b/Source/WebCore/Modules/webtransport/WebTransportSendGroup.idl
+index 0a1345ffb79..980c1583813 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportSendGroup.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportSendGroup.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     Exposed=(Window,Worker),
+     SecureContext,
+     EnabledBySetting=WebTransportEnabled,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportSendOptions.idl b/Source/WebCore/Modules/webtransport/WebTransportSendOptions.idl
+index d972b2a3e59..3f996fece53 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportSendOptions.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportSendOptions.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ // https://w3c.github.io/webtransport/#dictdef-webtransportsendoptions
++[Conditional=WEB_TRANSPORT]
+ dictionary WebTransportSendOptions {
+     WebTransportSendGroup? sendGroup = null;
+     long long sendOrder = 0;
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportSendStream.cpp b/Source/WebCore/Modules/webtransport/WebTransportSendStream.cpp
+index e1628abbe06..4e0da612e5c 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportSendStream.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportSendStream.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportSendStream.h"
+ 
+ #include "InternalWritableStream.h"
+@@ -97,3 +99,5 @@ ExceptionOr<void> WebTransportSendStream::setSendGroup(WebTransportSendGroup* gr
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportSendStream.idl b/Source/WebCore/Modules/webtransport/WebTransportSendStream.idl
+index 3738f299f0c..c946a05624d 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportSendStream.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportSendStream.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     Exposed=(Window,Worker),
+     SecureContext,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportSendStreamOptions.idl b/Source/WebCore/Modules/webtransport/WebTransportSendStreamOptions.idl
+index 14e4d399601..7db3f9c3e29 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportSendStreamOptions.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportSendStreamOptions.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://w3c.github.io/webtransport/#dictdef-webtransportsendstreamoptions
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+ ] dictionary WebTransportSendStreamOptions : WebTransportSendOptions {
+     // FIXME: Add support for `waitUntilAvailable`.
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportSendStreamSink.cpp b/Source/WebCore/Modules/webtransport/WebTransportSendStreamSink.cpp
+index ec7b086303c..97301c48059 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportSendStreamSink.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportSendStreamSink.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportSendStreamSink.h"
+ 
+ #include "AbortSignal.h"
+@@ -203,3 +205,5 @@ void WebTransportSendStreamSink::cancel(JSC::JSValue reason)
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportSendStreamStats.idl b/Source/WebCore/Modules/webtransport/WebTransportSendStreamStats.idl
+index 26adef8f0bd..8bd651b0ada 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportSendStreamStats.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportSendStreamStats.idl
+@@ -27,6 +27,7 @@ typedef double DOMHighResTimeStamp;
+ 
+ // https://w3c.github.io/webtransport/#dictdef-webtransportsendstreamstats
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     JSGenerateToJSObject,
+     JSGenerateToNativeObject,
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportWriter.cpp b/Source/WebCore/Modules/webtransport/WebTransportWriter.cpp
+index 394c8fe76b4..75a87721464 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportWriter.cpp
++++ b/Source/WebCore/Modules/webtransport/WebTransportWriter.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportWriter.h"
+ 
+ #include "InternalWritableStreamWriter.h"
+@@ -59,3 +61,5 @@ void WebTransportWriter::commit()
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/Modules/webtransport/WebTransportWriter.idl b/Source/WebCore/Modules/webtransport/WebTransportWriter.idl
+index fc0203db61c..528571fa29e 100644
+--- a/Source/WebCore/Modules/webtransport/WebTransportWriter.idl
++++ b/Source/WebCore/Modules/webtransport/WebTransportWriter.idl
+@@ -24,6 +24,7 @@
+  */
+ 
+ [
++    Conditional=WEB_TRANSPORT,
+     EnabledBySetting=WebTransportEnabled,
+     Exposed=(Window,Worker),
+     SecureContext
+diff --git a/Source/WebCore/Modules/webtransport/WorkerWebTransportSession.cpp b/Source/WebCore/Modules/webtransport/WorkerWebTransportSession.cpp
+index 638316787aa..fb07ed59ff1 100644
+--- a/Source/WebCore/Modules/webtransport/WorkerWebTransportSession.cpp
++++ b/Source/WebCore/Modules/webtransport/WorkerWebTransportSession.cpp
+@@ -24,6 +24,8 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(WEB_TRANSPORT)
+ #include "WorkerWebTransportSession.h"
+ 
+ #include "Exception.h"
+@@ -307,3 +309,5 @@ void WorkerWebTransportSession::outgoingMaxBufferedDatagramsUpdated(uint32_t val
+ }
+ 
+ }
++
++#endif // ENABLE(WEB_TRANSPORT)
+diff --git a/Source/WebCore/bindings/js/WebCoreJSClientData.cpp b/Source/WebCore/bindings/js/WebCoreJSClientData.cpp
+index c10e5a6e749..d378de7e7c1 100644
+--- a/Source/WebCore/bindings/js/WebCoreJSClientData.cpp
++++ b/Source/WebCore/bindings/js/WebCoreJSClientData.cpp
+@@ -47,7 +47,9 @@
+ #include "JSServiceWorkerGlobalScope.h"
+ #include "JSShadowRealmGlobalScope.h"
+ #include "JSSharedWorkerGlobalScope.h"
++#if ENABLE(WEB_TRANSPORT)
+ #include "JSWebTransportError.h"
++#endif
+ #include "JSWindowProxy.h"
+ #include "JSWorkerGlobalScope.h"
+ #include "JSWorkletGlobalScope.h"
+@@ -115,7 +117,9 @@ JSHeapData::JSHeapData(Heap& heap)
+ #if ENABLE(WEBGPU)
+     , m_heapCellTypeForJSGPUPipelineError(JSC::IsoHeapCellType::Args<JSGPUPipelineError>())
+ #endif
++#if ENABLE(WEB_TRANSPORT)
+     , m_heapCellTypeForJSWebTransportError(JSC::IsoHeapCellType::Args<JSWebTransportError>())
++#endif
+     , m_domBuiltinConstructorSpace ISO_SUBSPACE_INIT(heap, heap.cellHeapCellType, JSDOMBuiltinConstructorBase)
+     , m_domConstructorSpace ISO_SUBSPACE_INIT(heap, heap.cellHeapCellType, JSDOMConstructorBase)
+     , m_domNamespaceObjectSpace ISO_SUBSPACE_INIT(heap, heap.cellHeapCellType, JSDOMObject)
+diff --git a/Source/WebCore/bindings/js/WebCoreJSClientData.h b/Source/WebCore/bindings/js/WebCoreJSClientData.h
+index 178c4e29beb..a18bb479789 100644
+--- a/Source/WebCore/bindings/js/WebCoreJSClientData.h
++++ b/Source/WebCore/bindings/js/WebCoreJSClientData.h
+@@ -110,7 +110,9 @@ public:
+ #if ENABLE(WEBGPU)
+     JSC::IsoHeapCellType m_heapCellTypeForJSGPUPipelineError;
+ #endif
++#if ENABLE(WEB_TRANSPORT)
+     JSC::IsoHeapCellType m_heapCellTypeForJSWebTransportError;
++#endif
+ 
+ private:
+     JSC::IsoSubspace m_domBuiltinConstructorSpace;
+diff --git a/Source/WebCore/dom/Document.cpp b/Source/WebCore/dom/Document.cpp
+index f3d35be1b59..88455a3aba9 100644
+--- a/Source/WebCore/dom/Document.cpp
++++ b/Source/WebCore/dom/Document.cpp
+@@ -362,7 +362,9 @@
+ #include "VisibilityState.h"
+ #include "VisitedLinkState.h"
+ #include "VisualViewport.h"
++#if ENABLE(SCREEN_WAKE_LOCK)
+ #include "WakeLockManager.h"
++#endif
+ #include "WebAnimation.h"
+ #include "WebAnimationUtilities.h"
+ #include "WebRTCProvider.h"
+@@ -2709,12 +2711,14 @@ String Document::nodeName() const
+     return "#document"_s;
+ }
+ 
++#if ENABLE(SCREEN_WAKE_LOCK)
+ WakeLockManager& Document::wakeLockManager()
+ {
+     if (!m_wakeLockManager)
+         lazyInitialize(m_wakeLockManager, makeUniqueWithoutRefCountedCheck<WakeLockManager>(*this));
+     return *m_wakeLockManager;
+ }
++#endif
+ 
+ FormController& Document::formController()
+ {
+@@ -3839,9 +3843,11 @@ void Document::stopActiveDOMObjects()
+     if (RefPtr eventLoop = m_eventLoop)
+         eventLoop->removeMutationObserversForContext(*this);
+ 
++#if ENABLE(SCREEN_WAKE_LOCK)
+     // https://www.w3.org/TR/screen-wake-lock/#handling-document-loss-of-full-activity
+     if (m_wakeLockManager)
+         m_wakeLockManager->releaseAllLocks(WakeLockType::Screen);
++#endif
+ }
+ 
+ bool Document::isEventLoopGroupStoppedPermanently() const
+diff --git a/Source/WebCore/dom/Document.h b/Source/WebCore/dom/Document.h
+index c9bb4606e70..7d622dd770a 100644
+--- a/Source/WebCore/dom/Document.h
++++ b/Source/WebCore/dom/Document.h
+@@ -673,7 +673,9 @@ public:
+ 
+     WEBCORE_EXPORT Ref<NodeList> getElementsByName(const AtomString& elementName);
+ 
++#if ENABLE(SCREEN_WAKE_LOCK)
+     WakeLockManager& wakeLockManager();
++#endif
+ 
+     // Other methods (not part of DOM)
+     bool isSynthesized() const { return m_isSynthesized; }
+@@ -2685,7 +2687,9 @@ private:
+ 
+     const RefPtr<ReportingScope> m_reportingScope;
+ 
++#if ENABLE(SCREEN_WAKE_LOCK)
+     const std::unique_ptr<WakeLockManager> m_wakeLockManager;
++#endif
+     std::unique_ptr<SleepDisabler> m_sleepDisabler;
+ 
+ #if ENABLE(MEDIA_STREAM)
+diff --git a/Source/WebCore/dom/EventInterfaces.in b/Source/WebCore/dom/EventInterfaces.in
+index 677f2e8a4fb..28e7eb3159c 100644
+--- a/Source/WebCore/dom/EventInterfaces.in
++++ b/Source/WebCore/dom/EventInterfaces.in
+@@ -15,12 +15,12 @@ ClipboardEvent
+ CloseEvent
+ CommandEvent
+ CompositionEvent
+-CookieChangeEvent
++CookieChangeEvent conditional=COOKIE_STORE_API
+ CSSAnimationEvent
+ CSSTransitionEvent
+ CustomEvent
+ DragEvent
+-ExtendableCookieChangeEvent
++ExtendableCookieChangeEvent conditional=COOKIE_STORE_API
+ ExtendableEvent
+ ExtendableMessageEvent
+ ErrorEvent
+diff --git a/Source/WebCore/dom/EventTargetFactory.in b/Source/WebCore/dom/EventTargetFactory.in
+index d823788946a..d82eb141c6b 100644
+--- a/Source/WebCore/dom/EventTargetFactory.in
++++ b/Source/WebCore/dom/EventTargetFactory.in
+@@ -12,7 +12,7 @@ BaseAudioContext conditional=WEB_AUDIO
+ BroadcastChannel
+ Clipboard
+ CloseWatcher
+-CookieStore
++CookieStore conditional=COOKIE_STORE_API
+ DedicatedWorkerGlobalScope
+ DevicePosture
+ DOMAudioSession conditional=DOM_AUDIO_SESSION
+@@ -72,7 +72,7 @@ TextTrackCueGeneric conditional=VIDEO
+ TextTrackList conditional=VIDEO
+ VideoTrackList conditional=VIDEO
+ VisualViewport
+-WakeLockSentinel
++WakeLockSentinel conditional=SCREEN_WAKE_LOCK
+ WebAnimation
+ WebCodecsAudioDecoder conditional=WEB_CODECS
+ WebCodecsAudioEncoder conditional=WEB_CODECS
+diff --git a/Source/WebCore/page/DOMWindow.cpp b/Source/WebCore/page/DOMWindow.cpp
+index fc1b920347f..d654a4f563b 100644
+--- a/Source/WebCore/page/DOMWindow.cpp
++++ b/Source/WebCore/page/DOMWindow.cpp
+@@ -30,7 +30,9 @@
+ #include "BarProp.h"
+ #include "CSSRuleList.h"
+ #include "CSSStyleProperties.h"
++#if ENABLE(COOKIE_STORE_API)
+ #include "CookieStore.h"
++#endif
+ #include "Crypto.h"
+ #include "CustomElementRegistry.h"
+ #include "DOMRect.h"
+@@ -442,6 +444,7 @@ ExceptionOr<bool> DOMWindow::offscreenBuffering() const
+     return localThis->offscreenBuffering();
+ }
+ 
++#if ENABLE(COOKIE_STORE_API)
+ ExceptionOr<CookieStore&> DOMWindow::cookieStore()
+ {
+     auto* localThis = dynamicDowncast<LocalDOMWindow>(*this);
+@@ -449,6 +452,7 @@ ExceptionOr<CookieStore&> DOMWindow::cookieStore()
+         return Exception { ExceptionCode::SecurityError };
+     return localThis->cookieStore();
+ }
++#endif // ENABLE(COOKIE_STORE_API)
+ 
+ ExceptionOr<Screen&> DOMWindow::screen()
+ {
+diff --git a/Source/WebCore/page/DOMWindow.h b/Source/WebCore/page/DOMWindow.h
+index 455cca99c0b..f3648093ae0 100644
+--- a/Source/WebCore/page/DOMWindow.h
++++ b/Source/WebCore/page/DOMWindow.h
+@@ -161,7 +161,9 @@ public:
+     ExceptionOr<HTMLFrameOwnerElement*> frameElement() const;
+     ExceptionOr<Navigator&> navigator();
+     ExceptionOr<bool> offscreenBuffering() const;
++#if ENABLE(COOKIE_STORE_API)
+     ExceptionOr<CookieStore&> cookieStore();
++#endif
+     ExceptionOr<Screen&> screen();
+     ExceptionOr<double> devicePixelRatio() const;
+     ExceptionOr<StyleMedia&> styleMedia();
+diff --git a/Source/WebCore/page/LocalDOMWindow.cpp b/Source/WebCore/page/LocalDOMWindow.cpp
+index a86ae4a6cd7..14efa8d8cda 100644
+--- a/Source/WebCore/page/LocalDOMWindow.cpp
++++ b/Source/WebCore/page/LocalDOMWindow.cpp
+@@ -42,7 +42,9 @@
+ #include "ContentRuleListResults.h"
+ #include "ContentSecurityPolicy.h"
+ #include "ContextDestructionObserverInlines.h"
++#if ENABLE(COOKIE_STORE_API)
+ #include "CookieStore.h"
++#endif
+ #include "CrossOriginMode.h"
+ #include "CrossOriginOpenerPolicy.h"
+ #include "Crypto.h"
+@@ -3134,12 +3136,14 @@ void LocalDOMWindow::eventListenersDidChange()
+     }
+ }
+ 
++#if ENABLE(COOKIE_STORE_API)
+ CookieStore& LocalDOMWindow::cookieStore()
+ {
+     if (!m_cookieStore)
+         lazyInitialize(m_cookieStore, CookieStore::create(protect(document()).get()));
+     return *m_cookieStore;
+ }
++#endif // ENABLE(COOKIE_STORE_API)
+ 
+ CloseWatcherManager& LocalDOMWindow::closeWatcherManager()
+ {
+diff --git a/Source/WebCore/page/LocalDOMWindow.h b/Source/WebCore/page/LocalDOMWindow.h
+index 0a013f087a8..5dbda63eaf5 100644
+--- a/Source/WebCore/page/LocalDOMWindow.h
++++ b/Source/WebCore/page/LocalDOMWindow.h
+@@ -395,7 +395,9 @@ public:
+ 
+     WEBCORE_EXPORT static void forEachWindowInterestedInStorageEvents(NOESCAPE const Function<void(LocalDOMWindow&)>&);
+ 
++#if ENABLE(COOKIE_STORE_API)
+     CookieStore& cookieStore();
++#endif
+ 
+     CloseWatcherManager& closeWatcherManager();
+ 
+@@ -534,7 +536,9 @@ private:
+     mutable RefPtr<WebKitNamespace> m_webkitNamespace;
+ #endif
+ 
++#if ENABLE(COOKIE_STORE_API)
+     const RefPtr<CookieStore> m_cookieStore;
++#endif
+ 
+ #if ENABLE(DECLARATIVE_WEB_PUSH)
+     const std::unique_ptr<PushManager> m_pushManager;
+diff --git a/Source/WebCore/page/NavigatorBase.cpp b/Source/WebCore/page/NavigatorBase.cpp
+index 68a2e9109c6..d6a6e9bd21b 100644
+--- a/Source/WebCore/page/NavigatorBase.cpp
++++ b/Source/WebCore/page/NavigatorBase.cpp
+@@ -36,7 +36,9 @@
+ #include "Settings.h"
+ #include "StorageManager.h"
+ #include "WebCoreOpaqueRoot.h"
++#if ENABLE(WEB_LOCKS)
+ #include "WebLockManager.h"
++#endif
+ #include <mutex>
+ #include <wtf/Language.h>
+ #include <wtf/NeverDestroyed.h>
+@@ -159,6 +161,7 @@ StorageManager& NavigatorBase::storage()
+     return *m_storageManager;
+ }
+ 
++#if ENABLE(WEB_LOCKS)
+ WebLockManager& NavigatorBase::locks()
+ {
+     if (!m_webLockManager)
+@@ -166,6 +169,7 @@ WebLockManager& NavigatorBase::locks()
+ 
+     return *m_webLockManager;
+ }
++#endif
+ 
+ ServiceWorkerContainer& NavigatorBase::serviceWorker()
+ {
+diff --git a/Source/WebCore/page/NavigatorBase.h b/Source/WebCore/page/NavigatorBase.h
+index 4fe544a2f3c..530b4f705ac 100644
+--- a/Source/WebCore/page/NavigatorBase.h
++++ b/Source/WebCore/page/NavigatorBase.h
+@@ -71,7 +71,9 @@ public:
+     static Vector<String> languages();
+ 
+     StorageManager& storage();
++#if ENABLE(WEB_LOCKS)
+     WebLockManager& locks();
++#endif
+ 
+     int hardwareConcurrency(ScriptExecutionContext&);
+ 
+@@ -80,7 +82,9 @@ protected:
+ 
+ private:
+     const RefPtr<StorageManager> m_storageManager;
++#if ENABLE(WEB_LOCKS)
+     const RefPtr<WebLockManager> m_webLockManager;
++#endif
+ 
+ public:
+     ServiceWorkerContainer& serviceWorker();
+diff --git a/Source/WebCore/workers/service/ServiceWorkerContainer.cpp b/Source/WebCore/workers/service/ServiceWorkerContainer.cpp
+index 2b2f3a9c859..4aa8fa44c7f 100644
+--- a/Source/WebCore/workers/service/ServiceWorkerContainer.cpp
++++ b/Source/WebCore/workers/service/ServiceWorkerContainer.cpp
+@@ -39,7 +39,9 @@
+ #include "Exception.h"
+ #include "FrameLoader.h"
+ #include "IDLTypes.h"
++#if ENABLE(COOKIE_STORE_API)
+ #include "JSCookieStoreGetOptions.h"
++#endif
+ #include "JSDOMConvertBoolean.h"
+ #include "JSDOMConvertEnumeration.h"
+ #include "JSDOMConvertInterface.h"
+@@ -778,6 +780,7 @@ void ServiceWorkerContainer::getNavigationPreloadState(ServiceWorkerRegistration
+     });
+ }
+ 
++#if ENABLE(COOKIE_STORE_API)
+ void ServiceWorkerContainer::addCookieChangeSubscriptions(ServiceWorkerRegistrationIdentifier identifier, Vector<CookieChangeSubscription>&& subscriptions, Ref<DeferredPromise>&& promise)
+ {
+     protect(ensureSWClientConnection())->addCookieChangeSubscriptions(identifier, WTF::move(subscriptions), [promise = WTF::move(promise)](auto&& result) mutable {
+@@ -810,6 +813,7 @@ void ServiceWorkerContainer::cookieChangeSubscriptions(ServiceWorkerRegistration
+         }
+     });
+ }
++#endif // ENABLE(COOKIE_STORE_API)
+ 
+ void ServiceWorkerContainer::whenRegisterJobsAreFinished(CompletionHandler<void()>&& completionHandler)
+ {
+diff --git a/Source/WebCore/workers/service/ServiceWorkerContainer.h b/Source/WebCore/workers/service/ServiceWorkerContainer.h
+index 1cc823bd2e2..b4de80d41ea 100644
+--- a/Source/WebCore/workers/service/ServiceWorkerContainer.h
++++ b/Source/WebCore/workers/service/ServiceWorkerContainer.h
+@@ -115,9 +115,11 @@ public:
+     void setNavigationPreloadHeaderValue(ServiceWorkerRegistrationIdentifier, String&&, VoidPromise&&);
+     void getNavigationPreloadState(ServiceWorkerRegistrationIdentifier, NavigationPreloadStatePromise&&);
+ 
++#if ENABLE(COOKIE_STORE_API)
+     void addCookieChangeSubscriptions(ServiceWorkerRegistrationIdentifier, Vector<CookieChangeSubscription>&&, Ref<DeferredPromise>&&);
+     void removeCookieChangeSubscriptions(ServiceWorkerRegistrationIdentifier, Vector<CookieChangeSubscription>&&, Ref<DeferredPromise>&&);
+     void cookieChangeSubscriptions(ServiceWorkerRegistrationIdentifier, Ref<DeferredPromise>&&);
++#endif
+ 
+     void whenRegisterJobsAreFinished(CompletionHandler<void()>&&);
+ 
+diff --git a/Source/WebCore/workers/service/ServiceWorkerGlobalScope.cpp b/Source/WebCore/workers/service/ServiceWorkerGlobalScope.cpp
+index 34b51c7dad1..123d8da406c 100644
+--- a/Source/WebCore/workers/service/ServiceWorkerGlobalScope.cpp
++++ b/Source/WebCore/workers/service/ServiceWorkerGlobalScope.cpp
+@@ -273,12 +273,14 @@ void ServiceWorkerGlobalScope::addConsoleMessage(MessageSource source, MessageLe
+     WorkerGlobalScope::addConsoleMessage(source, level, message, requestIdentifier);
+ }
+ 
++#if ENABLE(COOKIE_STORE_API)
+ CookieStore& ServiceWorkerGlobalScope::cookieStore()
+ {
+     if (!m_cookieStore)
+         lazyInitialize(m_cookieStore, CookieStore::create(this));
+     return *m_cookieStore;
+ }
++#endif // ENABLE(COOKIE_STORE_API)
+ 
+ void ServiceWorkerGlobalScope::addFetchTask(FetchKey key, Ref<ServiceWorkerFetch::Client>&& client)
+ {
+diff --git a/Source/WebCore/workers/service/ServiceWorkerGlobalScope.h b/Source/WebCore/workers/service/ServiceWorkerGlobalScope.h
+index c6e01f71eb2..177357896d8 100644
+--- a/Source/WebCore/workers/service/ServiceWorkerGlobalScope.h
++++ b/Source/WebCore/workers/service/ServiceWorkerGlobalScope.h
+@@ -113,7 +113,9 @@ public:
+     WEBCORE_EXPORT void addConsoleMessage(MessageSource, MessageLevel, const String& message, unsigned long requestIdentifier) final;
+     void enableConsoleMessageReporting() { m_consoleMessageReportingEnabled = true; }
+ 
++#if ENABLE(COOKIE_STORE_API)
+     CookieStore& cookieStore();
++#endif
+ 
+     using FetchKey = std::pair<SWServerConnectionIdentifier, FetchIdentifier>;
+     void addFetchTask(FetchKey, Ref<ServiceWorkerFetch::Client>&&);
+@@ -159,7 +161,9 @@ private:
+ #endif
+     MonotonicTime m_lastPushEventTime;
+     bool m_consoleMessageReportingEnabled { false };
++#if ENABLE(COOKIE_STORE_API)
+     const RefPtr<CookieStore> m_cookieStore;
++#endif
+     bool m_hasFetchEventHandler { false };
+ 
+     struct FetchTask {
+diff --git a/Source/WebCore/workers/service/ServiceWorkerGlobalScope.idl b/Source/WebCore/workers/service/ServiceWorkerGlobalScope.idl
+index 0ce5bf8737f..a346b18a8e1 100644
+--- a/Source/WebCore/workers/service/ServiceWorkerGlobalScope.idl
++++ b/Source/WebCore/workers/service/ServiceWorkerGlobalScope.idl
+@@ -37,7 +37,7 @@
+ 
+     [NewObject] Promise<undefined> skipWaiting();
+ 
+-    [EnabledBySetting=CookieStoreAPIEnabled] readonly attribute CookieStore cookieStore;
++    [Conditional=COOKIE_STORE_API, EnabledBySetting=CookieStoreAPIEnabled] readonly attribute CookieStore cookieStore;
+ 
+     [EnabledBySetting=CookieStoreAPIEnabled&CookieStoreManagerEnabled] attribute EventHandler oncookiechange;
+     attribute EventHandler oninstall;
+diff --git a/Source/WebCore/workers/service/ServiceWorkerRegistration.cpp b/Source/WebCore/workers/service/ServiceWorkerRegistration.cpp
+index 6493a67f8e1..9b5e3ebd72b 100644
+--- a/Source/WebCore/workers/service/ServiceWorkerRegistration.cpp
++++ b/Source/WebCore/workers/service/ServiceWorkerRegistration.cpp
+@@ -354,6 +354,7 @@ void ServiceWorkerRegistration::getNotifications(const GetNotificationOptions& f
+ 
+ #endif // ENABLE(NOTIFICATION_EVENT)
+ 
++#if ENABLE(COOKIE_STORE_API)
+ CookieStoreManager& ServiceWorkerRegistration::cookies()
+ {
+     if (!m_cookieStoreManager)
+@@ -426,5 +427,6 @@ void ServiceWorkerRegistration::cookieChangeSubscriptions(Ref<DeferredPromise>&&
+ 
+     m_container->cookieChangeSubscriptions(identifier(), WTF::move(promise));
+ }
++#endif // ENABLE(COOKIE_STORE_API)
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/workers/service/ServiceWorkerRegistration.h b/Source/WebCore/workers/service/ServiceWorkerRegistration.h
+index ee745d52e6c..27e76985907 100644
+--- a/Source/WebCore/workers/service/ServiceWorkerRegistration.h
++++ b/Source/WebCore/workers/service/ServiceWorkerRegistration.h
+@@ -110,10 +110,12 @@ public:
+     void getNotifications(const GetNotificationOptions& filter, DOMPromiseDeferred<IDLSequence<IDLInterface<Notification>>>);
+ #endif
+ 
++#if ENABLE(COOKIE_STORE_API)
+     CookieStoreManager& cookies();
+     void addCookieChangeSubscriptions(Vector<CookieStoreGetOptions>&&, Ref<DeferredPromise>&&);
+     void removeCookieChangeSubscriptions(Vector<CookieStoreGetOptions>&&, Ref<DeferredPromise>&&);
+     void cookieChangeSubscriptions(Ref<DeferredPromise>&&);
++#endif
+ 
+ private:
+     ServiceWorkerRegistration(ScriptExecutionContext&, Ref<ServiceWorkerContainer>&&, ServiceWorkerRegistrationData&&);
+@@ -136,7 +138,9 @@ private:
+ 
+     const std::unique_ptr<NavigationPreloadManager> m_navigationPreload;
+ 
++#if ENABLE(COOKIE_STORE_API)
+     const RefPtr<CookieStoreManager> m_cookieStoreManager;
++#endif
+ };
+ 
+ WebCoreOpaqueRoot NODELETE root(ServiceWorkerRegistration*);
+diff --git a/Source/WebCore/workers/service/ServiceWorkerRegistration.idl b/Source/WebCore/workers/service/ServiceWorkerRegistration.idl
+index ae50d6e6ba3..150bc282c32 100644
+--- a/Source/WebCore/workers/service/ServiceWorkerRegistration.idl
++++ b/Source/WebCore/workers/service/ServiceWorkerRegistration.idl
+@@ -41,7 +41,7 @@
+     readonly attribute USVString scope;
+     readonly attribute ServiceWorkerUpdateViaCache updateViaCache;
+ 
+-    [Exposed=(Window, ServiceWorker), EnabledBySetting=CookieStoreAPIEnabled&CookieStoreManagerEnabled] readonly attribute CookieStoreManager cookies;
++    [Conditional=COOKIE_STORE_API, Exposed=(Window, ServiceWorker), EnabledBySetting=CookieStoreAPIEnabled&CookieStoreManagerEnabled] readonly attribute CookieStoreManager cookies;
+ 
+     [NewObject] Promise<ServiceWorkerRegistration> update();
+     [NewObject] Promise<boolean> unregister();
+diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
+index 164ac8258d9..4358ada8c81 100644
+--- a/Source/cmake/OptionsAmiga.cmake
++++ b/Source/cmake/OptionsAmiga.cmake
+@@ -61,6 +61,7 @@ WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SYSTEM_MALLOC PRIVATE ON)
+ # One process, no GPU, no media, no remote inspector.
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_ASYNC_SCROLLING PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_CONTEXT_MENUS PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_COOKIE_STORE_API PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FULLSCREEN_API PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_GAMEPAD PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_GEOLOCATION PRIVATE OFF)
+@@ -70,11 +71,15 @@ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_JAVASCRIPT_SHELL PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_MATHML PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_NOTIFICATIONS PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_REMOTE_INSPECTOR PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SCREEN_WAKE_LOCK PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SHAPE_DETECTION PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SMOOTH_SCROLLING PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_USER_MESSAGE_HANDLERS PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_VIDEO PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_VIDEO_USES_ELEMENT_FULLSCREEN PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_AUDIO PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_LOCKS PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_TRANSPORT PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBGL PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_XSLT PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_AVIF PRIVATE OFF)
+diff --git a/Source/cmake/WebKitFeatures.cmake b/Source/cmake/WebKitFeatures.cmake
+index 277025b5974..d599cd9133a 100644
+--- a/Source/cmake/WebKitFeatures.cmake
++++ b/Source/cmake/WebKitFeatures.cmake
+@@ -224,6 +224,7 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_CONTENT_EXTENSIONS "Toggle Content Extensions support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_CONTENT_FILTERING "Toggle content filtering support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_CONTEXT_MENUS "Toggle Context Menu support" PRIVATE ON)
++    WEBKIT_OPTION_DEFINE(ENABLE_COOKIE_STORE_API "Toggle Cookie Store API support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_CSS_TAP_HIGHLIGHT_COLOR "Toggle CSS -webkit-tap-highlight-color support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_CURSOR_VISIBILITY "Toggle cursor visibility support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_C_LOOP "Enable CLoop interpreter" PRIVATE ${ENABLE_C_LOOP_DEFAULT})
+@@ -280,6 +281,8 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_PDF_HUD "Toggle PDF HUD support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_PDF_PLUGIN "Toggle PDF plugin support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_PDFKIT_PLUGIN "Toggle PDFKit plugin support" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_SCREEN_WAKE_LOCK "Toggle Screen Wake Lock API support" PRIVATE ON)
++    WEBKIT_OPTION_DEFINE(ENABLE_SHAPE_DETECTION "Toggle Shape Detection API support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_UNIFIED_PDF "Toggle unified PDF support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_PERIODIC_MEMORY_MONITOR "Toggle periodical memory monitor support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_UIPROCESS_PERIODIC_MEMORY_MONITOR "Toggle UIProcess periodic memory monitor support" PRIVATE OFF)
+@@ -331,7 +334,9 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_AUDIO "Toggle Web Audio support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_AUTHN "Toggle Web AuthN support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_CODECS "Toggle WebCodecs support" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_WEB_LOCKS "Toggle Web Locks API support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_WEB_RTC "Toggle WebRTC support" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_WEB_TRANSPORT "Toggle WebTransport support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_WIRELESS_PLAYBACK_TARGET "Toggle wireless playback target support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_WK_WEB_EXTENSIONS "Toggle WebExtensions support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_WRITING_TOOLS "Toggle Writing Tools support" PRIVATE OFF)
