@@ -41,7 +41,7 @@ All 585 JavaScript handlers (narrow, wide16, wide32) convert, with 2,745 holes.
 ```sh
 apt-get install -y binutils-m68k-linux-gnu g++-m68k-linux-gnu qemu-user
 # LLIntAssembly.h from a 68k build; it can also be generated on Linux, see
-# /mnt/project-files/jsjit/HANDOVER.md
+# the JS JIT handover notes
 tools/jsjit/test/run_qemu_test.sh path/to/LLIntAssembly.h
 ```
 
