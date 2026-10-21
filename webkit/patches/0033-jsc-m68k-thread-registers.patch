@@ -1,0 +1,189 @@
+From 84dcc19ef1561661f205aa3cc3474a07451ef532 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 01:22:52 +0000
+Subject: [PATCH] JavaScriptCore: each thread keeps its own 68k interpreter
+ registers
+
+The 68k interpreter keeps its registers in one register file
+(jsc_m68k_vrf), with jsc_m68k_cloop_sp_field beside it. AmigaOS runs
+threads preemptively, and WebCore's workers run JavaScript on threads of
+their own while the main thread runs the page's, so a task switch in the
+middle of either let the other overwrite its stack pointer, link register
+and t registers. The worker then died in the stack check
+(callSiteBitsAsBytecodeOffset under llint_check_stack_and_vm_traps) and
+the page waited for it for ever: reddit stopped at about 50 s once
+reCAPTCHA started its worker, with or without the template JIT.
+
+- The first time a thread enters the interpreter it gets a slot and
+  exec's task switch hooks: tc_Switch saves the register file and the
+  stack pointer field when the thread loses the CPU, tc_Launch puts its
+  own back when it gets it. Slots of threads that have ended are taken
+  back when a new thread attaches.
+- The CLoopStack stack pointer field is found once, as an offset (it is
+  the same in every CLoopStack), instead of one cached address shared by
+  every thread's stack.
+---
+ .../llint/LowLevelInterpreter.cpp             | 132 +++++++++++++++++-
+ 1 file changed, 125 insertions(+), 7 deletions(-)
+
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+index 6e7ecbb49a..be6ecef5e1 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+@@ -43,6 +43,11 @@
+ #include <wtf/Assertions.h>
+ #include <wtf/MathExtras.h>
+ 
++#if OS(AMIGA) && OFFLINE_ASM_M68K
++#include <exec/execbase.h>
++#include <proto/exec.h>
++#endif
++
+ using namespace JSC::LLInt;
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+@@ -387,6 +392,114 @@ static void setM68KSlot(M68KSlot slot, uint64_t value)
+     jsc_m68k_vrf[slot] = value;
+ }
+ 
++#if OS(AMIGA)
++// AmigaOS runs threads preemptively, and WebCore's workers run JavaScript
++// on threads of their own while the main thread runs the page's, but the
++// interpreter keeps its registers in the one register file above. So each
++// thread that runs JavaScript gets exec's task switch hooks: tc_Switch
++// saves the register file (and jsc_m68k_cloop_sp_field) when the thread
++// loses the CPU, and tc_Launch puts its own back when it gets it again.
++// Exec calls the hooks in supervisor mode between tasks; they are plain
++// integer code on the supervisor stack, and keep every register.
++static constexpr unsigned M68KRegisterWords = M68KSlotCount * 2;
++static constexpr unsigned M68KThreadSlots = 32;
++
++struct M68KThreadRegisters {
++    struct Task* task;
++    uint32_t registers[M68KRegisterWords];
++    void* stackPointerField;
++};
++
++static M68KThreadRegisters m68kThreads[M68KThreadSlots];
++
++static M68KThreadRegisters* m68kThreadFor(struct Task* task)
++{
++    for (auto& thread : m68kThreads) {
++        if (thread.task == task)
++            return &thread;
++    }
++    return nullptr;
++}
++
++extern "C" void jsc_m68k_switch_registers(int launch)
++{
++    M68KThreadRegisters* thread = m68kThreadFor(SysBase->ThisTask);
++    uint32_t* file = reinterpret_cast<uint32_t*>(jsc_m68k_vrf);
++    if (!thread)
++        return;
++    if (launch) {
++        for (unsigned i = 0; i < M68KRegisterWords; ++i)
++            file[i] = thread->registers[i];
++        jsc_m68k_cloop_sp_field = thread->stackPointerField;
++    } else {
++        for (unsigned i = 0; i < M68KRegisterWords; ++i)
++            thread->registers[i] = file[i];
++        thread->stackPointerField = jsc_m68k_cloop_sp_field;
++    }
++}
++
++extern "C" void jsc_m68k_task_switch();
++extern "C" void jsc_m68k_task_launch();
++__asm__(
++    ".text\n"
++    ".balign 2\n"
++    ".globl _jsc_m68k_task_switch\n"
++    "_jsc_m68k_task_switch:\n"
++    "    movem.l d0-d1/a0-a1,-(sp)\n"
++    "    clr.l -(sp)\n"
++    "    jsr _jsc_m68k_switch_registers\n"
++    "    addq.l #4,sp\n"
++    "    movem.l (sp)+,d0-d1/a0-a1\n"
++    "    rts\n"
++    ".globl _jsc_m68k_task_launch\n"
++    "_jsc_m68k_task_launch:\n"
++    "    movem.l d0-d1/a0-a1,-(sp)\n"
++    "    pea 1.w\n"
++    "    jsr _jsc_m68k_switch_registers\n"
++    "    addq.l #4,sp\n"
++    "    movem.l (sp)+,d0-d1/a0-a1\n"
++    "    rts\n"
++);
++
++static bool m68kTaskExists(struct Task* task)
++{
++    struct Node* node;
++    if (task == SysBase->ThisTask)
++        return true;
++    for (node = SysBase->TaskReady.lh_Head; node->ln_Succ; node = node->ln_Succ) {
++        if (reinterpret_cast<struct Task*>(node) == task)
++            return true;
++    }
++    for (node = SysBase->TaskWait.lh_Head; node->ln_Succ; node = node->ln_Succ) {
++        if (reinterpret_cast<struct Task*>(node) == task)
++            return true;
++    }
++    return false;
++}
++
++// The first time a thread enters the interpreter: a slot, and the hooks.
++// The register file holds no other thread's values now (theirs were saved
++// as they lost the CPU), so the slot needs nothing until this thread's own
++// first switch. Slots of threads that have ended are taken back here.
++static void attachM68KThread(struct Task* task)
++{
++    Disable();
++    M68KThreadRegisters* thread = m68kThreadFor(task);
++    for (auto& other : m68kThreads) {
++        if (other.task && &other != thread && !m68kTaskExists(other.task))
++            other.task = nullptr;
++    }
++    if (!thread)
++        thread = m68kThreadFor(nullptr);
++    RELEASE_ASSERT(thread);
++    thread->task = task;
++    task->tc_Switch = reinterpret_cast<decltype(task->tc_Switch)>(jsc_m68k_task_switch);
++    task->tc_Launch = reinterpret_cast<decltype(task->tc_Launch)>(jsc_m68k_task_launch);
++    task->tc_Flags |= TF_SWITCH | TF_LAUNCH;
++    Enable();
++}
++#endif
++
+ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm, ProtoCallFrame* protoCallFrame, bool isInitializationPass)
+ {
+     if (isInitializationPass) [[unlikely]] {
+@@ -428,14 +541,19 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm,
+     uint32_t savedRegisters[M68KKeptWords];
+     copyM68KWords(savedRegisters, reinterpret_cast<uint32_t*>(&jsc_m68k_vrf[M68KSlotFirstKept]));
+     void* savedStackPointerField = jsc_m68k_cloop_sp_field;
+-    // The field's address only changes with the stack.
+-    static CLoopStack* stackOfField;
+-    static void* stackPointerField;
+-    if (stackOfField != &cloopStack) [[unlikely]] {
+-        stackPointerField = findCLoopStackPointerField(cloopStack);
+-        stackOfField = &cloopStack;
++#if OS(AMIGA)
++    {
++        struct Task* task = SysBase->ThisTask;
++        if (task->tc_Launch != reinterpret_cast<decltype(task->tc_Launch)>(jsc_m68k_task_launch)) [[unlikely]]
++            attachM68KThread(task);
+     }
+-    jsc_m68k_cloop_sp_field = stackPointerField;
++#endif
++    // The field is at the same place in every CLoopStack (each thread's VM
++    // has its own), so its offset is found once.
++    static ptrdiff_t stackPointerFieldOffset = -1;
++    if (stackPointerFieldOffset < 0) [[unlikely]]
++        stackPointerFieldOffset = static_cast<uint8_t*>(findCLoopStackPointerField(cloopStack)) - reinterpret_cast<uint8_t*>(&cloopStack);
++    jsc_m68k_cloop_sp_field = reinterpret_cast<uint8_t*>(&cloopStack) + stackPointerFieldOffset;
+ 
+     // The incoming arguments of doVMEntryToJavaScript, and the C loop's
+     // initial registers.
+-- 
+2.43.0
+
