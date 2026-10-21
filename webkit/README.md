@@ -180,6 +180,14 @@ The patches, in order:
   code to a compiled function skip the interpreter's prologue: each
   function's code starts with its own.
 
+- `0033-jsc-m68k-thread-registers.patch`: each thread that runs
+  JavaScript keeps its own interpreter registers. The 68k interpreter's
+  register file is one global, and AmigaOS switches threads preemptively,
+  so a worker and the main thread overwrote each other's sp, lr and t
+  registers (reddit's reCAPTCHA worker died in the stack check, and the
+  page waited for it for ever). exec's tc_Switch and tc_Launch hooks save
+  and restore the register file per thread.
+
 - `0034-jsc-m68k-jit-arrays-calls-in-loops.patch`: get_by_val, put_by_val
   and get_length get their own code for int32 and contiguous arrays
   (in-bounds, no holes; anything else is the template). Loop register
