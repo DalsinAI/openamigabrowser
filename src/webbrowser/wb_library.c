@@ -124,6 +124,9 @@ static APTR wbOpenView(REG(d0, LONG width), REG(d1, LONG height), REG(a0, struct
     m.arg[3] = GetTagData(WBA_Pictures, TRUE, tags);
     m.arg[4] = (LONG)GetTagData(WBA_Signal, (ULONG)-1, tags);
     result = ask(&m);
+    /* The engine quits when idle, and may have just done so. */
+    if (result == WBERR_NOENGINE && ensureEngine())
+        result = ask(&m);
     return result > 0 ? (APTR)result : NULL;
 }
 
@@ -299,6 +302,7 @@ static LONG wbScroll(REG(a0, APTR view), REG(d0, LONG dx), REG(d1, LONG dy), REG
 static LONG wbOpenBrowser(REG(a0, CONST_STRPTR url), REG(a1, struct TagItem *tags), REG(a6, struct Library *base))
 {
     struct WBMessage m;
+    LONG result;
     (void)base;
     if (!ensureEngine())
         return WBERR_NOENGINE;
@@ -309,7 +313,10 @@ static LONG wbOpenBrowser(REG(a0, CONST_STRPTR url), REG(a1, struct TagItem *tag
     m.arg[1] = GetTagData(WBA_Pictures, TRUE, tags);
     m.arg[2] = GetTagData(WBA_WebFonts, FALSE, tags);
     m.arg[3] = GetTagData(WBA_Lite, FALSE, tags);
-    return ask(&m);
+    result = ask(&m);
+    if (result == WBERR_NOENGINE && ensureEngine())
+        result = ask(&m);
+    return result;
 }
 
 static LONG wbShutdown(REG(a6, struct Library *base))
