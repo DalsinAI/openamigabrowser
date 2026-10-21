@@ -222,6 +222,10 @@ The patches, in order:
   atom strings; `CodeBlock::bytecodeOffset` takes the CodeBlock's raw
   instructions pointer on 68k, which makes every slow path's
   setCurrentVPC cheaper.
+- `0043-jsc-m68k-jit-virtual-calls.patch`: a fix for 0035's polymorphic
+  calls. A virtual call link (a site with more callees than a polymorphic
+  stub holds, or a construct site whose callees have no call CodeBlock)
+  was taken for a polymorphic stub and crashed; it now takes the template.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
