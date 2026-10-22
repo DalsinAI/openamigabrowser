@@ -239,19 +239,26 @@ JSValueRef throwTypeError(Task *t, JSValueRef *exception, const char *message)
     return JSValueMakeUndefined(t->ctx);
 }
 
+template<typename T> T fieldAt(const char *p)
+{
+    T v;
+    memcpy(&v, p, sizeof v);
+    return v;
+}
+
 JSValueRef readField(Task *t, const JSHostSlot *slot, void *object)
 {
     const char *p = static_cast<const char *>(object) + slot->js_Offset;
     switch (slot->js_Type) {
-    case JSF_LONG: return JSValueMakeNumber(t->ctx, *reinterpret_cast<const LONG *>(p));
-    case JSF_ULONG: return JSValueMakeNumber(t->ctx, *reinterpret_cast<const ULONG *>(p));
-    case JSF_WORD: return JSValueMakeNumber(t->ctx, *reinterpret_cast<const WORD *>(p));
-    case JSF_UWORD: return JSValueMakeNumber(t->ctx, *reinterpret_cast<const UWORD *>(p));
+    case JSF_LONG: return JSValueMakeNumber(t->ctx, fieldAt<LONG>(p));
+    case JSF_ULONG: return JSValueMakeNumber(t->ctx, fieldAt<ULONG>(p));
+    case JSF_WORD: return JSValueMakeNumber(t->ctx, fieldAt<WORD>(p));
+    case JSF_UWORD: return JSValueMakeNumber(t->ctx, fieldAt<UWORD>(p));
     case JSF_BYTE: return JSValueMakeNumber(t->ctx, *reinterpret_cast<const BYTE *>(p));
     case JSF_UBYTE: return JSValueMakeNumber(t->ctx, *reinterpret_cast<const UBYTE *>(p));
     case JSF_BOOL: return JSValueMakeBoolean(t->ctx, *reinterpret_cast<const UBYTE *>(p) != 0);
     case JSF_STRPTR: {
-        const char *s = *reinterpret_cast<const char *const *>(p);
+        const char *s = fieldAt<const char *>(p);
         if (!s)
             return JSValueMakeNull(t->ctx);
         JSStringRef str = JSStringCreateWithUTF8CString(s);
