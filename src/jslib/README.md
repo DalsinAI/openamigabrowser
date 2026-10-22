@@ -21,6 +21,9 @@ CloseLibrary(JavaScriptBase);
 
 From the Shell: `JS script.js arg1 arg2` or `JS EVAL "print(6 * 7)"`.
 
+The engine's `JSON.parse` parses through json.library (WebKit patch 0058),
+so `LIBS:json.library` (version 1) must be installed beside it.
+
 ## Translate once
 
 A task made with `JSA_CacheDir` keeps what the engine makes from each

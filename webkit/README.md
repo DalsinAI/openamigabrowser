@@ -291,6 +291,14 @@ The patches, in order:
   controllers, canvas calls are never traced, and the heap has no
   injected-script subspaces. Console messages still reach the
   ChromeClient. The stripped engine is 3.26 MB smaller.
+- `0058-amiga-json-parse-json-library.patch`: `JSON.parse` (with or
+  without a reviver), `JSON.rawJSON` and JavaScriptCore's `JSONParse` parse
+  through json.library (`src/jsonlib`) on the 68k, the browser's and
+  javascript.library's engine alike, and LiteralParser and the eval and
+  JSONP fast paths built on it are left out: about 1.2 MB less engine.
+  `LIBS:json.library` (version 1) must be installed; without it
+  `JSON.parse` throws an Error that says so. Also checks the stack in the
+  fast `JSON.stringify` on the 68k (no guard page below the stack).
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

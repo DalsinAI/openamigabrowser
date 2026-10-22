@@ -22,7 +22,8 @@
 #   WEBBROWSER_LIB webbrowser.library (default src/webbrowser/bin/, where
 #                  src/webbrowser/build-library.sh puts it)
 #   JSON_LIB       json.library (default build/json-library/, scripts/build-json-library.sh);
-#                  the Installer puts it in LIBS:
+#                  the Installer puts it in LIBS:. Required: the engine's
+#                  JSON.parse parses through it (WebKit patch 0058)
 #   EXTRAS         optional: a folder with Libs/javascript.library,
 #                  Libs/JavaScript/JavaScriptEngine, C/JS and
 #                  Libs/json.library, which the Installer offers
@@ -69,7 +70,8 @@ for t in "$D" "$E"; do
 done
 cp "$OPENTLS_LIBS/opentls.library" "$OPENTLS_LIBS/opencrypto.library" "$D/Libs/"
 JSONLIB=${JSON_LIB:-"$HERE/build/json-library/json.library"}
-if [ -f "$JSONLIB" ]; then cp "$JSONLIB" "$D/Libs/"; else echo "note: no $JSONLIB (scripts/build-json-library.sh)"; fi
+[ -f "$JSONLIB" ] || { echo "package-browser.sh: no $JSONLIB (scripts/build-json-library.sh); the engine's JSON.parse needs it" >&2; exit 2; }
+cp "$JSONLIB" "$D/Libs/"
 cp "$CA_BUNDLE/ca-bundle.pem" "$D/S/OpenTLS/"
 [ -f "$CA_BUNDLE/ca-bundle.LICENSE" ] && cp "$CA_BUNDLE/ca-bundle.LICENSE" "$D/S/OpenTLS/"
 cp "$HERE/dist/OpenBrowser/Install" "$D/Install"

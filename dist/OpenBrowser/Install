@@ -12,7 +12,8 @@
 ;    .before-20261022 and the drawer's goes in; one whose version cannot be
 ;    read (not loaded, no $VER in the file) is kept: the Installer reads
 ;    the RomTag and checks it;
-;  - LIBS:json.library and S:OpenTLS/ca-bundle.pem when missing;
+;  - LIBS:json.library (the engine's JSON.parse needs it) and
+;    S:OpenTLS/ca-bundle.pem when missing;
 ;  - with webbrowser.library installed (LIBS:WebBrowser), the installed
 ;    engine is renamed WebBrowserEngine.before-20261022 and
 ;    LIBS:WebBrowser/WebBrowserEngine becomes a two-line script (bit S) that

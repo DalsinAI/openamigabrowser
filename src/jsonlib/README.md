@@ -195,8 +195,10 @@ call through its registers) and `JSONTest FILE BENCH`.
 ## Later
 
 - The JavaScript engine may one day wrap a block lazily (JSON.parse
-  without making every object up front); JavaScriptCore's own `JSON.parse`
-  is not changed by this library.
+  without making every object up front). Since WebKit patch 0058,
+  JavaScriptCore's `JSON.parse` on the 68k parses through this library
+  (`JSONParse`, then one loop over the nodes), and JavaScriptCore's own
+  JSON parser is no longer built there.
 - A tags-taking parse call if options outgrow the flags; new calls go at
   the end of the SFD.
 
