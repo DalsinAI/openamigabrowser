@@ -55,7 +55,8 @@
 #                   -O2 rather than CMake's -O3)
 #                   for a new build folder; an existing folder keeps its
 #                   choice. Use a separate WEBKIT_BUILD to compare them.
-#                                                               (default size)
+#                   "js" costs about 6 MB of code and runs pages 1.1-1.65x
+#                   faster on a 68040 than "size".          (default js)
 #   OB_GC_SECTIONS  1: each function and variable in its own section, and the
 #                   linker drops the ones nothing uses (-ffunction-sections
 #                   -fdata-sections, --gc-sections). For a new build folder;
@@ -296,7 +297,7 @@ configure_engine() {
         cmake "$BUILD" "$@"
         return
     fi
-    case "${OB_OPTIMIZE:-size}" in
+    case "${OB_OPTIMIZE:-js}" in
         size) set -- "$@" -DCMAKE_BUILD_TYPE=MinSizeRel ;;
         js) set -- "$@" -DCMAKE_BUILD_TYPE=MinSizeRel \
             -DCMAKE_PROJECT_INCLUDE="$ROOT/scripts/cmake/ob-optimize-js.cmake" ;;
