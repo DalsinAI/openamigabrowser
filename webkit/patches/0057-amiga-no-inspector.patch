@@ -1,0 +1,1059 @@
+From bd00943c7bfae04d5044921b70a44758a5f204db Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 21:03:17 +0100
+Subject: [PATCH] WebCore and JavaScriptCore: no Web Inspector on the Amiga
+ port
+
+The Amiga port has no inspector frontend, local or remote, but the
+inspector was still compiled and linked: about 2.8 MB of the engine.
+Under PLATFORM(AMIGA) WebCore leaves inspector/ and its bindings out of
+the build, and JavaScriptCore keeps only what the console uses (console
+messages, their arguments and call stacks). InspectorInstrumentation
+returns at once, Page, LocalFrame and worker global scopes have no
+inspector controllers, canvas calls are never traced, and the heap has
+no subspaces for the injected script host or inspector call frames.
+Console messages still reach the ChromeClient.
+
+Team 3
+---
+ Source/JavaScriptCore/PlatformAmiga.cmake     | 11 ++++++
+ Source/JavaScriptCore/heap/Heap.cpp           |  2 +
+ Source/JavaScriptCore/heap/Heap.h             | 15 ++++++-
+ .../JavaScriptCore/heap/HeapSubspaceTypes.h   |  4 ++
+ .../inspector/ConsoleMessage.cpp              |  7 ++++
+ .../JavaScriptCore/inspector/ConsoleMessage.h |  2 +
+ .../inspector/ScriptCallStackFactory.cpp      |  6 +++
+ Source/WebCore/PlatformAmiga.cmake            | 11 ++++++
+ .../WebCore/bindings/js/JSDOMWindowBase.cpp   |  7 ++++
+ Source/WebCore/dom/Node.cpp                   |  4 ++
+ Source/WebCore/html/CanvasBase.cpp            |  2 +
+ Source/WebCore/html/CanvasBase.h              |  4 ++
+ .../html/canvas/CanvasRenderingContext.h      |  5 +++
+ .../inspector/InspectorInstrumentation.h      | 39 +++++++++++++++++++
+ .../InspectorInstrumentationPublic.h          | 13 +++++++
+ Source/WebCore/loader/FrameLoader.cpp         |  4 ++
+ Source/WebCore/page/ContextMenuController.cpp | 14 ++++++-
+ Source/WebCore/page/LocalFrame.cpp            |  8 ++++
+ Source/WebCore/page/LocalFrame.h              |  4 ++
+ Source/WebCore/page/LocalFrameView.cpp        |  6 +++
+ Source/WebCore/page/Page.cpp                  | 10 +++++
+ Source/WebCore/page/Page.h                    |  4 ++
+ .../WebCore/workers/WorkerInspectorProxy.cpp  |  8 ++++
+ .../workers/WorkerOrWorkletGlobalScope.cpp    |  6 +++
+ .../workers/WorkerOrWorkletGlobalScope.h      |  4 ++
+ .../context/ServiceWorkerInspectorProxy.cpp   |  8 ++++
+ 26 files changed, 205 insertions(+), 3 deletions(-)
+
+diff --git a/Source/JavaScriptCore/PlatformAmiga.cmake b/Source/JavaScriptCore/PlatformAmiga.cmake
+index a9992017ace..ced0cb6c1ed 100644
+--- a/Source/JavaScriptCore/PlatformAmiga.cmake
++++ b/Source/JavaScriptCore/PlatformAmiga.cmake
+@@ -4,3 +4,14 @@ include(${CMAKE_CURRENT_LIST_DIR}/PlatformJSCOnly.cmake)
+ # The C-loop interpreter runs every line of JavaScript: build it for speed
+ # (-O2) even when the rest is built for size.
+ target_compile_options(LowLevelInterpreterLib PRIVATE -O2)
++
++# No Web Inspector: the Amiga port has no inspector frontend, local or
++# remote. Of JavaScriptCore's inspector/ folder only what WebCore's console
++# uses is built (console messages, their arguments and call stacks); the
++# agents, the injected script, the protocol's dispatchers and objects and
++# the global object's inspector controller are left out.
++list(APPEND JavaScriptCore_UNIFIED_SOURCE_EXCLUDES
++    "^inspector/agents/"
++    "^inspector/(ContentSearchUtilities|InjectedScript|InspectorAgentRegistry|InspectorBackendDispatcher|InspectorFrontendDispatchers|InspectorFrontendRouter|InspectorProtocolObjects|InspectorTarget)"
++    "^inspector/(JSGlobalObjectConsoleClient|JSGlobalObjectDebugger|JSGlobalObjectInspectorController|JSInjectedScriptHost|JSJavaScriptCallFrame|JavaScriptCallFrame|PerGlobalObjectWrapperWorld|ScriptFunctionCall)"
++)
+diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/Heap.cpp
+index 9e0f49568b8..d92807574d7 100644
+--- a/Source/JavaScriptCore/heap/Heap.cpp
++++ b/Source/JavaScriptCore/heap/Heap.cpp
+@@ -321,8 +321,10 @@ Heap::Heap(VM& vm, HeapType heapType)
+     , finalizationRegistryCellType(IsoHeapCellType::Args<JSFinalizationRegistry>())
+     , globalLexicalEnvironmentHeapCellType(IsoHeapCellType::Args<JSGlobalLexicalEnvironment>())
+     , globalObjectHeapCellType(IsoHeapCellType::Args<JSGlobalObject>())
++#if !PLATFORM(AMIGA)
+     , injectedScriptHostSpaceHeapCellType(IsoHeapCellType::Args<Inspector::JSInjectedScriptHost>())
+     , javaScriptCallFrameHeapCellType(IsoHeapCellType::Args<Inspector::JSJavaScriptCallFrame>())
++#endif
+     , jsModuleRecordHeapCellType(IsoHeapCellType::Args<JSModuleRecord>())
+     , syntheticModuleRecordHeapCellType(IsoHeapCellType::Args<SyntheticModuleRecord>())
+     , moduleNamespaceObjectHeapCellType(IsoHeapCellType::Args<JSModuleNamespaceObject>())
+diff --git a/Source/JavaScriptCore/heap/Heap.h b/Source/JavaScriptCore/heap/Heap.h
+index 410464096f1..023499b1e8b 100644
+--- a/Source/JavaScriptCore/heap/Heap.h
++++ b/Source/JavaScriptCore/heap/Heap.h
+@@ -209,6 +209,16 @@ class Heap;
+ #define FOR_EACH_JSC_WEBASSEMBLY_DYNAMIC_NON_ISO_SUBSPACE(v)
+ #endif
+ 
++// The Amiga port has no Web Inspector: no injected script host and no
++// inspector call frames.
++#if PLATFORM(AMIGA)
++#define FOR_EACH_JSC_INSPECTOR_DYNAMIC_ISO_SUBSPACE(v)
++#else
++#define FOR_EACH_JSC_INSPECTOR_DYNAMIC_ISO_SUBSPACE(v) \
++    v(injectedScriptHostSpace, injectedScriptHostSpaceHeapCellType, Inspector::JSInjectedScriptHost) \
++    v(javaScriptCallFrameSpace, javaScriptCallFrameHeapCellType, Inspector::JSJavaScriptCallFrame)
++#endif
++
+ #define FOR_EACH_JSC_DYNAMIC_ISO_SUBSPACE(v) \
+     FOR_EACH_JSC_OBJC_API_DYNAMIC_ISO_SUBSPACE(v) \
+     FOR_EACH_JSC_GLIB_API_DYNAMIC_ISO_SUBSPACE(v) \
+@@ -241,7 +251,6 @@ class Heap;
+     v(functionWithFieldsSpace, cellHeapCellType, JSFunctionWithFields) \
+     v(generatorSpace, cellHeapCellType, JSGenerator) \
+     v(globalObjectSpace, globalObjectHeapCellType, JSGlobalObject) \
+-    v(injectedScriptHostSpace, injectedScriptHostSpaceHeapCellType, Inspector::JSInjectedScriptHost) \
+     v(int8ArraySpace, cellHeapCellType, JSInt8Array) \
+     v(int16ArraySpace, cellHeapCellType, JSInt16Array) \
+     v(int32ArraySpace, cellHeapCellType, JSInt32Array) \
+@@ -258,7 +267,6 @@ class Heap;
+     v(intlSegmenterSpace, intlSegmenterHeapCellType, IntlSegmenter) \
+     v(intlSegmentsSpace, intlSegmentsHeapCellType, IntlSegments) \
+     v(iteratorHelperSpace, cellHeapCellType, JSIteratorHelper) \
+-    v(javaScriptCallFrameSpace, javaScriptCallFrameHeapCellType, Inspector::JSJavaScriptCallFrame) \
+     v(jsModuleRecordSpace, jsModuleRecordHeapCellType, JSModuleRecord) \
+     v(moduleRegistryEntrySpace, destructibleCellHeapCellType, ModuleRegistryEntry) \
+     v(moduleLoadingContextSpace, destructibleCellHeapCellType, ModuleLoadingContext) \
+@@ -314,6 +322,7 @@ class Heap;
+     v(moduleLoaderPayloadSpace, cellHeapCellType, ModuleLoaderPayload) \
+     v(moduleGraphLoadingStateSpace, destructibleCellHeapCellType, ModuleGraphLoadingState) \
+     \
++    FOR_EACH_JSC_INSPECTOR_DYNAMIC_ISO_SUBSPACE(v) \
+     FOR_EACH_JSC_WEBASSEMBLY_DYNAMIC_ISO_SUBSPACE(v)
+ 
+ typedef HashCountedSet<JSCell*> ProtectCountSet;
+@@ -979,8 +988,10 @@ public:
+     IsoHeapCellType finalizationRegistryCellType;
+     IsoHeapCellType globalLexicalEnvironmentHeapCellType;
+     IsoHeapCellType globalObjectHeapCellType;
++#if !PLATFORM(AMIGA)
+     IsoHeapCellType injectedScriptHostSpaceHeapCellType;
+     IsoHeapCellType javaScriptCallFrameHeapCellType;
++#endif
+     IsoHeapCellType jsModuleRecordHeapCellType;
+     IsoHeapCellType syntheticModuleRecordHeapCellType;
+     IsoHeapCellType moduleNamespaceObjectHeapCellType;
+diff --git a/Source/JavaScriptCore/heap/HeapSubspaceTypes.h b/Source/JavaScriptCore/heap/HeapSubspaceTypes.h
+index 826c86d63d0..d448ba17f66 100644
+--- a/Source/JavaScriptCore/heap/HeapSubspaceTypes.h
++++ b/Source/JavaScriptCore/heap/HeapSubspaceTypes.h
+@@ -73,9 +73,13 @@
+ #include "JSGlobalLexicalEnvironment.h"
+ #include "JSGlobalObject.h"
+ #include "JSGlobalProxy.h"
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+ #include "JSInjectedScriptHost.h"
++#endif
+ #include "JSIteratorHelper.h"
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+ #include "JSJavaScriptCallFrame.h"
++#endif
+ #include "JSMap.h"
+ #include "JSMapIterator.h"
+ #include "JSModuleNamespaceObject.h"
+diff --git a/Source/JavaScriptCore/inspector/ConsoleMessage.cpp b/Source/JavaScriptCore/inspector/ConsoleMessage.cpp
+index acf80c27f72..0b7aa4e47a3 100644
+--- a/Source/JavaScriptCore/inspector/ConsoleMessage.cpp
++++ b/Source/JavaScriptCore/inspector/ConsoleMessage.cpp
+@@ -32,9 +32,11 @@
+ #include "ConsoleMessage.h"
+ 
+ #include "IdentifiersFactory.h"
++#if !PLATFORM(AMIGA)
+ #include "InjectedScript.h"
+ #include "InjectedScriptManager.h"
+ #include "InspectorFrontendDispatchers.h"
++#endif
+ #include "JSCellInlines.h"
+ #include "JSGlobalObject.h"
+ #include "JSString.h"
+@@ -185,6 +187,8 @@ void ConsoleMessage::autogenerateMetadata(JSC::JSGlobalObject* globalObject)
+     }
+ }
+ 
++#if !PLATFORM(AMIGA)
++// The Amiga port has no Web Inspector: no message goes to a frontend.
+ static Protocol::Console::ChannelSource NODELETE messageSourceValue(MessageSource source)
+ {
+     switch (source) {
+@@ -324,6 +328,7 @@ void ConsoleMessage::addToFrontend(ConsoleFrontendDispatcher& consoleFrontendDis
+ 
+     consoleFrontendDispatcher.messageAdded(WTF::move(messageObject));
+ }
++#endif // !PLATFORM(AMIGA)
+ 
+ String ConsoleMessage::toString() const
+ {
+@@ -336,11 +341,13 @@ String ConsoleMessage::toString() const
+     return builder.toString();
+ }
+ 
++#if !PLATFORM(AMIGA)
+ void ConsoleMessage::updateRepeatCountInConsole(ConsoleFrontendDispatcher& consoleFrontendDispatcher)
+ {
+     auto timestamp = WallTime::now();
+     consoleFrontendDispatcher.messageRepeatCountUpdated(m_repeatCount, timestamp.secondsSinceEpoch().value());
+ }
++#endif
+ 
+ static bool NODELETE isGroupMessage(MessageType type)
+ {
+diff --git a/Source/JavaScriptCore/inspector/ConsoleMessage.h b/Source/JavaScriptCore/inspector/ConsoleMessage.h
+index 0421c2b2148..036bad514ee 100644
+--- a/Source/JavaScriptCore/inspector/ConsoleMessage.h
++++ b/Source/JavaScriptCore/inspector/ConsoleMessage.h
+@@ -64,8 +64,10 @@ public:
+     JS_EXPORT_PRIVATE ConsoleMessage(MessageSource, MessageType, MessageLevel, Vector<JSONLogValue>&&, JSC::JSGlobalObject*, unsigned long requestIdentifier = 0, WallTime timestamp = { });
+     JS_EXPORT_PRIVATE ~ConsoleMessage();
+ 
++#if !PLATFORM(AMIGA)
+     void addToFrontend(ConsoleFrontendDispatcher&, InjectedScriptManager&, bool generatePreview);
+     void updateRepeatCountInConsole(ConsoleFrontendDispatcher&);
++#endif
+ 
+     MessageSource source() const { return m_source; }
+     MessageType type() const { return m_type; }
+diff --git a/Source/JavaScriptCore/inspector/ScriptCallStackFactory.cpp b/Source/JavaScriptCore/inspector/ScriptCallStackFactory.cpp
+index 2b3ff3647a0..c1b00f68707 100644
+--- a/Source/JavaScriptCore/inspector/ScriptCallStackFactory.cpp
++++ b/Source/JavaScriptCore/inspector/ScriptCallStackFactory.cpp
+@@ -37,7 +37,9 @@
+ #include "Debugger.h"
+ #include "ExecutableBaseInlines.h"
+ #include "ImplementationVisibility.h"
++#if !PLATFORM(AMIGA)
+ #include "InspectorDebuggerAgent.h"
++#endif
+ #include "JSCInlines.h"
+ #include "ScriptArguments.h"
+ #include "ScriptCallFrame.h"
+@@ -83,10 +85,12 @@ public:
+     Ref<ScriptCallStack> takeStack()
+     {
+         AsyncStackTrace* parentStackTrace = nullptr;
++#if !PLATFORM(AMIGA) // No inspector debugger agent on the Amiga port.
+         if (auto* debugger = m_globalObject->debugger()) {
+             if (CheckedPtr debuggerAgent = dynamicDowncast<InspectorDebuggerAgent>(debugger->client()))
+                 parentStackTrace = debuggerAgent->currentParentStackTrace();
+         }
++#endif
+ 
+         return ScriptCallStack::create(WTF::move(m_frames), m_truncated, parentStackTrace);
+     }
+@@ -204,10 +208,12 @@ Ref<ScriptCallStack> createScriptCallStackFromException(JSC::JSGlobalObject* glo
+     }
+ 
+     AsyncStackTrace* parentStackTrace = nullptr;
++#if !PLATFORM(AMIGA) // No inspector debugger agent on the Amiga port.
+     if (auto* debugger = globalObject->debugger()) {
+         if (CheckedPtr debuggerAgent = dynamicDowncast<InspectorDebuggerAgent>(debugger->client()))
+             parentStackTrace = debuggerAgent->currentParentStackTrace();
+     }
++#endif
+     return ScriptCallStack::create(WTF::move(frames), stackTrace.size() > maxStackSize, parentStackTrace);
+ }
+ 
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index 935faac5b7e..ee9a5311579 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -38,6 +38,17 @@ list(APPEND WebCore_UNIFIED_SOURCE_LIST_FILES
+     "platform/SourcesAdwaita.txt"
+ )
+ 
++# No Web Inspector: the port has no inspector frontend, local or remote, so
++# inspector/ (the controllers, the agents, the overlay, the frontend host)
++# and its JavaScript bindings are left out. InspectorInstrumentation's calls
++# return at once (InspectorInstrumentationPublic.h); console messages still
++# go to the ChromeClient.
++list(APPEND WebCore_UNIFIED_SOURCE_EXCLUDES
++    "^inspector/"
++    "^JSCommandLineAPIHost"
++    "^JSInspector"
++)
++
+ list(APPEND WebCore_USER_AGENT_STYLE_SHEETS
+     ${WEBCORE_DIR}/css/themeAdwaita.css
+ )
+diff --git a/Source/WebCore/bindings/js/JSDOMWindowBase.cpp b/Source/WebCore/bindings/js/JSDOMWindowBase.cpp
+index 5c68e547d22..5ccdd558c3a 100644
+--- a/Source/WebCore/bindings/js/JSDOMWindowBase.cpp
++++ b/Source/WebCore/bindings/js/JSDOMWindowBase.cpp
+@@ -48,7 +48,9 @@
+ #include "Logging.h"
+ #include "Microtasks.h"
+ #include "NodeDocument.h"
++#if !PLATFORM(AMIGA)
+ #include "PageInspectorController.h"
++#endif
+ #include "RejectedPromiseTracker.h"
+ #include "ScriptController.h"
+ #include "ScriptModuleLoader.h"
+@@ -207,7 +209,12 @@ bool JSDOMWindowBase::supportsRichSourceInfo(const JSGlobalObject* object)
+     if (!page)
+         return false;
+ 
++#if PLATFORM(AMIGA)
++    // No Web Inspector: what PageInspectorController::enabled() answers.
++    bool enabled = page->settings().developerExtrasEnabled();
++#else
+     bool enabled = page->inspectorController().enabled();
++#endif
+     ASSERT(enabled || !thisObject->debugger());
+     return enabled;
+ }
+diff --git a/Source/WebCore/dom/Node.cpp b/Source/WebCore/dom/Node.cpp
+index 6d1438311ce..600437180e1 100644
+--- a/Source/WebCore/dom/Node.cpp
++++ b/Source/WebCore/dom/Node.cpp
+@@ -67,7 +67,9 @@
+ #include "NodeName.h"
+ #include "NodeRareDataInlines.h"
+ #include "NodeRenderStyle.h"
++#if !PLATFORM(AMIGA)
+ #include "PageInspectorController.h"
++#endif
+ #include "PointerEvent.h"
+ #include "ProcessingInstruction.h"
+ #include "ProgressEvent.h"
+@@ -845,8 +847,10 @@ bool Node::isContentRichlyEditable() const
+ 
+ void Node::inspect()
+ {
++#if !PLATFORM(AMIGA)
+     if (RefPtr page = document().page())
+         page->inspectorController().inspect(this);
++#endif
+ }
+ 
+ static Node::Editability NODELETE computeEditabilityFromComputedStyle(const Style::ComputedStyle& style, Node::UserSelectAllTreatment treatment, PageIsEditable pageIsEditable)
+diff --git a/Source/WebCore/html/CanvasBase.cpp b/Source/WebCore/html/CanvasBase.cpp
+index 7981e2dff90..cb94ed6aa55 100644
+--- a/Source/WebCore/html/CanvasBase.cpp
++++ b/Source/WebCore/html/CanvasBase.cpp
+@@ -231,11 +231,13 @@ HashSet<Ref<Element>> CanvasBase::cssCanvasClients() const
+     return cssCanvasClients;
+ }
+ 
++#if !PLATFORM(AMIGA)
+ bool CanvasBase::hasActiveInspectorCanvasCallTracer() const
+ {
+     RefPtr context = renderingContext();
+     return context && context->hasActiveInspectorCanvasCallTracer();
+ }
++#endif
+ 
+ void CanvasBase::setSize(const IntSize& size)
+ {
+diff --git a/Source/WebCore/html/CanvasBase.h b/Source/WebCore/html/CanvasBase.h
+index 24918c0d816..fad89aa6c3e 100644
+--- a/Source/WebCore/html/CanvasBase.h
++++ b/Source/WebCore/html/CanvasBase.h
+@@ -110,7 +110,11 @@ public:
+     void willUpdateContents(const std::optional<FloatRect>& rect) { return willUpdateContents(rect, ShouldApplyPostProcessingToDirtyRect::Yes); }
+     virtual void willUpdateContents(const std::optional<FloatRect>&, ShouldApplyPostProcessingToDirtyRect);
+ 
++#if PLATFORM(AMIGA)
++    bool hasActiveInspectorCanvasCallTracer() const { return false; } // No Web Inspector.
++#else
+     bool hasActiveInspectorCanvasCallTracer() const;
++#endif
+ 
+     bool shouldAccelerate() const;
+ 
+diff --git a/Source/WebCore/html/canvas/CanvasRenderingContext.h b/Source/WebCore/html/canvas/CanvasRenderingContext.h
+index 32433d86bb6..4b293d187f9 100644
+--- a/Source/WebCore/html/canvas/CanvasRenderingContext.h
++++ b/Source/WebCore/html/canvas/CanvasRenderingContext.h
+@@ -111,7 +111,12 @@ public:
+     // Returns the drawing buffer and runs the compositing steps of transferToImageBitmap.
+     virtual RefPtr<ImageBuffer> transferToImageBuffer();
+ 
++#if PLATFORM(AMIGA)
++    // No Web Inspector on the Amiga port: canvas calls are never recorded.
++    bool hasActiveInspectorCanvasCallTracer() const { return false; }
++#else
+     bool hasActiveInspectorCanvasCallTracer() const { return m_hasActiveInspectorCanvasCallTracer; }
++#endif
+     void setHasActiveInspectorCanvasCallTracer(bool hasActiveInspectorCanvasCallTracer) { m_hasActiveInspectorCanvasCallTracer = hasActiveInspectorCanvasCallTracer; }
+ 
+     // Returns true if there are pending deferred operations that might consume memory.
+diff --git a/Source/WebCore/inspector/InspectorInstrumentation.h b/Source/WebCore/inspector/InspectorInstrumentation.h
+index c0eae47d4a9..2299fd00078 100644
+--- a/Source/WebCore/inspector/InspectorInstrumentation.h
++++ b/Source/WebCore/inspector/InspectorInstrumentation.h
+@@ -332,7 +332,11 @@ public:
+ #if ENABLE(WEBGL)
+     static void didEnableExtension(WebGLRenderingContextBase&, const String&);
+     static void didCreateWebGLProgram(WebGLRenderingContextBase&, WebGLProgram&);
++#if PLATFORM(AMIGA)
++    static void willDestroyWebGLProgram(WebGLProgram&) { }
++#else
+     static void willDestroyWebGLProgram(WebGLProgram&);
++#endif
+     static bool isWebGLProgramDisabled(WebGLRenderingContextBase&, WebGLProgram&);
+     static bool isWebGLProgramHighlighted(WebGLRenderingContextBase&, WebGLProgram&);
+ #endif
+@@ -365,8 +369,13 @@ public:
+     static void firstFrontendCreated();
+     static void lastFrontendDeleted();
+ 
++#if PLATFORM(AMIGA)
++    static bool consoleAgentEnabled(ScriptExecutionContext*) { return false; }
++    static bool timelineAgentTracking(ScriptExecutionContext*) { return false; }
++#else
+     static bool consoleAgentEnabled(ScriptExecutionContext*);
+     static bool timelineAgentTracking(ScriptExecutionContext*);
++#endif
+ 
+     static InstrumentingAgents* instrumentingAgents(Page*);
+     static InstrumentingAgents* instrumentingAgents(ScriptExecutionContext*);
+@@ -657,6 +666,7 @@ inline void InspectorInstrumentation::willDestroyDOMNode(Node& node)
+ 
+ inline void InspectorInstrumentation::didChangeRendererForDOMNode(Node& node)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     ASSERT(InspectorInstrumentationPublic::hasFrontends());
+     if (RefPtr agents = instrumentingAgents(node.document()))
+         didChangeRendererForDOMNodeImpl(*agents, node);
+@@ -718,6 +728,7 @@ inline void InspectorInstrumentation::documentDetached(Document& document)
+ 
+ inline void InspectorInstrumentation::frameWindowDiscarded(LocalFrame& frame, LocalDOMWindow* domWindow)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     frameWindowDiscardedImpl(protect(instrumentingAgents(frame)), domWindow);
+ }
+ 
+@@ -1165,11 +1176,13 @@ inline void InspectorInstrumentation::didLoadResourceFromMemoryCache(Page& page,
+ 
+ inline void InspectorInstrumentation::didReceiveResourceResponse(LocalFrame& frame, ResourceLoaderIdentifier identifier, DocumentLoader* loader, const ResourceResponse& response, ResourceLoader* resourceLoader)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(frame)), identifier, loader, response, resourceLoader);
+ }
+ 
+ inline void InspectorInstrumentation::didReceiveResourceResponse(ServiceWorkerGlobalScope& globalScope, ResourceLoaderIdentifier identifier, const ResourceResponse& response)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(globalScope)), identifier, nullptr, response, nullptr);
+ }
+ 
+@@ -1208,29 +1221,34 @@ inline void InspectorInstrumentation::didFinishLoading(ServiceWorkerGlobalScope&
+ 
+ inline void InspectorInstrumentation::didFailLoading(LocalFrame* frame, DocumentLoader* loader, ResourceLoaderIdentifier identifier, const ResourceError& error)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     if (RefPtr agents = instrumentingAgents(frame))
+         didFailLoadingImpl(*agents, identifier, loader, error);
+ }
+ 
+ inline void InspectorInstrumentation::didFailLoading(ServiceWorkerGlobalScope& globalScope, ResourceLoaderIdentifier identifier, const ResourceError& error)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     didFailLoadingImpl(protect(instrumentingAgents(globalScope)), identifier, nullptr, error);
+ }
+ 
+ inline void InspectorInstrumentation::continueAfterXFrameOptionsDenied(LocalFrame& frame, ResourceLoaderIdentifier identifier, DocumentLoader& loader, const ResourceResponse& response)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     // Treat the same as didReceiveResponse.
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(frame)), identifier, &loader, response, nullptr);
+ }
+ 
+ inline void InspectorInstrumentation::continueWithPolicyDownload(LocalFrame& frame, ResourceLoaderIdentifier identifier, DocumentLoader& loader, const ResourceResponse& response)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     // Treat the same as didReceiveResponse.
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(frame)), identifier, &loader, response, nullptr);
+ }
+ 
+ inline void InspectorInstrumentation::continueWithPolicyIgnore(LocalFrame& frame, ResourceLoaderIdentifier identifier, DocumentLoader& loader, const ResourceResponse& response)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     // Treat the same as didReceiveResponse.
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(frame)), identifier, &loader, response, nullptr);
+ }
+@@ -1291,6 +1309,7 @@ inline void InspectorInstrumentation::frameDetachedFromParent(LocalFrame& frame)
+ 
+ inline void InspectorInstrumentation::didCommitLoad(LocalFrame& frame, DocumentLoader* loader)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     didCommitLoadImpl(protect(instrumentingAgents(frame)), frame, loader);
+ }
+ 
+@@ -1354,6 +1373,7 @@ inline bool InspectorInstrumentation::willIntercept(const LocalFrame* frame, con
+ 
+ inline bool InspectorInstrumentation::shouldInterceptRequest(const ResourceLoader& loader)
+ {
++    RETURN_IF_NO_INSPECTOR(false);
+     ASSERT(InspectorInstrumentationPublic::hasFrontends());
+     if (RefPtr agents = instrumentingAgents(loader.frame()))
+         return shouldInterceptRequestImpl(*agents, loader);
+@@ -1362,12 +1382,14 @@ inline bool InspectorInstrumentation::shouldInterceptRequest(const ResourceLoade
+ 
+ inline bool InspectorInstrumentation::shouldInterceptResponse(const LocalFrame& frame, const ResourceResponse& response)
+ {
++    RETURN_IF_NO_INSPECTOR(false);
+     ASSERT(InspectorInstrumentationPublic::hasFrontends());
+     return shouldInterceptResponseImpl(protect(instrumentingAgents(frame)), response);
+ }
+ 
+ inline void InspectorInstrumentation::interceptRequest(ResourceLoader& loader, Function<void(const ResourceRequest&)>&& handler)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     ASSERT(InspectorInstrumentation::shouldInterceptRequest(loader));
+     if (RefPtr agents = instrumentingAgents(loader.frame()))
+         interceptRequestImpl(*agents, loader, WTF::move(handler));
+@@ -1375,6 +1397,7 @@ inline void InspectorInstrumentation::interceptRequest(ResourceLoader& loader, F
+ 
+ inline void InspectorInstrumentation::interceptResponse(const LocalFrame& frame, const ResourceResponse& response, ResourceLoaderIdentifier identifier, CompletionHandler<void(const ResourceResponse&, RefPtr<FragmentedSharedBuffer>)>&& handler)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     ASSERT(InspectorInstrumentation::shouldInterceptResponse(frame, response));
+     interceptResponseImpl(protect(instrumentingAgents(frame)), response, identifier, WTF::move(handler));
+ }
+@@ -1669,31 +1692,37 @@ inline void InspectorInstrumentation::willDestroyWebAnimation(WebAnimation& anim
+ 
+ inline void InspectorInstrumentation::addMessageToConsole(LocalFrame& frame, std::unique_ptr<Inspector::ConsoleMessage> message)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     addMessageToConsoleImpl(protect(instrumentingAgents(frame)), WTF::move(message));
+ }
+ 
+ inline void InspectorInstrumentation::addMessageToConsole(WorkerOrWorkletGlobalScope& globalScope, std::unique_ptr<Inspector::ConsoleMessage> message)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     addMessageToConsoleImpl(protect(instrumentingAgents(globalScope)), WTF::move(message));
+ }
+ 
+ inline void InspectorInstrumentation::consoleCount(LocalFrame& frame, JSC::JSGlobalObject* state, const String& label)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     consoleCountImpl(protect(instrumentingAgents(frame)), state, label);
+ }
+ 
+ inline void InspectorInstrumentation::consoleCount(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* state, const String& label)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     consoleCountImpl(protect(instrumentingAgents(globalScope)), state, label);
+ }
+ 
+ inline void InspectorInstrumentation::consoleCountReset(LocalFrame& frame, JSC::JSGlobalObject* state, const String& label)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     consoleCountResetImpl(protect(instrumentingAgents(frame)), state, label);
+ }
+ 
+ inline void InspectorInstrumentation::consoleCountReset(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* state, const String& label)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     consoleCountResetImpl(protect(instrumentingAgents(globalScope)), state, label);
+ }
+ 
+@@ -1711,31 +1740,37 @@ inline void InspectorInstrumentation::takeHeapSnapshot(WorkerOrWorkletGlobalScop
+ 
+ inline void InspectorInstrumentation::startConsoleTiming(LocalFrame& frame, JSC::JSGlobalObject* exec, const String& label)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     startConsoleTimingImpl(protect(instrumentingAgents(frame)), exec, label);
+ }
+ 
+ inline void InspectorInstrumentation::startConsoleTiming(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* exec, const String& label)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     startConsoleTimingImpl(protect(instrumentingAgents(globalScope)), exec, label);
+ }
+ 
+ inline void InspectorInstrumentation::logConsoleTiming(LocalFrame& frame, JSC::JSGlobalObject* exec, const String& label, Ref<Inspector::ScriptArguments>&& arguments)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     logConsoleTimingImpl(protect(instrumentingAgents(frame)), exec, label, WTF::move(arguments));
+ }
+ 
+ inline void InspectorInstrumentation::logConsoleTiming(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* exec, const String& label, Ref<Inspector::ScriptArguments>&& arguments)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     logConsoleTimingImpl(protect(instrumentingAgents(globalScope)), exec, label, WTF::move(arguments));
+ }
+ 
+ inline void InspectorInstrumentation::stopConsoleTiming(LocalFrame& frame, JSC::JSGlobalObject* exec, const String& label)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     stopConsoleTimingImpl(protect(instrumentingAgents(frame)), exec, label);
+ }
+ 
+ inline void InspectorInstrumentation::stopConsoleTiming(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* exec, const String& label)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     stopConsoleTimingImpl(protect(instrumentingAgents(globalScope)), exec, label);
+ }
+ 
+@@ -1778,24 +1813,28 @@ inline void InspectorInstrumentation::stopProfiling(WorkerOrWorkletGlobalScope&
+ 
+ inline void InspectorInstrumentation::consoleStartRecordingCanvas(CanvasRenderingContext& context, JSC::JSGlobalObject& exec, JSC::JSObject* options)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     if (RefPtr agents = instrumentingAgents(protect(protect(context.canvasBase())->scriptExecutionContext())))
+         consoleStartRecordingCanvasImpl(*agents, context, exec, options);
+ }
+ 
+ inline void InspectorInstrumentation::consoleStartRecordingCanvas(GPUDevice& device, JSC::JSGlobalObject& exec, JSC::JSObject* options)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     if (RefPtr agents = instrumentingAgents(protect(device.scriptExecutionContext())))
+         consoleStartRecordingCanvasImpl(*agents, device, exec, options);
+ }
+ 
+ inline void InspectorInstrumentation::consoleStopRecordingCanvas(CanvasRenderingContext& context)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     if (RefPtr agents = instrumentingAgents(protect(protect(context.canvasBase())->scriptExecutionContext())))
+         consoleStopRecordingCanvasImpl(*agents, context);
+ }
+ 
+ inline void InspectorInstrumentation::consoleStopRecordingCanvas(GPUDevice& device)
+ {
++    RETURN_IF_NO_INSPECTOR(void());
+     if (RefPtr agents = instrumentingAgents(protect(device.scriptExecutionContext())))
+         consoleStopRecordingCanvasImpl(*agents, device);
+ }
+diff --git a/Source/WebCore/inspector/InspectorInstrumentationPublic.h b/Source/WebCore/inspector/InspectorInstrumentationPublic.h
+index da6d0f1ce3a..481b49cf838 100644
+--- a/Source/WebCore/inspector/InspectorInstrumentationPublic.h
++++ b/Source/WebCore/inspector/InspectorInstrumentationPublic.h
+@@ -32,9 +32,22 @@ namespace WebCore {
+     if (!InspectorInstrumentationPublic::hasFrontends()) [[likely]] \
+         return value;
+ 
++// The Amiga port has no Web Inspector: there are never any frontends, and
++// the instrumentation that runs without one (the console's backlog, network
++// bookkeeping) returns at once too, so no inspector code is linked.
++#if PLATFORM(AMIGA)
++#define RETURN_IF_NO_INSPECTOR(value) return value
++#else
++#define RETURN_IF_NO_INSPECTOR(value) do { } while (0)
++#endif
++
+ class WEBCORE_EXPORT InspectorInstrumentationPublic {
+ public:
++#if PLATFORM(AMIGA)
++    static constexpr bool hasFrontends() { return false; }
++#else
+     static bool hasFrontends() { return s_frontendCounter; }
++#endif
+     static std::atomic<int> s_frontendCounter;
+ };
+ 
+diff --git a/Source/WebCore/loader/FrameLoader.cpp b/Source/WebCore/loader/FrameLoader.cpp
+index 84f343f8095..7525481b4ab 100644
+--- a/Source/WebCore/loader/FrameLoader.cpp
++++ b/Source/WebCore/loader/FrameLoader.cpp
+@@ -113,7 +113,9 @@
+ #include "Node.h"
+ #include "OriginAccessPatterns.h"
+ #include "Page.h"
++#if !PLATFORM(AMIGA)
+ #include "PageInspectorController.h"
++#endif
+ #include "PageTransitionEvent.h"
+ #include "Performance.h"
+ #include "PerformanceLogging.h"
+@@ -4978,8 +4980,10 @@ void FrameLoader::dispatchDidClearWindowObjectInWorld(DOMWrapperWorld& world)
+ 
+     m_client->dispatchDidClearWindowObjectInWorld(world);
+ 
++#if !PLATFORM(AMIGA)
+     if (RefPtr page = frame->page())
+         page->inspectorController().didClearWindowObjectInWorld(frame, world);
++#endif
+ 
+     InspectorInstrumentation::didClearWindowObjectInWorld(frame, world);
+ }
+diff --git a/Source/WebCore/page/ContextMenuController.cpp b/Source/WebCore/page/ContextMenuController.cpp
+index d3d81fd264c..a8abd7b2c88 100644
+--- a/Source/WebCore/page/ContextMenuController.cpp
++++ b/Source/WebCore/page/ContextMenuController.cpp
+@@ -71,7 +71,9 @@
+ #include "NavigationAction.h"
+ #include "Node.h"
+ #include "Page.h"
++#if !PLATFORM(AMIGA)
+ #include "PageInspectorController.h"
++#endif
+ #include "PlatformEvent.h"
+ #include "PlatformMouseEvent.h"
+ #include "RenderImage.h"
+@@ -640,8 +642,10 @@ void ContextMenuController::contextMenuItemSelected(ContextMenuAction action, co
+         break;
+ #endif
+     case ContextMenuItemTagInspectElement:
++#if !PLATFORM(AMIGA)
+         if (RefPtr page = frame->page())
+             page->inspectorController().inspect(protect(m_context.hitTestResult().innerNonSharedNode()));
++#endif
+         break;
+     case ContextMenuItemTagDictationAlternative:
+         protect(frame->editor())->applyDictationAlternative(title);
+@@ -1256,7 +1260,13 @@ void ContextMenuController::populate()
+                 appendItem(SpeechMenuItem, m_contextMenu.get());
+ #endif                
+             } else {
+-                if (!(page && (page->inspectorController().inspectionLevel() > 0 || page->inspectorController().hasRemoteFrontend()))) {
++#if PLATFORM(AMIGA)
++                // No Web Inspector: the page is never an inspector's own.
++                bool pageIsInspector = false;
++#else
++                bool pageIsInspector = page && (page->inspectorController().inspectionLevel() > 0 || page->inspectorController().hasRemoteFrontend());
++#endif
++                if (!pageIsInspector) {
+ 
+                 // In GTK and WPE unavailable items are not hidden but insensitive.
+ #if PLATFORM(GTK) || PLATFORM(WPE)
+@@ -1512,7 +1522,9 @@ void ContextMenuController::addDebuggingItems()
+     RefPtr page = frame->page();
+     if (!page)
+         return;
++#if !PLATFORM(AMIGA)
+     ASSERT(page->inspectorController().enabled());
++#endif
+ 
+ #if ENABLE(PDFJS)
+     if (RefPtr ownerElement = frame->ownerElement(); ownerElement && ownerElement->document().isPDFJSDocument())
+diff --git a/Source/WebCore/page/LocalFrame.cpp b/Source/WebCore/page/LocalFrame.cpp
+index 17afd8a9c3a..09838f6abdb 100644
+--- a/Source/WebCore/page/LocalFrame.cpp
++++ b/Source/WebCore/page/LocalFrame.cpp
+@@ -64,7 +64,9 @@
+ #include "FrameConsoleClient.h"
+ #include "FrameDestructionObserver.h"
+ #include "FrameInlines.h"
++#if !PLATFORM(AMIGA)
+ #include "FrameInspectorController.h"
++#endif
+ #include "FrameLoader.h"
+ #include "FrameSelection.h"
+ #include "GraphicsContext.h"
+@@ -189,7 +191,9 @@ LocalFrame::LocalFrame(Page& page, ClientCreator&& clientCreator, FrameIdentifie
+     , m_sandboxFlags(sandboxFlags)
+     , m_parentFrameOrOpenerReferrerPolicy(referrerPolicy)
+     , m_eventHandler(makeUniqueRef<EventHandler>(*this))
++#if !PLATFORM(AMIGA)
+     , m_inspectorController(makeUniqueRefWithoutRefCountedCheck<FrameInspectorController>(*this, page.inspectorController()))
++#endif
+     , m_consoleClient(makeUniqueRef<FrameConsoleClient>(*this))
+ {
+     ProcessWarming::initializeNames();
+@@ -236,7 +240,9 @@ LocalFrame::~LocalFrame()
+ {
+     setView(nullptr);
+ 
++#if !PLATFORM(AMIGA)
+     m_inspectorController->inspectedFrameDestroyed();
++#endif
+ 
+     // Clear prefetched resources before the FrameLoader is torn down. In-flight
+     // prefetch loads trigger a cancel chain (allClientsRemoved -> cancelLoad ->
+@@ -277,8 +283,10 @@ JSC::Debugger* LocalFrame::debugger() const
+ {
+     // FrameInspectorController holds the frame's own debugger, which only exists under site
+     // isolation and only once something is debugging this frame.
++#if !PLATFORM(AMIGA)
+     if (auto* frameDebugger = m_inspectorController->attachedDebugger())
+         return frameDebugger;
++#endif
+ 
+     if (auto* page = this->page())
+         return page->debugger();
+diff --git a/Source/WebCore/page/LocalFrame.h b/Source/WebCore/page/LocalFrame.h
+index b99e799a46d..2378b5555fe 100644
+--- a/Source/WebCore/page/LocalFrame.h
++++ b/Source/WebCore/page/LocalFrame.h
+@@ -369,8 +369,10 @@ public:
+ 
+     bool frameCanCreatePaymentSession() const final;
+ 
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+     FrameInspectorController& inspectorController() { return m_inspectorController.get(); }
+     const FrameInspectorController& inspectorController() const { return m_inspectorController.get(); }
++#endif
+     FrameConsoleClient& console() { return m_consoleClient.get(); }
+     const FrameConsoleClient& console() const { return m_consoleClient.get(); }
+ 
+@@ -441,7 +443,9 @@ private:
+     const UniqueRef<EventHandler> m_eventHandler;
+     const std::unique_ptr<HashSet<RegistrableDomain>> m_storageAccessExceptionDomains;
+ 
++#if !PLATFORM(AMIGA)
+     const UniqueRef<FrameInspectorController> m_inspectorController;
++#endif
+     const UniqueRef<FrameConsoleClient> m_consoleClient;
+ };
+ 
+diff --git a/Source/WebCore/page/LocalFrameView.cpp b/Source/WebCore/page/LocalFrameView.cpp
+index 0954cd67110..bf3121057e6 100644
+--- a/Source/WebCore/page/LocalFrameView.cpp
++++ b/Source/WebCore/page/LocalFrameView.cpp
+@@ -76,7 +76,9 @@
+ #include "HTMLPlugInElement.h"
+ #include "HighlightRegistry.h"
+ #include "ImageDocument.h"
++#if !PLATFORM(AMIGA)
+ #include "InspectorBackendClient.h"
++#endif
+ #include "InspectorInstrumentation.h"
+ #include "LegacyRenderSVGRoot.h"
+ #include "LocalDOMWindow.h"
+@@ -88,7 +90,9 @@
+ #include "NullGraphicsContext.h"
+ #include "Page.h"
+ #include "PageColorSampler.h"
++#if !PLATFORM(AMIGA)
+ #include "PageInspectorController.h"
++#endif
+ #include "PageOverlayController.h"
+ #include "ParsedContentType.h"
+ #include "PerformanceLoggingClient.h"
+@@ -5063,11 +5067,13 @@ void LocalFrameView::scheduleResizeEventIfNeeded()
+     LOG_WITH_STREAM(Events, stream << "LocalFrameView " << this << " scheduleResizeEventIfNeeded scheduling resize event for document" << document << ", size " << currentSize);
+     document->setNeedsDOMWindowResizeEvent();
+ 
++#if !PLATFORM(AMIGA)
+     bool isMainFrame = m_frame->isMainFrame();
+     if (InspectorInstrumentation::hasFrontends() && isMainFrame) {
+         if (InspectorBackendClient* inspectorBackendClient = page ? page->inspectorController().inspectorBackendClient() : nullptr)
+             inspectorBackendClient->didResizeMainFrame(m_frame.ptr());
+     }
++#endif
+ }
+ 
+ void LocalFrameView::willStartLiveResize()
+diff --git a/Source/WebCore/page/Page.cpp b/Source/WebCore/page/Page.cpp
+index e369b2e030a..3135195d727 100644
+--- a/Source/WebCore/page/Page.cpp
++++ b/Source/WebCore/page/Page.cpp
+@@ -141,7 +141,9 @@
+ #include "PageColorSampler.h"
+ #include "PageConfiguration.h"
+ #include "PageGroup.h"
++#if !PLATFORM(AMIGA)
+ #include "PageInspectorController.h"
++#endif
+ #include "PageOverlayController.h"
+ #include "PaymentCoordinator.h"
+ #include "PerformanceLogging.h"
+@@ -409,7 +411,9 @@ Page::Page(PageConfiguration&& pageConfiguration)
+ #if ENABLE(CONTEXT_MENUS)
+     , m_contextMenuController(makeUniqueRef<ContextMenuController>(*this, WTF::move(pageConfiguration.contextMenuClient)))
+ #endif
++#if !PLATFORM(AMIGA)
+     , m_inspectorController(makeUniqueRefWithoutRefCountedCheck<PageInspectorController>(*this, WTF::move(pageConfiguration.inspectorBackendClient)))
++#endif
+     , m_pointerCaptureController(makeUniqueRef<PointerCaptureController>(*this))
+ #if ENABLE(POINTER_LOCK)
+     , m_pointerLockController(makeUniqueRefWithoutRefCountedCheck<PointerLockController>(*this))
+@@ -581,7 +585,9 @@ Page::~Page()
+         MemoryPressureHandler::setPageCount(gNonUtilityPageCount);
+     }
+ 
++#if !PLATFORM(AMIGA)
+     m_inspectorController->inspectedPageDestroyed();
++#endif
+ 
+     forEachLocalFrame([] (LocalFrame& frame) {
+         frame.willDetachPage();
+@@ -2759,8 +2765,10 @@ void Page::willStartRenderingUpdateDisplay()
+ 
+     // Inspector's use of "composite" is rather innacurate. On Apple platforms, the "composite" step happens
+     // in another process; these hooks wrap the non-WebKit CA commit time which is mostly painting-related.
++#if !PLATFORM(AMIGA)
+     if (RefPtr localMainFrame = this->localMainFrame())
+         m_inspectorController->willComposite(*localMainFrame);
++#endif
+ 
+     if (RefPtr scrollingCoordinator = m_scrollingCoordinator)
+         scrollingCoordinator->willStartPlatformRenderingUpdate();
+@@ -2773,8 +2781,10 @@ void Page::didCompleteRenderingUpdateDisplay()
+     if (RefPtr scrollingCoordinator = m_scrollingCoordinator)
+         scrollingCoordinator->didCompletePlatformRenderingUpdate();
+ 
++#if !PLATFORM(AMIGA)
+     if (RefPtr localMainFrame = this->localMainFrame())
+         m_inspectorController->didComposite(*localMainFrame);
++#endif
+ }
+ 
+ void Page::didCompleteRenderingFrame()
+diff --git a/Source/WebCore/page/Page.h b/Source/WebCore/page/Page.h
+index 63bb02d651b..f947b9d742b 100644
+--- a/Source/WebCore/page/Page.h
++++ b/Source/WebCore/page/Page.h
+@@ -527,7 +527,9 @@ public:
+     ContextMenuController& contextMenuController() LIFETIME_BOUND { return m_contextMenuController.get(); }
+     const ContextMenuController& contextMenuController() const LIFETIME_BOUND { return m_contextMenuController.get(); }
+ #endif
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+     PageInspectorController& inspectorController() { return m_inspectorController.get(); }
++#endif
+     PointerCaptureController& pointerCaptureController() LIFETIME_BOUND { return m_pointerCaptureController.get(); }
+ #if ENABLE(POINTER_LOCK)
+     PointerLockController& pointerLockController() LIFETIME_BOUND { return m_pointerLockController.get(); }
+@@ -1542,7 +1544,9 @@ private:
+ #if ENABLE(CONTEXT_MENUS)
+     const UniqueRef<ContextMenuController> m_contextMenuController;
+ #endif
++#if !PLATFORM(AMIGA)
+     const UniqueRef<PageInspectorController> m_inspectorController;
++#endif
+     const UniqueRef<PointerCaptureController> m_pointerCaptureController;
+ #if ENABLE(POINTER_LOCK)
+     const UniqueRef<PointerLockController> m_pointerLockController;
+diff --git a/Source/WebCore/workers/WorkerInspectorProxy.cpp b/Source/WebCore/workers/WorkerInspectorProxy.cpp
+index 276a30e91ca..a7b860a2afb 100644
+--- a/Source/WebCore/workers/WorkerInspectorProxy.cpp
++++ b/Source/WebCore/workers/WorkerInspectorProxy.cpp
+@@ -30,7 +30,9 @@
+ #include "InspectorInstrumentation.h"
+ #include "ScriptExecutionContext.h"
+ #include "WorkerGlobalScope.h"
++#if !PLATFORM(AMIGA)
+ #include "WorkerInspectorController.h"
++#endif
+ #include "WorkerRunLoop.h"
+ #include "WorkerThread.h"
+ #include <JavaScriptCore/InspectorAgentBase.h>
+@@ -189,7 +191,9 @@ void WorkerInspectorProxy::connectToWorkerInspectorController(PageChannel& chann
+     m_pageChannel = &channel;
+ 
+     m_workerThread->runLoop().postDebuggerTask([] (ScriptExecutionContext& context) {
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+         downcast<WorkerGlobalScope>(context).inspectorController().connectFrontend();
++#endif
+     });
+ }
+ 
+@@ -202,7 +206,9 @@ void WorkerInspectorProxy::disconnectFromWorkerInspectorController()
+     m_pageChannel = nullptr;
+ 
+     m_workerThread->runLoop().postDebuggerTask([] (ScriptExecutionContext& context) {
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+         downcast<WorkerGlobalScope>(context).inspectorController().disconnectFrontend(DisconnectReason::InspectorDestroyed);
++#endif
+ 
+         // In case the worker is paused running debugger tasks, ensure we break out of
+         // the pause since this will be the last debugger task we send to the worker.
+@@ -217,7 +223,9 @@ void WorkerInspectorProxy::sendMessageToWorkerInspectorController(const String&
+         return;
+ 
+     m_workerThread->runLoop().postDebuggerTask([message = message.isolatedCopy()] (ScriptExecutionContext& context) {
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+         downcast<WorkerGlobalScope>(context).inspectorController().dispatchMessageFromFrontend(message);
++#endif
+     });
+ }
+ 
+diff --git a/Source/WebCore/workers/WorkerOrWorkletGlobalScope.cpp b/Source/WebCore/workers/WorkerOrWorkletGlobalScope.cpp
+index 21bfcd647e7..2fe720cb1db 100644
+--- a/Source/WebCore/workers/WorkerOrWorkletGlobalScope.cpp
++++ b/Source/WebCore/workers/WorkerOrWorkletGlobalScope.cpp
+@@ -31,7 +31,9 @@
+ #include "ScriptModuleLoader.h"
+ #include "ServiceWorkerGlobalScope.h"
+ #include "WorkerEventLoop.h"
++#if !PLATFORM(AMIGA)
+ #include "WorkerInspectorController.h"
++#endif
+ #include "WorkerOrWorkletScriptController.h"
+ #include "WorkerOrWorkletThread.h"
+ #include "WorkerRunLoop.h"
+@@ -50,7 +52,9 @@ WorkerOrWorkletGlobalScope::WorkerOrWorkletGlobalScope(WorkerThreadType type, PA
+     , m_script(makeUnique<WorkerOrWorkletScriptController>(type, WTF::move(vm), this))
+     , m_moduleLoader(makeUniqueRef<ScriptModuleLoader>(this, ScriptModuleLoader::OwnerType::WorkerOrWorklet))
+     , m_thread(thread)
++#if !PLATFORM(AMIGA)
+     , m_inspectorController(makeUniqueRef<WorkerInspectorController>(*this))
++#endif
+     , m_sessionID(sessionID)
+     , m_referrerPolicy(referrerPolicy)
+     , m_noiseInjectionHashSalt(noiseInjectionHashSalt)
+@@ -79,7 +83,9 @@ void WorkerOrWorkletGlobalScope::prepareForDestruction()
+         m_eventLoop->clearMicrotaskQueue();
+     removeRejectedPromiseTracker();
+ 
++#if !PLATFORM(AMIGA)
+     m_inspectorController->workerTerminating();
++#endif
+ }
+ 
+ void WorkerOrWorkletGlobalScope::clearScript()
+diff --git a/Source/WebCore/workers/WorkerOrWorkletGlobalScope.h b/Source/WebCore/workers/WorkerOrWorkletGlobalScope.h
+index 26186d4f43d..fd272c31826 100644
+--- a/Source/WebCore/workers/WorkerOrWorkletGlobalScope.h
++++ b/Source/WebCore/workers/WorkerOrWorkletGlobalScope.h
+@@ -61,7 +61,9 @@ public:
+ 
+     JSC::VM& vm() final;
+     JSC::VM* vmIfExists() const final;
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+     WorkerInspectorController& inspectorController() const { return m_inspectorController; }
++#endif
+ 
+     ScriptModuleLoader& moduleLoader() LIFETIME_BOUND { return m_moduleLoader; }
+ 
+@@ -121,7 +123,9 @@ private:
+     ThreadSafeWeakPtr<WorkerOrWorkletThread> m_thread;
+     const RefPtr<WorkerEventLoop> m_eventLoop;
+     const std::unique_ptr<EventLoopTaskGroup> m_defaultTaskGroup;
++#if !PLATFORM(AMIGA)
+     const UniqueRef<WorkerInspectorController> m_inspectorController;
++#endif
+     PAL::SessionID m_sessionID;
+     ReferrerPolicy m_referrerPolicy;
+     bool m_isClosing { false };
+diff --git a/Source/WebCore/workers/service/context/ServiceWorkerInspectorProxy.cpp b/Source/WebCore/workers/service/context/ServiceWorkerInspectorProxy.cpp
+index 07aa95c40d7..9bec6b69fdd 100644
+--- a/Source/WebCore/workers/service/context/ServiceWorkerInspectorProxy.cpp
++++ b/Source/WebCore/workers/service/context/ServiceWorkerInspectorProxy.cpp
+@@ -31,7 +31,9 @@
+ #include "ServiceWorkerDebuggable.h"
+ #include "ServiceWorkerGlobalScope.h"
+ #include "ServiceWorkerThreadProxy.h"
++#if !PLATFORM(AMIGA)
+ #include "WorkerInspectorController.h"
++#endif
+ #include "WorkerRunLoop.h"
+ #include <JavaScriptCore/InspectorAgentBase.h>
+ #include <JavaScriptCore/InspectorFrontendChannel.h>
+@@ -70,7 +72,9 @@ void ServiceWorkerInspectorProxy::connectToWorker(FrontendChannel& channel, bool
+     RefPtr serviceWorkerThreadProxy = m_serviceWorkerThreadProxy.get();
+     SWContextManager::singleton().setAsInspected(serviceWorkerThreadProxy->identifier(), true);
+     serviceWorkerThreadProxy->thread().runLoop().postDebuggerTask([isAutomaticConnection, immediatelyPause] (ScriptExecutionContext& context) {
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+         downcast<WorkerGlobalScope>(context).inspectorController().connectFrontend(isAutomaticConnection, immediatelyPause);
++#endif
+     });
+ }
+ 
+@@ -83,7 +87,9 @@ void ServiceWorkerInspectorProxy::disconnectFromWorker(FrontendChannel& channel)
+     RefPtr serviceWorkerThreadProxy = m_serviceWorkerThreadProxy.get();
+     SWContextManager::singleton().setAsInspected(serviceWorkerThreadProxy->identifier(), false);
+     serviceWorkerThreadProxy->thread().runLoop().postDebuggerTask([] (ScriptExecutionContext& context) {
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+         downcast<WorkerGlobalScope>(context).inspectorController().disconnectFrontend(DisconnectReason::InspectorDestroyed);
++#endif
+ 
+         // In case the worker is paused running debugger tasks, ensure we break out of
+         // the pause since this will be the last debugger task we send to the worker.
+@@ -95,7 +101,9 @@ void ServiceWorkerInspectorProxy::sendMessageToWorker(String&& message)
+ {
+     ASSERT(isMainThread());
+     m_serviceWorkerThreadProxy.get()->thread().runLoop().postDebuggerTask([message = WTF::move(message).isolatedCopy()] (ScriptExecutionContext& context) {
++#if !PLATFORM(AMIGA) // No Web Inspector on the Amiga port.
+         downcast<WorkerGlobalScope>(context).inspectorController().dispatchMessageFromFrontend(message);
++#endif
+     });
+ }
+ 
+-- 
+2.53.0
+

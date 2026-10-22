@@ -281,6 +281,16 @@ The patches, in order:
   also stores one past the end of an array with room, growing its length
   (as the interpreter does), and the array builtins' put_by_val_direct
   (the results of filter, map and friends) takes the same fast path.
+- `0057-amiga-no-inspector.patch`: no Web Inspector. The port has no
+  inspector frontend, local or remote, but the inspector was compiled and
+  linked all the same (2.8 MB). WebCore's `inspector/` folder and its
+  bindings are left out of the build (`WebCore_UNIFIED_SOURCE_EXCLUDES`),
+  and of JavaScriptCore's only what the console uses is built (console
+  messages, their arguments and call stacks). `InspectorInstrumentation`
+  returns at once, pages, frames and workers have no inspector
+  controllers, canvas calls are never traced, and the heap has no
+  injected-script subspaces. Console messages still reach the
+  ChromeClient. The stripped engine is 3.26 MB smaller.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
