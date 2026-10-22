@@ -42,6 +42,13 @@ static BOOL same(const char *a, const char *b)
     return a && b && strcmp(a, b) == 0;
 }
 
+/* Doubles compared bit for bit (no floating point needed to check them:
+ * the constants are the compiler's, the values the library's) */
+static BOOL same_double(const DOUBLE *a, DOUBLE b)
+{
+    return memcmp(a, &b, sizeof b) == 0;
+}
+
 static const char sample[] =
     "{\"name\":\"Amiga\\u00e9\",\"cpu\":68040,\"mhz\":25.5,\"chips\":[\"Alice\",\"Lisa\",\"Paula\"],"
     "\"a/b\":{\"~x\":true},\"big\":12345678901,\"neg\":-0,\"none\":null,\"name\":\"last\"}";
@@ -66,7 +73,7 @@ static void self_test(void)
     n = JSONFind(doc, 0, (CONST_STRPTR)"cpu", JSON_STRLEN);
     check("int", JSONType(doc, n) == JSON_INT && JSONGetLong(doc, n, &l) == 0 && l == 68040);
     n = JSONFind(doc, 0, (CONST_STRPTR)"mhz", JSON_STRLEN);
-    check("double", JSONGetDouble(doc, n, &d) == 0 && d == 25.5);
+    check("double", JSONGetDouble(doc, n, &d) == 0 && same_double(&d, 25.5));
     check("not a LONG", JSONGetLong(doc, n, &l) == JSONERR_RANGE);
     n = JSONPointer(doc, 0, (CONST_STRPTR)"/chips/2");
     check("pointer /chips/2", same((const char *)JSONGetString(doc, n, NULL), "Paula"));
@@ -74,7 +81,7 @@ static void self_test(void)
     check("pointer escapes", JSONType(doc, n) == JSON_TRUE);
     check("pointer misses", JSONPointer(doc, 0, (CONST_STRPTR)"/chips/3") == JSON_NONE);
     n = JSONFind(doc, 0, (CONST_STRPTR)"big", JSON_STRLEN);
-    check("big number", JSONType(doc, n) == JSON_NUMBER && JSONGetDouble(doc, n, &d) == 0 && d == 12345678901.0);
+    check("big number", JSONType(doc, n) == JSON_NUMBER && JSONGetDouble(doc, n, &d) == 0 && same_double(&d, 12345678901.0));
     {
         /* the block is position independent: walk a copy */
         struct JSONDoc *copy = AllocVec(doc->jd_Size, MEMF_ANY);
@@ -123,7 +130,7 @@ static void self_test(void)
     }
 
     check("text to LONG", JSONTextToLong((CONST_STRPTR)"1.5e1", JSON_STRLEN, &l) == 0 && l == 15);
-    check("text to double", JSONTextToDouble((CONST_STRPTR)"0.1", JSON_STRLEN, &d) == 0 && d == 0.1);
+    check("text to double", JSONTextToDouble((CONST_STRPTR)"0.1", JSON_STRLEN, &d) == 0 && same_double(&d, 0.1));
     d = 0.1 + 0.2;
     check("double to text", JSONDoubleToText(&d, (STRPTR)buf) == 19 && same(buf, "0.30000000000000004"));
     d = 1e21;
