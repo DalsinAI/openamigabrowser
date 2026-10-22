@@ -1,0 +1,158 @@
+From 6a6c9c30b34d2f446b5b7103299e1f496a59b128 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 06:19:59 +0000
+Subject: [PATCH] JavaScriptCore: the regular expression interpreter skips
+ start positions
+
+When the body's one alternative begins with a character, a cased
+character or a character class read at the start position, the
+interpreter works out once which Latin-1 characters that term accepts
+and, in 8-bit input, moves past start positions with any other
+character instead of trying the whole pattern there. Patterns with
+other starts (alternatives, assertions, groups, quantifiers that can
+match nothing, backward or sticky matches) and 16-bit input are as
+before.
+
+Team 3
+---
+ .../JavaScriptCore/yarr/YarrInterpreter.cpp   | 82 +++++++++++++++++++
+ Source/JavaScriptCore/yarr/YarrInterpreter.h  |  9 ++
+ 2 files changed, 91 insertions(+)
+
+diff --git a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+index 9df5e423215..dd4efc9d812 100644
+--- a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
++++ b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+@@ -348,6 +348,11 @@ public:
+             return pos;
+         }
+ 
++        CharType NODELETE at(unsigned index)
++        {
++            return input[index];
++        }
++
+         void NODELETE setPos(unsigned p)
+         {
+             pos = p;
+@@ -1927,6 +1932,7 @@ public:
+             }
+ 
+             input.next();
++            skipToFirstCharacter();
+ 
+             context->matchBegin = input.getPos();
+ 
+@@ -2101,6 +2107,12 @@ public:
+         if (!context) [[unlikely]]
+             return offsetNoMatch;
+ 
++        if constexpr (sizeof(CharType) == 1) {
++            if (pattern->m_firstCharactersState == BytecodePattern::FirstCharacters::Unknown)
++                findFirstCharacters();
++        }
++        skipToFirstCharacter();
++
+         dataLogLnIf(verbose, "  Interpret input: ", input, "\n  Matching");
+ 
+         JSRegExpResult result = matchDisjunction(pattern->m_body.get(), context, /* btrack= */ false);
+@@ -2118,6 +2130,76 @@ public:
+         return output[0];
+     }
+ 
++    // The characters the body's first term accepts at the start position
++    // (see BytecodePattern::m_firstCharacters): its one alternative's
++    // input checks, then a character, a cased character or a character
++    // class read at the start position, at least once. Anything else
++    // (another alternative, an assertion, a group, a quantifier that can
++    // match nothing, a backward or sticky match) can start anywhere.
++    void findFirstCharacters()
++    {
++        auto& terms = pattern->m_body->terms;
++        auto& firstCharacters = pattern->m_firstCharacters;
++        pattern->m_firstCharactersState = BytecodePattern::FirstCharacters::Any;
++        if (pattern->sticky() || terms.size() < 2 || terms[0].type != ByteTerm::Type::BodyAlternativeBegin
++            || terms[0].alternative.next || terms[0].alternative.onceThrough)
++            return;
++        unsigned index = 1;
++        unsigned checked = 0;
++        while (index < terms.size() && terms[index].type == ByteTerm::Type::CheckInput && terms[index].matchDirection() == Forward)
++            checked += terms[index++].checkInputCount;
++        if (index >= terms.size())
++            return;
++        ByteTerm& term = terms[index];
++        if (term.matchDirection() != Forward || term.inputPosition != checked)
++            return;
++        auto set = [&](unsigned character) {
++            if (character < 256)
++                firstCharacters[character >> 5] |= 1u << (character & 31);
++        };
++        switch (term.type) {
++        case ByteTerm::Type::PatternCharacterOnce:
++        case ByteTerm::Type::PatternCharacterFixed:
++            if (term.atom.quantityMaxCount < 1)
++                return;
++            set(term.atom.patternCharacter);
++            break;
++        case ByteTerm::Type::PatternCasedCharacterOnce:
++        case ByteTerm::Type::PatternCasedCharacterFixed:
++            if (term.atom.quantityMaxCount < 1)
++                return;
++            set(term.atom.casedCharacter.lo);
++            set(term.atom.casedCharacter.hi);
++            break;
++        case ByteTerm::Type::CharacterClass:
++            if (term.atom.quantityType != QuantifierType::FixedCount || term.atom.quantityMaxCount < 1)
++                return;
++            for (unsigned character = 0; character < 256; ++character) {
++                if (testCharacterClass(term.atom.characterClass, character) != term.invert())
++                    set(character);
++            }
++            break;
++        default:
++            return;
++        }
++        pattern->m_firstCharactersState = BytecodePattern::FirstCharacters::Set;
++    }
++
++    // Past the start positions whose character the body cannot start with.
++    // At the end, the body's input check fails as before.
++    void skipToFirstCharacter()
++    {
++        if constexpr (sizeof(CharType) == 1) {
++            if (pattern->m_firstCharactersState != BytecodePattern::FirstCharacters::Set)
++                return;
++            unsigned position = input.getPos();
++            unsigned end = input.end();
++            while (position < end && !pattern->canStartWith(input.at(position)))
++                ++position;
++            input.setPos(position);
++        }
++    }
++
+     Interpreter(BytecodePattern* pattern, unsigned* output, std::span<const CharType> input, unsigned start)
+         : pattern(pattern)
+         , compileMode(pattern->compileMode())
+diff --git a/Source/JavaScriptCore/yarr/YarrInterpreter.h b/Source/JavaScriptCore/yarr/YarrInterpreter.h
+index 0e6c8c1a42a..390c6c36973 100644
+--- a/Source/JavaScriptCore/yarr/YarrInterpreter.h
++++ b/Source/JavaScriptCore/yarr/YarrInterpreter.h
+@@ -594,6 +594,15 @@ public:
+     const CharacterClass* wordcharCharacterClass;
+     const CharacterClass* ignoreCaseWordcharCharacterClass;
+ 
++    // The Latin-1 characters a match can start with, when the body's one
++    // alternative begins with a character or a character class: the
++    // interpreter skips other start positions in 8-bit input without
++    // trying the pattern there. Worked out on first use, under m_lock.
++    enum class FirstCharacters : uint8_t { Unknown, Any, Set };
++    FirstCharacters m_firstCharactersState { FirstCharacters::Unknown };
++    std::array<uint32_t, 8> m_firstCharacters { };
++    bool canStartWith(unsigned character) const { return m_firstCharacters[character >> 5] & (1u << (character & 31)); }
++
+ private:
+     Vector<std::unique_ptr<ByteDisjunction>> m_allParenthesesInfo;
+     Vector<std::unique_ptr<CharacterClass>> m_userCharacterClasses;
+-- 
+2.43.0
+
