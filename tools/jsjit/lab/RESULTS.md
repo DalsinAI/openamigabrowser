@@ -6,6 +6,25 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 22 Oct 2026, scalar string scans (patch 0046)
+
+A profile of page-json put half its instructions in LiteralParser's string
+lexing, in emulated 16-byte vector code (SIMD::find: per-byte compares
+through the stack, bfins). On M68K, SIMD::find and reverseFind now take
+their scalar loop. Counts with start-up (5.5 M) left in, 0045 then 0046:
+
+| test | 0045 (M) | 0046 (M) |
+|---|---:|---:|
+| page-json | 42.06 | 31.15 |
+| page-vdom | 40.03 | 39.77 |
+| page-lexer | 22.09 | 21.94 |
+| page-events | 60.71 | 60.49 |
+| page-template | 83.44 | 83.33 |
+
+page-json: 26% fewer instructions, 30% with start-up taken off.
+correct.js-correct16.js print what node prints with the JIT on and off
+(32/32).
+
 ## 22 Oct 2026, GC stress (patch 0045)
 
 Under GC stress (`JSC_slowPathAllocsBetweenGCs` 1-4, `JSC_useGenerationalGC=0`)

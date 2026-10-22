@@ -256,6 +256,11 @@ The patches, in order:
   aligned. It used to read only every 4 bytes and could miss a live
   object that C++ code still held, which then got freed (crashes and
   wrong values under GC pressure, with and without the JIT).
+- `0046-jsc-m68k-scalar-string-scans.patch`: WTF's SIMD::find and
+  reverseFind take their scalar loop on the 68k, which has no vector unit
+  (the compiler emulated each 16-byte vector a byte at a time). JSON.parse,
+  the JavaScript lexer, the URL parser and String find gain; page-json runs
+  26% fewer instructions.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
