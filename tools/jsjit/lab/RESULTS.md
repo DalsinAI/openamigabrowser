@@ -6,6 +6,27 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 22 Oct 2026, array writes one past the end (patch 0052)
+
+A map of the JIT's code to bytecodes (a local build that prints each
+instruction's address, matched against `count.sh`'s hot blocks) showed
+page-events spending 48% in the Array.prototype.filter builtin, and
+15% of the page in its `@putByValDirect(result, nextIndex, current)`:
+put_by_val_direct had no fast path, and put_by_val's only stored in
+bounds. Both now also store one past the end while the vector has room
+(the interpreter's own append), and filter's loop now gets its
+register-cached copy. `lab/correct22.js` (appends of int32s, doubles,
+objects and mixed values past the vector, gaps, non-extensible, sealed
+and frozen arrays and a read-only length part way through, strict mode,
+copy-on-write literals, plain objects with indexed properties, filter,
+map, slice, concat, flat, Array.from and Array.of, an indexed setter on
+Array.prototype, arrays kept across collections) prints what node
+prints with the JIT on and off, and under GC stress (N=3 and 50);
+correct.js-correct21.js too (44/44). Counts with start-up left in:
+page-events 60.44 M to 54.88 M (10% fewer with start-up taken off);
+page-vdom 33.33 to 33.27, page-lexer 21.01 to 20.95, page-json 31.14
+to 31.02, page-template 51.75 to 51.79.
+
 ## 22 Oct 2026, regex start positions skipped (patch 0051)
 
 page-template spent half its time in the regular expression interpreter
