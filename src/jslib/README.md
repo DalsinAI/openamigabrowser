@@ -3,8 +3,7 @@
 JavaScript for any AmigaOS 3.2 program on a 68040: JavaScriptCore with our
 68k JIT, shared by every program that opens the library. The program owns
 its objects and hands them to scripts as **host classes** (tables of
-methods, accessors and fields); the library owns the scripts. Design:
-[javascript.library: design](https://claude.ai/artifact/J3CieCdmqLrnL8QvJMfdwv).
+methods, accessors and fields); the library owns the scripts.
 Lives here for now; it moves to its own repository later.
 
 ```c
