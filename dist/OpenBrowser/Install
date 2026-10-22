@@ -1,55 +1,127 @@
-; Install: OpenBrowser test version, 22 October 2026 (scripts/package-browser.sh puts it in the drawer).
+; Install: OpenBrowser 0.8 test (22.10.2026), the Shell route.
 ; MIT, Copyright (c) 2026 AmigaChrome Team.
-; Run it from this drawer in a Shell:  CD <this drawer>  then  Execute Install
-; Then reboot (or quit any running OpenBrowser first), and start OpenBrowser
-; from this drawer.
+; The Installer (Install-OpenBrowser, beside this drawer) does the same with
+; questions. Run this from the drawer, where it stays:
+;     CD <this drawer>
+;     Execute Install
+; Then reboot (or quit OpenBrowser first) and start OpenBrowser here.
 ;
-; What it does:
-;  - LIBS:opentls.library, LIBS:opencrypto.library and S:OpenTLS/ca-bundle.pem
-;    are copied only when missing (https needs them), and LIBS:json.library;
-;  - when webbrowser.library is installed (LIBS:WebBrowser), the browser runs
-;    the engine in LIBS:WebBrowser rather than this drawer's. That engine is
-;    renamed WebBrowserEngine.before-20261022 (nothing is copied, so System:
-;    keeps its free space), and webbrowser.library then runs the new engine
-;    in this drawer's Libs/WebBrowser. To go back, rename it back.
-;  - the engine reads its Unicode data from Unicode/ in this drawer, so
-;    nothing goes into LOCALE:.
+; What it does; every step is checked, and it stops at the first failure:
+;  - LIBS:opentls.library 1.2 or newer and LIBS:opencrypto.library 2.1 or
+;    newer: a missing one goes in; one Version shows to be older is renamed
+;    .before-20261022 and the drawer's goes in; one whose version cannot be
+;    read (not loaded, no $VER in the file) is kept: the Installer reads
+;    the RomTag and checks it;
+;  - LIBS:json.library and S:OpenTLS/ca-bundle.pem when missing;
+;  - with webbrowser.library installed (LIBS:WebBrowser), the installed
+;    engine is renamed WebBrowserEngine.before-20261022 and
+;    LIBS:WebBrowser/WebBrowserEngine becomes a two-line script (bit S) that
+;    runs the engine in this drawer: every program that uses the library
+;    gets the new engine, and the 89 MB engine is not copied to System:.
+; Nothing is deleted.
 FailAt 21
-If NOT EXISTS LIBS:opentls.library
-  Copy Libs/opentls.library LIBS: QUIET
-  Echo "Installed LIBS:opentls.library"
-Else
-  Echo "LIBS:opentls.library is already there, kept"
+If NOT EXISTS Libs/WebBrowser/WebBrowserEngine
+  Echo "Run Install from the OpenBrowser drawer:  CD <the drawer>  then  Execute Install"
+  Quit 20
 EndIf
-If NOT EXISTS LIBS:opencrypto.library
-  Copy Libs/opencrypto.library LIBS: QUIET
-  Echo "Installed LIBS:opencrypto.library"
-Else
-  Echo "LIBS:opencrypto.library is already there, kept"
+
+Version opentls.library 1 2 >NIL:
+Set vrc $RC
+If $vrc EQ 0 VAL
+  Echo "LIBS:opentls.library is new enough, kept"
+  Skip tlsdone
 EndIf
+If $vrc GE 10 VAL
+  ; no version to read: not loaded, and the file has no $VER
+  If EXISTS LIBS:opentls.library
+    Echo "LIBS:opentls.library is there; its version cannot be read from the Shell, so it is kept (Install-OpenBrowser checks it)"
+    Skip tlsdone
+  EndIf
+Else
+  Rename LIBS:opentls.library LIBS:opentls.library.before-20261022
+  If WARN
+    Echo "Could not rename the old LIBS:opentls.library; nothing changed."
+    Quit 20
+  EndIf
+EndIf
+Copy Libs/opentls.library LIBS: QUIET
+If WARN
+  Echo "Could not copy opentls.library to LIBS: (is LIBS: full or write-protected?)"
+  Quit 20
+EndIf
+Echo "Installed LIBS:opentls.library"
+Lab tlsdone
+
+Version opencrypto.library 2 1 >NIL:
+Set vrc $RC
+If $vrc EQ 0 VAL
+  Echo "LIBS:opencrypto.library is new enough, kept"
+  Skip cryptodone
+EndIf
+If $vrc GE 10 VAL
+  ; no version to read: not loaded, and the file has no $VER
+  If EXISTS LIBS:opencrypto.library
+    Echo "LIBS:opencrypto.library is there; its version cannot be read from the Shell, so it is kept (Install-OpenBrowser checks it)"
+    Skip cryptodone
+  EndIf
+Else
+  Rename LIBS:opencrypto.library LIBS:opencrypto.library.before-20261022
+  If WARN
+    Echo "Could not rename the old LIBS:opencrypto.library; nothing changed."
+    Quit 20
+  EndIf
+EndIf
+Copy Libs/opencrypto.library LIBS: QUIET
+If WARN
+  Echo "Could not copy opencrypto.library to LIBS: (is LIBS: full or write-protected?)"
+  Quit 20
+EndIf
+Echo "Installed LIBS:opencrypto.library"
+Lab cryptodone
+
 If NOT EXISTS LIBS:json.library
   Copy Libs/json.library LIBS: QUIET
+  If WARN
+    Echo "Could not copy json.library to LIBS:"
+    Quit 20
+  EndIf
   Echo "Installed LIBS:json.library"
-Else
-  Echo "LIBS:json.library is already there, kept"
 EndIf
+
 If NOT EXISTS S:OpenTLS/ca-bundle.pem
   MakeDir S:OpenTLS >NIL:
   Copy S/OpenTLS/#? S:OpenTLS/ QUIET
-  Echo "Installed S:OpenTLS/ca-bundle.pem (the certificates for https)"
-Else
-  Echo "S:OpenTLS/ca-bundle.pem is already there, kept"
-EndIf
-If EXISTS LIBS:WebBrowser/WebBrowserEngine
-  If EXISTS LIBS:WebBrowser/WebBrowserEngine.before-20261022
-    Echo "LIBS:WebBrowser has both WebBrowserEngine and WebBrowserEngine.before-20261022;"
-    Echo "nothing was changed. Move one of them away, then run Install again."
-  Else
-    Rename LIBS:WebBrowser/WebBrowserEngine LIBS:WebBrowser/WebBrowserEngine.before-20261022
-    Echo "Renamed the installed engine to LIBS:WebBrowser/WebBrowserEngine.before-20261022;"
-    Echo "webbrowser.library now runs the new engine in this drawer."
+  If WARN
+    Echo "Could not copy the certificates to S:OpenTLS"
+    Quit 20
   EndIf
+  Echo "Installed S:OpenTLS/ca-bundle.pem (the certificates for https)"
 EndIf
+
+If EXISTS LIBS:WebBrowser
+  If EXISTS LIBS:WebBrowser/WebBrowserEngine
+    If NOT EXISTS LIBS:WebBrowser/WebBrowserEngine.before-20261022
+      Rename LIBS:WebBrowser/WebBrowserEngine LIBS:WebBrowser/WebBrowserEngine.before-20261022
+      If WARN
+        Echo "Could not rename the installed engine; nothing changed in LIBS:WebBrowser."
+        Quit 20
+      EndIf
+      Echo "Kept the installed engine as LIBS:WebBrowser/WebBrowserEngine.before-20261022"
+    EndIf
+  EndIf
+  CD >T:ob-install-dir
+  Echo "; OpenBrowser 0.8 test: the engine is in the drawer (Install)" >LIBS:WebBrowser/WebBrowserEngine
+  If WARN
+    Echo "Could not write LIBS:WebBrowser/WebBrowserEngine"
+    Quit 20
+  EndIf
+  Echo "CD " NOLINE >>LIBS:WebBrowser/WebBrowserEngine
+  Type T:ob-install-dir >>LIBS:WebBrowser/WebBrowserEngine
+  Echo "Libs/WebBrowser/WebBrowserEngine" >>LIBS:WebBrowser/WebBrowserEngine
+  Protect LIBS:WebBrowser/WebBrowserEngine +s
+  Echo "LIBS:WebBrowser now runs the new engine in this drawer"
+EndIf
+
 If NOT EXISTS LIBS:bsdsocket.library
   Echo "No LIBS:bsdsocket.library: turn networking on for this instance in Cradle, or install OpenSocket from OpenUp."
 EndIf
