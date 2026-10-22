@@ -1,0 +1,59 @@
+==id $Id: json_lib.sfd 1.0 (22.10.2026) OpenJSON, AmigaChrome Team $
+* json.library: JSON (RFC 8259) for native programs. MIT, Copyright (c) 2026 AmigaChrome Team.
+* scripts/gen-jsonlib-sdk.sh makes sdk/ (clib, inline, pragmas, proto, FD, LVOs) from this with
+* OpenNDK's ndkgen.py; openjson_lib.c's vector table follows it line for line (check_vectors.py).
+==base _JSONBase
+==basetype struct Library *
+==libname json.library
+==include <libraries/json.h>
+==bias 30
+==public
+* Parsing into a block
+ULONG JSONDocSize(CONST_STRPTR text, ULONG len, ULONG flags, struct JSONError * err) (a0,d0,d1,a1)
+struct JSONDoc * JSONParseInto(CONST_STRPTR text, ULONG len, ULONG flags, APTR mem, ULONG size, struct JSONError * err) (a0,d0,d1,a1,d2,a2)
+struct JSONDoc * JSONParse(CONST_STRPTR text, ULONG len, ULONG flags, struct JSONError * err) (a0,d0,d1,a1)
+VOID JSONFreeDoc(struct JSONDoc * doc) (a0)
+LONG JSONCheckDoc(CONST struct JSONDoc * doc, ULONG size) (a0,d0)
+* Reading a block
+ULONG JSONType(CONST struct JSONDoc * doc, ULONG node) (a0,d0)
+ULONG JSONCount(CONST struct JSONDoc * doc, ULONG node) (a0,d0)
+ULONG JSONSkip(CONST struct JSONDoc * doc, ULONG node) (a0,d0)
+ULONG JSONIndex(CONST struct JSONDoc * doc, ULONG node, ULONG index) (a0,d0,d1)
+ULONG JSONFind(CONST struct JSONDoc * doc, ULONG node, CONST_STRPTR key, ULONG keylen) (a0,d0,a1,d1)
+ULONG JSONPointer(CONST struct JSONDoc * doc, ULONG node, CONST_STRPTR pointer) (a0,d0,a1)
+CONST_STRPTR JSONGetString(CONST struct JSONDoc * doc, ULONG node, ULONG * len) (a0,d0,a1)
+LONG JSONGetLong(CONST struct JSONDoc * doc, ULONG node, LONG * value) (a0,d0,a1)
+LONG JSONGetDouble(CONST struct JSONDoc * doc, ULONG node, DOUBLE * value) (a0,d0,a1)
+ULONG JSONGetLatin1(CONST struct JSONDoc * doc, ULONG node, STRPTR buffer, ULONG size) (a0,d0,a1,d1)
+* Numbers
+LONG JSONTextToDouble(CONST_STRPTR text, ULONG len, DOUBLE * value) (a0,d0,a1)
+LONG JSONTextToLong(CONST_STRPTR text, ULONG len, LONG * value) (a0,d0,a1)
+ULONG JSONDoubleToText(CONST DOUBLE * value, STRPTR buffer) (a0,a1)
+CONST_STRPTR JSONErrorString(LONG code) (d0)
+* Writing
+struct JSONWriter * JSONNewWriter(ULONG flags) (d0)
+VOID JSONFreeWriter(struct JSONWriter * writer) (a0)
+LONG JSONWriteBegin(struct JSONWriter * writer, ULONG type) (a0,d0)
+LONG JSONWriteEnd(struct JSONWriter * writer) (a0)
+LONG JSONWriteKey(struct JSONWriter * writer, CONST_STRPTR key, ULONG len) (a0,a1,d0)
+LONG JSONWriteString(struct JSONWriter * writer, CONST_STRPTR string, ULONG len) (a0,a1,d0)
+LONG JSONWriteLong(struct JSONWriter * writer, LONG value) (a0,d0)
+LONG JSONWriteDouble(struct JSONWriter * writer, CONST DOUBLE * value) (a0,a1)
+LONG JSONWriteBool(struct JSONWriter * writer, LONG value) (a0,d0)
+LONG JSONWriteNull(struct JSONWriter * writer) (a0)
+LONG JSONWriteNumberText(struct JSONWriter * writer, CONST_STRPTR text, ULONG len) (a0,a1,d0)
+LONG JSONWriteNode(struct JSONWriter * writer, CONST struct JSONDoc * doc, ULONG node) (a0,a1,d0)
+CONST_STRPTR JSONWriterText(struct JSONWriter * writer, ULONG * len) (a0,a1)
+LONG JSONWriterError(struct JSONWriter * writer) (a0)
+VOID JSONResetWriter(struct JSONWriter * writer) (a0)
+STRPTR JSONStringify(CONST struct JSONDoc * doc, ULONG node, ULONG flags, ULONG * len) (a0,d0,d1,a1)
+VOID JSONFreeText(STRPTR text) (a0)
+* Streaming reader
+struct JSONReader * JSONNewReader(ULONG flags) (d0)
+VOID JSONFreeReader(struct JSONReader * reader) (a0)
+VOID JSONReaderFeed(struct JSONReader * reader, APTR buffer, ULONG len) (a0,a1,d0)
+LONG JSONReaderNext(struct JSONReader * reader) (a0)
+CONST_STRPTR JSONReaderText(struct JSONReader * reader, ULONG * len) (a0,a1)
+ULONG JSONReaderDepth(struct JSONReader * reader) (a0)
+LONG JSONReaderError(struct JSONReader * reader, struct JSONError * err) (a0,a1)
+==end
