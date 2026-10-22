@@ -6,6 +6,29 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 22 Oct 2026, Array.prototype.push in line (patch 0047)
+
+The page profiles had arrayProtoFuncPush and the native call trampoline
+at 4-6% of page-vdom and page-lexer. Push of one value onto an Int32 or
+Contiguous array with room now happens in the JIT's code.
+`lab/correct17.js` (int32, object, double and mixed arrays, holes,
+frozen, sealed and read-only-length arrays, subclasses, a generic
+object, a replaced push, push with no or two values, cells into old
+arrays across collections, copy-on-write literals) prints what node
+prints with the JIT on and off, and under GC stress; correct.js-
+correct16.js too (34/34). Counts with start-up left in, 0046 then 0047:
+
+| test | 0046 (M) | 0047 (M) |
+|---|---:|---:|
+| page-vdom | 39.77 | 38.47 |
+| page-lexer | 21.94 | 20.95 |
+| page-events | 60.49 | 60.49 |
+| page-json | 31.15 | 31.15 |
+| page-template | 83.33 | 83.08 |
+| micro-array | 69.00 | 66.45 |
+
+With start-up taken off: vdom 3.8%, lexer 6.1% fewer instructions.
+
 ## 22 Oct 2026, scalar string scans (patch 0046)
 
 A profile of page-json put half its instructions in LiteralParser's string
