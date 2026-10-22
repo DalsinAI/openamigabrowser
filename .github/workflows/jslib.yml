@@ -1,0 +1,85 @@
+name: javascript.library
+
+# javascript.library (src/jslib): the library and the JS command built for
+# the 68040 with the OpenAmigaGCC release and OpenNDK, the vector table and
+# the SDK headers checked against the SFD, and the engine's AmigaOS layer
+# compiled. The engine itself needs a JavaScriptCore build
+# (scripts/build-javascript-engine.sh); its core is tested under qemu-m68k
+# by tests/jslib/run.sh against the 68k JIT lab's build.
+on:
+  push:
+    paths:
+      - 'src/jslib/**'
+      - 'scripts/build-javascript-library.sh'
+      - 'scripts/gen-jslib-sdk.sh'
+      - '.github/workflows/jslib.yml'
+  pull_request:
+    paths:
+      - 'src/jslib/**'
+      - 'scripts/build-javascript-library.sh'
+      - 'scripts/gen-jslib-sdk.sh'
+      - '.github/workflows/jslib.yml'
+  workflow_dispatch:
+
+env:
+  OPENSDK_REF: 5bfeaea0d004e86afb990fddb591bf0039f09233      # openamigasdk main, as lite.yml
+  TC_URL: https://github.com/DalsinAI/openamigagcc/releases/download/v16.2.0-open3/openamigagcc-16.2.0-open3-x86_64-linux.tar.xz
+  TC_SHA256: 9fcc136ab59e3bb5b91d2764d0bf290b709d72d7380be4ce0cdf005edf8eff21
+
+jobs:
+  amiga:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DalsinAI/openamigasdk
+          ref: ${{ env.OPENSDK_REF }}
+          path: openamigasdk
+      - name: Fetch the toolchain
+        run: |
+          mkdir -p tc
+          curl -fsSL -o tc/tc.tar.xz "$TC_URL"
+          echo "$TC_SHA256  tc/tc.tar.xz" | sha256sum -c -
+          tar xf tc/tc.tar.xz -C tc
+      - name: 68040 build (javascript.library and JS)
+        run: |
+          TOOLCHAIN_DIR=tc/openamigagcc-16.2.0-open3-x86_64-linux \
+          NDK_INCLUDE=$PWD/openamigasdk/OpenNDK/Include_H \
+          OPENSDK_SRC=$PWD/openamigasdk \
+          scripts/build-javascript-library.sh build/javascript-library
+      - name: The engine's AmigaOS layer compiles
+        run: |
+          D=tc/openamigagcc-16.2.0-open3-x86_64-linux/bin
+          for f in jsl_os_exec jsl_engine; do
+            $D/m68k-amigaos-gcc -m68040 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -fno-common \
+              -Isrc/jslib -Isrc/jslib/sdk/Include_H -I$PWD/openamigasdk/OpenNDK/Include_H \
+              -c src/jslib/$f.c -o build/javascript-library/$f.o
+          done
+      - name: Check the library
+        run: |
+          D=tc/openamigagcc-16.2.0-open3-x86_64-linux/bin
+          L=build/javascript-library/javascript.library
+          for f in $L build/javascript-library/JS; do
+            $D/m68k-amigaos-objdump -f "$f" | grep -q 'file format amiga' || { echo "$f is not an Amiga executable"; exit 1; }
+          done
+          if grep -E 'lib(nix|c)[^ ]*\.a\(' build/javascript-library/javascript.library.map; then
+            echo "javascript.library links a C library"; exit 1
+          fi
+          # its only global state: SysBase and DOSBase, each set once
+          G=$($D/m68k-amigaos-nm $L | awk '$2 ~ /^[bBcCdD]$/ {print $3}' | grep -v '^__' | sort | tr '\n' ' ')
+          echo "writable globals: $G"
+          [ "$G" = "_DOSBase _SysBase " ] || { echo "javascript.library has other writable globals"; exit 1; }
+          strings $L | grep '^\$VER: javascript.library 1\.'
+          echo "### javascript.library" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -l $L build/javascript-library/JS >> "$GITHUB_STEP_SUMMARY"
+          sha256sum $L build/javascript-library/JS | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: javascript-library-68040
+          path: |
+            build/javascript-library/javascript.library
+            build/javascript-library/JS
+          retention-days: 30
