@@ -6,6 +6,25 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 22 Oct 2026, regex start positions skipped (patch 0051)
+
+page-template spent half its time in the regular expression interpreter
+(matchDisjunction, testCharacterClass): `/[&<>"']/g` was tried in full at
+every position of every string. When the pattern's one alternative
+starts with a character, a cased character or a character class, the
+interpreter now works out once which Latin-1 characters can start a
+match and moves past the other positions in 8-bit strings.
+`lab/correct21.js` (36 patterns against 8-bit and 16-bit strings with
+Latin-1, Kelvin, long s, dotted I, sigma and an emoji: classes, inverted
+classes, ignore case, unicode, ranges, \d \w \s, alternatives,
+optional and empty-able starts, ^ with m, \b, lookbehind, back
+references, $, empty classes; replace, split, matchAll, search, sticky,
+lastIndex, 10 KB input) prints what node prints, and what 0050 printed;
+correct.js-correct20.js too (42/42). Counts with start-up left in:
+page-template 83.08 M to 51.75 M (40% fewer with start-up taken off);
+page-vdom 33.33, page-lexer 21.01, page-events 60.44, page-json 31.14
+unchanged; micro-strings 10.71.
+
 ## 22 Oct 2026, arguments objects made in line (patch 0050)
 
 page-vdom's `h()` reads `arguments` on every call; making the
