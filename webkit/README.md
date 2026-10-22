@@ -277,6 +277,10 @@ The patches, in order:
   positions whose character the pattern cannot start with, in 8-bit
   strings, instead of trying the whole pattern at each one. Changes
   YarrInterpreter.h, so the files that include RegExpInlines.h rebuild.
+- `0052-jsc-m68k-jit-array-append.patch`: the template JIT's `a[i] = v`
+  also stores one past the end of an array with room, growing its length
+  (as the interpreter does), and the array builtins' put_by_val_direct
+  (the results of filter, map and friends) takes the same fast path.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
