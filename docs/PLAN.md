@@ -127,7 +127,7 @@ is done when its "done when" holds on the lab instance.
    style, layout and DOM code: 1,163,792 bytes, with the DOM bench within
    timer noise. Measured together, main with 0057 and 0058 is 79,535,312
    bytes stripped and folded, and 78,371,520 with 0056. Pc-relative code
-   (`OB_PCREL=1`: -mpcrel -fPIC, linked as one hunk) takes it to
+   (`OB_PCREL=1`: -mpcrel -fPIC, linked as one hunk; #85) takes it to
    75,787,212 (2,584,308 bytes less): 864,276 fewer relocations (1,494,434
    to 630,158), for 0.70 MB more code, with the DOM bench within timer
    noise (1,527 against 1,567 ms, nine runs each). `OB_PCREL` is off by
