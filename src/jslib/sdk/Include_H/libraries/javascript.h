@@ -47,6 +47,8 @@ typedef APTR JSClass;
 #define JSA_StackSize  (JSA_Dummy + 1)    /* the script task's stack in bytes (default 524288) */
 #define JSA_Name       (JSA_Dummy + 2)    /* the script task's name (default "JavaScript") */
 #define JSA_UserData   (JSA_Dummy + 3)    /* any pointer: JS_UserData gives it back */
+#define JSA_CacheDir   (JSA_Dummy + 4)    /* STRPTR: a folder where each script's translation is
+                                           * kept, made on first run and loaded after (default none) */
 
 /* ---- Errors (LONG results; 0 is success) ----------------------------------- */
 
