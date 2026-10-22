@@ -272,6 +272,11 @@ The patches, in order:
 - `0050-jsc-m68k-jit-direct-arguments.patch`: `arguments` objects
   (DirectArguments) are made in line in the template JIT, with up to 32
   slots, instead of a call into C++.
+- `0051-jsc-regexp-interpreter-first-character.patch`: the regular
+  expression interpreter (the 68k has no regex JIT) skips start
+  positions whose character the pattern cannot start with, in 8-bit
+  strings, instead of trying the whole pattern at each one. Changes
+  YarrInterpreter.h, so the files that include RegExpInlines.h rebuild.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
