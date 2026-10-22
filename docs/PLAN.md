@@ -3,7 +3,7 @@
 This is the one place that says where OpenBrowser is going and what comes
 next. Every PR that finishes a step, or changes a decision, updates this file
 in the same PR. The older documents (PHASE_PLAN.md, JS_ENGINE_PLAN.md,
-WEBCORE_PORT.md) explain how we got here. Where they disagree with this file,
+WEBCORE_PORT.md) explain how the browser got here. Where they disagree with this file,
 this file is right.
 
 Last checked: 22 October 2026, against the engine built from main at 96f8c89
@@ -18,7 +18,7 @@ Taken on 17 October 2026 (design 0.5) and still in force:
    comes from discrete services (autoconfig cores, the services card, a LAN
    Cradle), never from a browser running on the host.
 2. **Nothing third-party except SQLite.** Every other library the engine
-   links is one of ours.
+   links is one of the Team's.
 3. **Text is OpenFont** (openfont.library). It replaces FreeType, HarfBuzz
    and fontconfig, and later takes over the work WebKit gives ICU.
 4. **Drawing is OpenGfx and OpenGPU.** No cairo, no pixman.
@@ -28,8 +28,8 @@ Taken on 17 October 2026 (design 0.5) and still in force:
    and compressed bodies through gzip.datatype and brotli.datatype.
    Acceleration goes into the datatypes, never into side decoders in the
    browser.
-7. **XML is OXP,** our own parser (openamigaxml).
-8. **JavaScript has a 68k JIT,** our template JIT in WebKit's patches. It is
+7. **XML is OXP,** the Team's own parser (openamigaxml).
+8. **JavaScript has a 68k JIT,** the Team's template JIT in WebKit's patches. It is
    also shared with other programs as javascript.library.
 
 ## The documents this file overrides
@@ -39,7 +39,7 @@ The design documents disagree with each other (inventory of 22 October
 
 - amigachrome `docs/design/Design-OpenBrowser-JIT-on-core.md` 0.5 and
   `Design-OpenBrowser-Lean-Engine.md` 0.2 (17 October) are current: only
-  our own libraries and SQLite.
+  the Team's own libraries and SQLite.
 - `Design-OpenBrowser.md` 0.2 and the migration design 0.1 are older. They
   keep curl on OpenTLS, a trimmed ICU 78.3, and link OpenBrowser with
   pixman. None of that holds.
@@ -50,11 +50,11 @@ The design documents disagree with each other (inventory of 22 October
 
 ## Where each decision stands
 
-| Decision | Our part | State of our part | In today's engine? | What still links the old one |
+| Decision | The Team's part | State of that part | In today's engine? | What still links the old one |
 | --- | --- | --- | --- | --- |
 | XML is OXP | OXP, openamigaxml #7-#9 (passes the W3C suite) | done | **yes** (patch 0030, #13) | nothing |
 | Text is OpenFont | openfont.library 1.0 (20 calls): own font reader and rasteriser (openamigafont #9), shaper (#10, HarfBuzz 14.5.1 still inside), font index and fallback (#8) | built only in lab t4-a (17 Oct), in no release; OpenFontLibTest not yet passed on a lab. Short of what WebCore needs: UTF-8 input only, no script, language, direction or feature settings, A8 coverage only, no glyph outlines, no fonts from memory (web fonts), no colour or variable fonts | **no** | WebCore's FreeType, fontconfig and HarfBuzz files: FontCacheFreeType, FontSetCache, FontPlatformDataFreeType, FontCustomPlatformDataFreeType, GlyphPageTreeNodeFreeType, ComplexTextControllerHarfBuzz |
-| Drawing is OpenGfx/OpenGPU | OpenGfx (openamigagfx: graphics.library 47.100 and layers.library 47.102, clean room), opengpu.library 0.16 (openamigartg), pixman.library 2.0 (25 calls over OpenGPU, built only in lab t4-g-px) | OpenGfx has graphics.library's API: no anti-aliased paths, gradients, alpha compositing or glyph runs, and nothing deeper than 8 planes yet. OpenGPU's command stream has fill, copy, mask and premultiplied compositing, but no anti-aliased paths, gradients, scaled or filtered images, blur or blend modes. openamigagfx main builds graphics.library 47.100 and layers.library 47.102 (rebuilt on the dev machine 22 Oct). No GraphicsContext exists on either; GraphicsContextOpenGfx and DrawGlyphRun are in design documents only | **no** | WebCore's cairo GraphicsContext and image surfaces |
+| Drawing is OpenGfx/OpenGPU | OpenGfx (openamigagfx: graphics.library 47.100 and layers.library 47.102, clean room), opengpu.library 0.16 (openamigartg), pixman.library 2.0 (25 calls over OpenGPU; builds from openamigapixman main) | OpenGfx has graphics.library's API: no anti-aliased paths, gradients, alpha compositing or glyph runs, and nothing deeper than 8 planes yet. OpenGPU's command stream has fill, copy, mask and premultiplied compositing, but no anti-aliased paths, gradients, scaled or filtered images, blur or blend modes. openamigagfx main builds graphics.library 47.100 and layers.library 47.102 (rebuilt on the dev machine 22 Oct). No GraphicsContext exists on either; GraphicsContextOpenGfx and DrawGlyphRun are in design documents only | **no** | WebCore's cairo GraphicsContext and image surfaces |
 | Network is openweb.fetch | openweb.fetch/1 (openamigaservice `src/webfetch.c`, `docs/OPENWEB_FETCH.md`, v1 12 Oct) | runs on the services card only, and its TLS is the host's OpenSSL 3, not OpenTLS. It has cookies (passes every Set-Cookie through), keep-alive pooling, host-side gzip, deflate and Brotli, and 64 fetches at once. It lacks HTTP/2, WebSocket, proxies, HTTP auth and a LAN transport. No `OWFetch` binary on any drive; no WebCore network backend on it | **no**: today curl 8.22 on opentls.library 1.3 (patch 0022), HTTP/2 through nghttp2 (0023), bsdsocket.library from OpenSocket | WebCore's CurlContext and curl loader |
 | Decoders are datatypes | picture datatypes (openamigaimage); stream.datatype, gzip.datatype, brotli.datatype | pictures: yes. The stream class and the gzip and Brotli datatypes are a design only (JIT-on-core 0.5 §5.1), with no code in any repo | partly | libpng (for cairo) and zlib are still linked; curl decodes compressed bodies |
 | JavaScript JIT | patches 0020-0052 | in the browser | **yes** | nothing |
@@ -118,7 +118,7 @@ is done when its "done when" holds on the lab instance.
 7. **unicode.library, then ICU out.** Make unicode.library (none exists
    yet): one shared copy of ICU's data and its calls for every program,
    starting with the browser engine and JavaScriptEngine. Then replace
-   ICU's code with our own (line and word breaking, NFC, IDNA, Unicode
+   ICU's code with the Team's own (line and word breaking, NFC, IDNA, Unicode
    properties), in unicode.library, so that ICU leaves both engines. Done when the only
    third-party code in the engine's map is SQLite.
 
