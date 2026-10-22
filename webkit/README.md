@@ -269,6 +269,9 @@ The patches, in order:
 - `0049-jsc-m68k-jit-new-array.patch`: `[]` and `[a, b, ...]` (up to
   eight elements) are made in line in the template JIT, butterfly and
   cell from the free lists, instead of a call into C++.
+- `0050-jsc-m68k-jit-direct-arguments.patch`: `arguments` objects
+  (DirectArguments) are made in line in the template JIT, with up to 32
+  slots, instead of a call into C++.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
