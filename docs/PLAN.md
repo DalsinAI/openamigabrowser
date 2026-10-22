@@ -109,12 +109,28 @@ is done when its "done when" holds on the lab instance.
    brotli.datatype, so compressed bodies are decoded the Amiga way. Then a
    WebCore network backend in place of CurlContext and the curl loader.
    Done when curl, nghttp2 and libpsl are gone from the engine's map.
-6. **Drawing on OpenGfx and OpenGPU.** First, give OpenGPU what a
-   GraphicsContext needs: anti-aliased path coverage, gradients, scaled and
-   filtered images, and blend modes; also deeper-than-8-plane bitmaps in
-   OpenGfx. Then a GraphicsContext in place of cairo's. This is the largest
-   step: all of WebCore's painting goes through it. Done when cairo, pixman
-   and libpng are gone from the map.
+6. **Drawing on OpenGfx and OpenGPU.** Much of what a GraphicsContext
+   needs already exists; reuse it, don't write it again (check of 22 October):
+   - anti-aliased path fill and clip: openamigafont `of_raster_a8()` (A8
+     mask, curves, non-zero winding), moved into OpenGPU, with its mask
+     composite for clipping;
+   - scaled and bilinear images: OpenGPU COMPOSITE BILINEAR and
+     COMPOSITE_AFFINE (add premultiplied-with-transform and PAD edges);
+   - the 13 Porter-Duff operators: OpenGPU COMPOSITE_PD (add the Vulkan
+     back end);
+   - glyphs: OpenGPU MASK (add a batched glyph run and a glyph cache);
+   - shadows: openamigagfx `oc_shadow()`.
+
+   Still to write: anti-aliased strokes, linear, radial and conic
+   gradients, blur, the PDF/HSL blend modes, OpenGfx bitmaps deeper than 8
+   planes, then a GraphicsContext in place of cairo's. pixman.library 2.0's
+   DESIGN.md section 10 is the same gap list; this step tracks it. Before
+   the step starts, clean up the duplication: OpenGPU keeps the chunky
+   routines and OpenGfx 47.100 the planar ones; the old OpenGfx 1.x code in
+   opengpu.library (openamigartg `library/ogfx`) goes; `ogfx_*` files copied
+   into three repos become one. This is the largest step: all of WebCore's
+   painting goes through it. Done when cairo, pixman and libpng are gone
+   from the map.
 7. **unicode.library, then ICU out.** Make unicode.library (none exists
    yet): one shared copy of ICU's data and its calls for every program,
    starting with the browser engine and JavaScriptEngine. Then replace
