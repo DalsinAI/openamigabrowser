@@ -1,0 +1,91 @@
+From ff0b7bef2ebcbc463885948226e39d36ed1b80d0 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 06:31:51 +0000
+Subject: [PATCH] JavaScriptCore: 68k template JIT array writes one past the
+ end
+
+put_by_val's fast path also stores one past the end of an Int32 or
+Contiguous vector with room, growing the length by one, as the
+interpreter's handler does; put_by_val_direct (the array builtins'
+results) takes the same fast path, and loops that use it get their
+register-cached copy. Other indices, full vectors and other shapes are
+the template's.
+
+Team 3
+---
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 28 ++++++++++++++++---
+ 1 file changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index 8ebeb3cc3c2..9dfbcc0f24f 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -1596,11 +1596,16 @@ private:
+         m_hot.bindBranch(done);
+     }
+ 
+-    // As getByVal, in bounds only (the template grows arrays), and not to
+-    // copy-on-write arrays. An Int32Shape array only takes int32s.
++    // As getByVal, not to copy-on-write arrays, in bounds or one past the
++    // end while the vector has room (the interpreter's append: the length
++    // grows by one; an indexed setter on the prototype chain would have
++    // made the array's shape ArrayStorage); the template grows arrays. An
++    // Int32Shape array only takes int32s. put_by_val_direct (the array
++    // builtins' results) as put_by_val.
++    template<typename Op>
+     bool putByVal(const JSInstruction* instruction)
+     {
+-        auto bytecode = instruction->as<OpPutByVal>();
++        auto bytecode = instruction->as<Op>();
+         Operand base = operandFor(m_codeBlock, bytecode.m_base);
+         Operand index = operandFor(m_codeBlock, bytecode.m_property);
+         Operand value = operandFor(m_codeBlock, bytecode.m_value);
+@@ -1639,7 +1644,12 @@ private:
+         m_hot.bindShort(shapeOk);
+         m_hot.moveaDisp(0, JSObject::butterflyOffset(), 0);
+         m_hot.cmpDisp(0, Butterfly::offsetOfPublicLength(), 1);
++        size_t inBounds = m_hot.branchShort(Builder::CarrySet); // index < length, unsigned
++        slowUnless(Builder::NotEqual);
++        m_hot.cmpDisp(0, Butterfly::offsetOfVectorLength(), 1);
+         slowUnless(Builder::CarryClear);
++        m_hot.word(0x52a8); m_hot.word(Butterfly::offsetOfPublicLength()); // addq.l #1,d16(a0)
++        m_hot.bindShort(inBounds);
+         m_hot.lsl3(1);
+         if (value.isConstant) {
+             m_hot.storeImmIndexed(int32Tag, 0, 1, 0);
+@@ -3272,7 +3282,9 @@ private:
+         case op_create_this:
+             return Options::useM68KPropertyFastPaths() && createThis(instruction);
+         case op_put_by_val:
+-            return Options::useM68KPropertyFastPaths() && putByVal(instruction);
++            return Options::useM68KPropertyFastPaths() && putByVal<OpPutByVal>(instruction);
++        case op_put_by_val_direct:
++            return Options::useM68KPropertyFastPaths() && putByVal<OpPutByValDirect>(instruction);
+         case op_get_length:
+             return Options::useM68KPropertyFastPaths() && getLength(instruction);
+         default:
+@@ -3510,6 +3522,13 @@ private:
+             add(bytecode.m_value);
+             return result(Options::useM68KPropertyFastPaths() && !bytecode.m_base.isConstant());
+         }
++        case op_put_by_val_direct: {
++            auto bytecode = instruction->as<OpPutByValDirect>();
++            cell(bytecode.m_base);
++            add(bytecode.m_property);
++            add(bytecode.m_value);
++            return result(Options::useM68KPropertyFastPaths() && !bytecode.m_base.isConstant());
++        }
+         case op_get_length: {
+             auto bytecode = instruction->as<OpGetLength>();
+             add(bytecode.m_dst);
+@@ -4110,6 +4129,7 @@ private:
+         case op_put_by_id:
+         case op_get_by_val:
+         case op_put_by_val:
++        case op_put_by_val_direct:
+         case op_in_by_val:
+         case op_get_length: {
+             Vector<size_t> branches;
+-- 
+2.43.0
+
