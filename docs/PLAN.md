@@ -125,10 +125,22 @@ is done when its "done when" holds on the lab instance.
    gradients, blur, the PDF/HSL blend modes, OpenGfx bitmaps deeper than 8
    planes, then a GraphicsContext in place of cairo's. pixman.library 2.0's
    DESIGN.md section 10 is the same gap list; this step tracks it. Before
-   the step starts, clean up the duplication: OpenGPU keeps the chunky
-   routines and OpenGfx 47.100 the planar ones; the old OpenGfx 1.x code in
-   opengpu.library (openamigartg `library/ogfx`) goes; `ogfx_*` files copied
-   into three repos become one. This is the largest step: all of WebCore's
+   the step starts, clean up the duplication, with one home per job
+   (decided by Dale, 22 October):
+   - **opengpu.library** does all pixel work on chunky and RTG bitmaps:
+     fill, blit, composite, scale, blends, glyphs, gradients, blur, and the
+     anti-aliased path rasteriser (moved there from openfont), on its CPU,
+     host and Vulkan back ends;
+   - **OpenGfx** (graphics.library 47.100) keeps the graphics.library API
+     and planar bitmaps only, and calls OpenGPU for RTG bitmaps;
+   - **openfont** keeps fonts and shaping, and draws through OpenGPU;
+   - OpenRTG `screens.c`, the host's `acrtg.c` and the UI gradient fillers
+     (opengadtools, openlook, openintuition, gradientslider) call OpenGPU
+     instead of their own copies;
+   - the old OpenGfx 1.x code in opengpu.library (openamigartg
+     `library/ogfx`) and the copied `ogfx_*` files go;
+   - pixman.library becomes a thin layer over OpenGPU, or goes once
+     WebCore draws on OpenGPU directly. This is the largest step: all of WebCore's
    painting goes through it. Done when cairo, pixman and libpng are gone
    from the map.
 7. **unicode.library, then ICU out.** Make unicode.library (none exists
