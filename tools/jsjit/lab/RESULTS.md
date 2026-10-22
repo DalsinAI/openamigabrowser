@@ -6,6 +6,18 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 22 Oct 2026, GC stress (patch 0045)
+
+Under GC stress (`JSC_slowPathAllocsBetweenGCs` 1-4, `JSC_useGenerationalGC=0`)
+the qemu shell crashed in marking with the JIT on and off, for example on
+`function d() { return new Error("trace").stack.split("\n").length; }`
+called in a loop. The 68040 lab showed "Out of memory" and wrong values
+on the long JSON page. The cause was the conservative scan of the machine
+stack: it read only every fourth byte as a pointer start, and 68k code
+keeps pointers 2-byte aligned. With 0045 it reads every halfword: every
+page test and correct.js-correct16.js print what node prints at N=1, 2
+and 3, with the JIT on and off (126/126).
+
 ## 21 Oct 2026, timing on the 68040 lab (patch 0043, K09 engine)
 
 The OpenBrowser 0.7 engine (-Os, 0001-0043) in a lab copy of the
