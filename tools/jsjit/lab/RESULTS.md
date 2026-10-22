@@ -6,6 +6,23 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 22 Oct 2026, arguments objects made in line (patch 0050)
+
+page-vdom's `h()` reads `arguments` on every call; making the
+DirectArguments (createByCopying, createUninitialized and the slow path)
+was about 5% of the page. The JIT's code now takes a cell of the right
+size from the cell space's allocator for that size and copies the
+arguments in from the frame. `lab/correct20.js` (fewer, as many and
+more arguments than parameters, none, 30-39 through apply, sloppy
+mapping both ways, a changed length, deleted elements, callee, objects
+kept across collections, spread, apply and Array.from of arguments,
+strict mode, twelve parameters) prints what node prints with the JIT on
+and off, and under GC stress (N=3 and 50); correct.js-correct19.js too
+(40/40). page-vdom gives the same result under GC stress (N=3). Counts
+with start-up left in: page-vdom 34.89 M to 33.33 M (5.4% fewer with
+start-up taken off); micro-calls 13.90 M; the other pages unchanged
+(lexer 21.00, events 60.44, json 31.14, template 83.08).
+
 ## 22 Oct 2026, arrays made in line (patch 0049)
 
 page-vdom spent about 7% making arrays (`var kids = []` in every
