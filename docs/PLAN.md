@@ -114,6 +114,15 @@ is done when its "done when" holds on the lab instance.
      single functions; 4 to 8 MB (estimate);
    - the Web Inspector out of the engine into webinspector.library, loaded
      on demand: 2.6 MB.
+   - JSON.parse through json.library (patch 0058), so LiteralParser is no
+     longer built: 1.27 MB.
+
+   Done so far: folding (#78), the inspector out (patch 0057, #80, 3.26 MB)
+   and JSON.parse through json.library (patch 0058, #81, 1,267,592 bytes;
+   LiteralParser was about 1.0 MB in the map, not the 3.06 MB above). The
+   engine now needs json.library in `LIBS:`. Each saving was measured on
+   its own against the 89.7 MB build; the combined build on main gives the
+   real total. Still to do: no forced inlining (patch 0056) and -mpcrel.
 
    Section GC (`OB_GC_SECTIONS`, #45) is off by default; the 22 October
    test build turned it on, and it saves almost nothing on its own; with
