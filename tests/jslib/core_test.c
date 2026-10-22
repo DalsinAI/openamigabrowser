@@ -4,10 +4,14 @@
  * Each check prints "ok" or "FAIL"; the exit code is the number of failures.
  * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
+#include <dirent.h>
 #include <pthread.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "jsl_engine.h"
@@ -45,6 +49,142 @@ static int evalIs(JSTask t, const char *src, const char *want)
         return 0;
     }
     return 1;
+}
+
+/* ---- Translate once ---------------------------------------------------------- */
+
+static const char cacheDir[] = "/tmp/jslib-cache-test";
+static const char cacheScript[] =
+    "function sq(n) { return n * n; }\n"
+    "function cube(n) { return n * n * n; }\n"
+    "function sum(f) { var s = 0; for (var i = 1; i <= 10; i++) s += f(i); return s; }\n";
+
+/* The bytes in the cache folder's files (-1: no folder); with spoil, each
+ * file is first cut to 64 bytes of nonsense. Every text evaluated has its
+ * own file, the short calls too. */
+static unsigned long cacheStamp;    /* the files' modification times, summed */
+
+static long cacheFiles(int spoil)
+{
+    DIR *d = opendir(cacheDir);
+    struct dirent *e;
+    long size = 0;
+    cacheStamp = 0;
+    if (!d)
+        return -1;
+    while ((e = readdir(d))) {
+        char path[300];
+        struct stat st;
+        if (e->d_name[0] == '.')
+            continue;
+        snprintf(path, sizeof path, "%s/%s", cacheDir, e->d_name);
+        if (spoil) {
+            FILE *f = fopen(path, "wb");
+            int i;
+            for (i = 0; f && i < 64; i++)
+                fputc(i * 37 + 11, f);
+            if (f)
+                fclose(f);
+        }
+        if (!stat(path, &st))
+        {
+            size += (long)st.st_size;
+            cacheStamp += (unsigned long)st.st_mtim.tv_sec * 1000003u + (unsigned long)st.st_mtim.tv_nsec;
+        }
+    }
+    closedir(d);
+    return size;
+}
+
+static long cacheSize(void)
+{
+    return cacheFiles(0);
+}
+
+static void cacheClear(void)
+{
+    DIR *d = opendir(cacheDir);
+    struct dirent *e;
+    while (d && (e = readdir(d))) {
+        char path[300];
+        if (e->d_name[0] == '.')
+            continue;
+        snprintf(path, sizeof path, "%s/%s", cacheDir, e->d_name);
+        unlink(path);
+    }
+    if (d)
+        closedir(d);
+}
+
+/* One run: a task with the cache, the script, then calls; its answer */
+static int cacheRun(const char *calls, const char *want)
+{
+    struct TagItem tags[] = { { JSA_CacheDir, (ULONG)cacheDir }, { TAG_DONE, 0 } };
+    JSTask t = E->NewTask(tags);
+    int good;
+    if (!t)
+        return 0;
+    good = E->Evaluate(t, (CONST_STRPTR)cacheScript, -1, (CONST_STRPTR)"cached.js", NULL) == JSERR_OK
+        && evalIs(t, calls, want);
+    E->EndTask(t);
+    return good;
+}
+
+static void cacheTests(void)
+{
+    long first = 0, second = 0, third = 0, spoilt;
+    unsigned long stamp;
+    cacheClear();
+    check(cacheRun("sum(sq)", "385") && (first = cacheSize()) > 0, "a script's translation is saved on its first run");
+    stamp = cacheStamp;
+    usleep(20000);
+    check(cacheRun("sum(sq)", "385") && cacheSize() == first && cacheStamp == stamp, "the next run loads it and writes nothing");
+    check(cacheRun("sum(cube)", "3025") && (second = cacheSize()) > first, "a function first called later is added");
+    check(cacheRun("sum(sq) + sum(cube)", "3410") && (third = cacheSize()) > second, "both run, the new call text saved too");
+    stamp = cacheStamp;
+    usleep(20000);
+    check(cacheRun("sum(sq) + sum(cube)", "3410") && cacheSize() == third && cacheStamp == stamp, "then all of it loads and nothing is written");
+    printf("     cache file %ld bytes, then %ld, then %ld\n", first, second, third);
+    /* A file the engine cannot use is made again */
+    spoilt = cacheFiles(1);
+    check(cacheRun("sum(cube)", "3025") && cacheSize() > spoilt, "a spoilt file is written again");
+    check(cacheRun("sum(sq) + sum(cube)", "3410"), "and runs from it after");
+    third = cacheSize();
+    stamp = cacheStamp;
+    usleep(20000);
+    check(cacheRun("sum(sq) + sum(cube)", "3410") && cacheSize() == third && cacheStamp == stamp, "and writes nothing after that");
+    /* What it saves: a large script's load, made once then loaded */
+    {
+        static char big[400000];
+        size_t n = 0;
+        int i, run;
+        double ms[3];
+        for (i = 0; i < 1500; i++)
+            n += snprintf(big + n, sizeof big - n,
+                "function f%d(a, b) { var s = 0; for (var i = 0; i < a; i++) { if (i %% 3 == %d) s += b * i; else s -= i; } return s + %d; }\n",
+                i, i % 3, i);
+        snprintf(big + n, sizeof big - n, "var total = 0; for (var k = 0; k < 1500; k++) total += this['f' + k](4, 2);\n");
+        for (run = 0; run < 3; run++) {
+            struct TagItem tags[] = { { run ? JSA_CacheDir : TAG_IGNORE, (ULONG)cacheDir }, { TAG_DONE, 0 } };
+            JSTask t = E->NewTask(tags);
+            struct timespec a, b;
+            clock_gettime(CLOCK_MONOTONIC, &a);
+            E->Evaluate(t, (CONST_STRPTR)big, -1, (CONST_STRPTR)"big.js", NULL);
+            clock_gettime(CLOCK_MONOTONIC, &b);
+            ms[run] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6;
+            check(evalIs(t, "total", "1124250"), run == 0 ? "a large script, no cache" : run == 1 ? "made and saved" : "loaded");
+            E->EndTask(t);
+        }
+        printf("     1,500 functions, all called once: %.0f ms with no cache, %.0f ms making and saving, %.0f ms loaded\n",
+            ms[0], ms[1], ms[2]);
+    }
+
+    /* No folder tag: nothing is kept */
+    {
+        JSTask t = E->NewTask(NULL);
+        check(evalIs(t, "6 * 7", "42"), "no JSA_CacheDir runs as before");
+        E->EndTask(t);
+    }
 }
 
 /* ---- A host class: a point the program owns -------------------------------- */
@@ -365,6 +505,8 @@ int main(void)
         check(p.released == 1, "ending the task releases the live wrapper");
         check(q.released == 1, "every wrapper is released once");
     }
+
+    cacheTests();
 
     /* Several script tasks at once, from several threads */
     {
