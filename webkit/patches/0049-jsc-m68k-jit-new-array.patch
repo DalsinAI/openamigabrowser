@@ -1,0 +1,158 @@
+From ee9ca2e0ac3f6da0d962f11258bddb7610cf1ad7 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 06:03:29 +0000
+Subject: [PATCH] JavaScriptCore: arrays made in the 68k template JIT
+
+[] and [a, b, ...] (up to eight elements) are made in line while the
+site's allocation profile still picks the indexing type it had at
+compile time (an empty undecided, int32 or contiguous array, or a
+contiguous one with elements) and the global object is not having a bad
+time. The butterfly and the cell come from the free lists' current
+intervals, both checked before either is taken, and the array becomes
+the profile's last one, as in the slow path. Anything else is the
+template's.
+
+Team 3
+---
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 106 ++++++++++++++++++
+ 1 file changed, 106 insertions(+)
+
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index 08275fd28b5..7577bbe4d6b 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -29,11 +29,13 @@
+ #include "CellState.h"
+ #include "CallLinkInfo.h"
+ #include "Butterfly.h"
++#include "ButterflyInlines.h"
+ #include "CodeBlock.h"
+ #include "DirectArguments.h"
+ #include "IndexingType.h"
+ #include "GetByIdMetadata.h"
+ #include "JSCJSValueInlines.h"
++#include "JSArray.h"
+ #include "JSCallee.h"
+ #include "FunctionRareData.h"
+ #include "LocalAllocator.h"
+@@ -1280,6 +1282,108 @@ private:
+         return true;
+     }
+ 
++    // [] and [a, b, ...] (the DFG's emitAllocateRasterizedArray; the
++    // interpreter's slow_path_new_array): while the allocation profile
++    // still picks the indexing type it had when this was compiled (an
++    // empty array of undecided, int32 or contiguous shape, or a contiguous
++    // one with elements) and the global object is not having a bad time.
++    // The butterfly and the cell come from the free lists' current
++    // intervals, both checked before either is taken; the array becomes
++    // the profile's last one, as the slow path does. Anything else is the
++    // template's.
++    bool newArray(const JSInstruction* instruction)
++    {
++        auto bytecode = instruction->as<OpNewArray>();
++        Operand dst = operandFor(m_codeBlock, bytecode.m_dst);
++        unsigned argc = bytecode.m_argc;
++        if (!dst.valid || dst.isConstant || argc > 8)
++            return false;
++        Vector<Operand, 8> elements;
++        for (unsigned i = 0; i < argc; ++i) {
++            Operand element = operandFor(m_codeBlock, virtualRegisterForLocal(bytecode.m_argv.toLocal() + i));
++            if (!element.valid || element.isConstant)
++                return false;
++            elements.append(element);
++        }
++        auto* profile = &bytecode.metadata(m_codeBlock).m_arrayAllocationProfile;
++        IndexingType type = profile->selectIndexingTypeConcurrently();
++        if (argc ? type != ArrayWithContiguous : (type != ArrayWithUndecided && type != ArrayWithInt32 && type != ArrayWithContiguous))
++            return false;
++        JSGlobalObject* globalObject = m_codeBlock->globalObject();
++        WatchpointSet& badTime = globalObject->havingABadTimeWatchpointSet();
++        if (badTime.hasBeenInvalidated())
++            return false;
++        Structure* structure = globalObject->arrayStructureForIndexingTypeDuringAllocation(type);
++        if (!structure || structure->outOfLineCapacity() || structure->indexingModeIncludingHistory() != type)
++            return false;
++        VM& vm = m_codeBlock->vm();
++        unsigned vectorLength = Butterfly::optimalContiguousVectorLength(structure, argc);
++        if (vectorLength > 16)
++            return false;
++        Allocator storageAllocator = vm.auxiliarySpace().allocatorFor(sizeof(IndexingHeader) + vectorLength * sizeof(EncodedJSValue), AllocatorForMode::EnsureAllocator);
++        Allocator cellAllocator = allocatorForConcurrently<JSArray>(vm, JSArray::allocationSize(0), AllocatorForMode::EnsureAllocator);
++        if (!storageAllocator || !cellAllocator || storageAllocator == cellAllocator)
++            return false;
++        auto* storage = reinterpret_cast<uint8_t*>(storageAllocator.localAllocator());
++        auto* cell = reinterpret_cast<uint8_t*>(cellAllocator.localAllocator());
++        constexpr int intervalStart = LocalAllocator::offsetOfFreeList() + FreeList::offsetOfIntervalStart();
++        constexpr int intervalEnd = LocalAllocator::offsetOfFreeList() + FreeList::offsetOfIntervalEnd();
++        static_assert(sizeof(ArrayAllocationProfile) == sizeof(JSArray*) + sizeof(uint16_t)); // the last array, then the type (high byte) and vector length hint
++        auto* profileType = reinterpret_cast<uint8_t*>(profile) + sizeof(JSArray*);
++        auto abs = [&](const void* address) { m_hot.longWord(reinterpret_cast<uintptr_t>(address)); };
++
++        // The profile: the same type, and its last array (if any) still of
++        // it (else the template updates the profile).
++        m_hot.word(0x0c39); m_hot.word(type); abs(profileType); // cmpi.b #type,(abs).l
++        slowUnless(Builder::NotEqual);
++        m_hot.moveLongAbs(profile, 0);
++        size_t noLast = m_hot.branchShort(Builder::Equal);
++        m_hot.moveaFromData(0, 0);
++        m_hot.loadByteDisp(0, JSCell::indexingTypeAndMiscOffset(), 0);
++        m_hot.andByteImm(IndexingTypeMask, 0);
++        m_hot.cmpByteImm(type, 0);
++        slowUnless(Builder::NotEqual);
++        m_hot.bindShort(noLast);
++        static_assert(sizeof(WatchpointState) == 1);
++        m_hot.word(0x0c39); m_hot.word(IsInvalidated); abs(reinterpret_cast<uint8_t*>(&badTime) + WatchpointSet::offsetOfState()); // cmpi.b #imm,(abs).l
++        slowUnless(Builder::Equal);
++        // Both intervals non-empty, then both taken.
++        m_hot.word(0x2079); abs(storage + intervalStart); // movea.l (abs).l,a0
++        m_hot.word(0xb1f9); abs(storage + intervalEnd); // cmpa.l (abs).l,a0
++        slowUnless(Builder::CarryClear);
++        m_hot.word(0x2279); abs(cell + intervalStart); // movea.l (abs).l,a1
++        m_hot.word(0xb3f9); abs(cell + intervalEnd); // cmpa.l (abs).l,a1
++        slowUnless(Builder::CarryClear);
++        m_hot.word(0x06b9); m_hot.longWord(storageAllocator.cellSize()); abs(storage + intervalStart); // addi.l #imm,(abs).l
++        m_hot.word(0x06b9); m_hot.longWord(cellAllocator.cellSize()); abs(cell + intervalStart);
++        // The butterfly: its indexing header, the elements, then holes (the
++        // empty value, all zero) up to the vector length.
++        static_assert(Butterfly::offsetOfPublicLength() == -static_cast<int>(sizeof(IndexingHeader)) && Butterfly::offsetOfVectorLength() == Butterfly::offsetOfPublicLength() + 4);
++        m_hot.word(0x20fc); m_hot.longWord(argc); // move.l #imm,(a0)+
++        m_hot.word(0x20fc); m_hot.longWord(vectorLength);
++        for (unsigned i = 0; i < argc; ++i) {
++            // values[-i] (constructArrayNegativeIndexed): the i'th element
++            // is the i'th local after the first.
++            const Operand& element = elements[i];
++            m_hot.copyFrameToDisp(element.hi, 0, i * 8);
++            m_hot.copyFrameToDisp(element.lo, 0, i * 8 + 4);
++        }
++        for (unsigned i = argc; i < vectorLength; ++i) {
++            m_hot.word(0x42a8); m_hot.word(i * 8); // clr.l d16(a0)
++            m_hot.word(0x42a8); m_hot.word(i * 8 + 4);
++        }
++        // The cell: the header from the structure, the butterfly.
++        static_assert(sizeof(StructureID) == sizeof(uint32_t));
++        m_hot.storeImmDisp(reinterpret_cast<uintptr_t>(structure), 1, JSCell::structureIDOffset());
++        m_hot.word(0x2379); abs(reinterpret_cast<uint8_t*>(structure) + Structure::indexingModeIncludingHistoryOffset()); m_hot.word(JSCell::indexingTypeAndMiscOffset()); // move.l (abs).l,d16(a1)
++        m_hot.word(0x2348); m_hot.word(JSObject::butterflyOffset()); // move.l a0,d16(a1)
++        m_hot.word(0x23c9); abs(profile); // move.l a1,(abs).l
++        m_hot.clrFrame(dst.hi);
++        m_hot.word(0x2009); // move.l a1,d0
++        m_hot.storeFrame(0, dst.lo);
++        return true;
++    }
++
+     // `index in array` (the array builtins' hole checks): true for an int32
+     // index below the length of an Int32Shape or ContiguousShape array where
+     // the element is not a hole; anything else is the template.
+@@ -3079,6 +3183,8 @@ private:
+             return Options::useM68KPropertyFastPaths() && enumeratorNext(instruction);
+         case op_new_object:
+             return Options::useM68KPropertyFastPaths() && newObject(instruction);
++        case op_new_array:
++            return Options::useM68KPropertyFastPaths() && newArray(instruction);
+         case op_create_this:
+             return Options::useM68KPropertyFastPaths() && createThis(instruction);
+         case op_put_by_val:
+-- 
+2.43.0
+

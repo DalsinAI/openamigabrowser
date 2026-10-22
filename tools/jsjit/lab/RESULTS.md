@@ -6,6 +6,32 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 22 Oct 2026, arrays made in line (patch 0049)
+
+page-vdom spent about 7% making arrays (`var kids = []` in every
+node) in llint_slow_path_new_array, JSArray::tryCreateUninitializedRestricted
+and constructArrayNegativeIndexed. Empty arrays, and contiguous ones of
+up to eight elements, are now made by the JIT's code: the butterfly and
+the cell from the free lists' current intervals, while the allocation
+profile keeps its type and the global object is not having a bad time.
+`lab/correct19.js` (empty arrays that take int32s, doubles and objects,
+literals of every kind of value, eight and nine elements, holes, a site
+whose arrays change shape, an indexed setter on Array.prototype part
+way through, arrays kept across collections) prints what node prints
+with the JIT on and off, and under GC stress (N=3 and 50);
+correct.js-correct18.js too (38/38). page-vdom also gives the same
+result under GC stress (N=3, 20). Counts with start-up left in:
+
+| page | 0048 | 0049 |
+| --- | ---: | ---: |
+| page-vdom | 37.22 M | 34.89 M |
+| page-lexer | 20.93 M | 21.01 M |
+| page-events | 60.49 M | 60.44 M |
+| page-json | 31.15 M | 31.14 M |
+| page-template | 83.11 M | 83.08 M |
+
+page-vdom runs 7.5% fewer instructions with start-up taken off.
+
 ## 22 Oct 2026, Math.min and Math.max in line (patch 0048)
 
 page-vdom spent 2-3% in mathProtoFuncMin and its native call. Two
