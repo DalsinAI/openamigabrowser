@@ -178,8 +178,8 @@ is done when its "done when" holds on the lab instance.
      instead of their own copies;
    - the old OpenGfx 1.x code in opengpu.library (openamigartg
      `library/ogfx`) and the copied `ogfx_*` files go;
-   - pixman.library becomes a thin layer over OpenGPU, or goes once
-     WebCore draws on OpenGPU directly. This is the largest step: all of WebCore's
+   - no cairo and no pixman (Dale, 22 October): WebCore draws on OpenGPU
+     directly, and nothing in the browser uses pixman.library. This is the largest step: all of WebCore's
    painting goes through it. Done when cairo, pixman and libpng are gone
    from the map.
 7. **unicode.library, then ICU out.** Make unicode.library (none exists
