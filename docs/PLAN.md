@@ -116,7 +116,9 @@ is done when its "done when" holds on the lab instance.
      on demand: 2.6 MB.
 
    Section GC (`OB_GC_SECTIONS`, #45) is off by default; the 22 October
-   test build turned it on, and it saves almost nothing; -O2 JavaScriptCore
+   test build turned it on, and it saves almost nothing on its own; with
+   the duplicate template copies folded (`OB_FOLD`, on with it) the
+   stripped engine is 5.95 MB smaller (89.7 to 83.7 MB); -O2 JavaScriptCore
    costs about 6 MB for its 1.1-1.65x. Done when each change is measured
    on the engine's map, and the test pages pass on lab copies of real
    instances.
