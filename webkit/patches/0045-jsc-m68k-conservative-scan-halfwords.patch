@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 00:26:09 +0000
+Subject: [PATCH] JavaScriptCore: the 68k conservative stack scan looks at
+ every halfword
+
+The 68k ABI aligns pointers to two bytes only, so a C++ frame can hold a
+cell pointer at an address that is 2 modulo 4, and every frame below a
+frame of 4n+2 bytes is shifted that way. The conservative scan read the
+machine stack a pointer at a time from a 4-byte-aligned start and missed
+those pointers: a live object could be freed while C++ code still held
+it. Under GC stress (JSC_slowPathAllocsBetweenGCs) the shell crashed in
+marking with the JIT on and off. On M68K, genericAddSpan now reads a
+candidate at every halfword.
+
+Team 3
+---
+ .../JavaScriptCore/heap/ConservativeRoots.cpp | 22 +++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/Source/JavaScriptCore/heap/ConservativeRoots.cpp b/Source/JavaScriptCore/heap/ConservativeRoots.cpp
+index cd77e0aed0d..aec28bbe1de 100644
+--- a/Source/JavaScriptCore/heap/ConservativeRoots.cpp
++++ b/Source/JavaScriptCore/heap/ConservativeRoots.cpp
+@@ -198,6 +198,28 @@ void ConservativeRoots::genericAddSpan(void* begin, void* end, MarkHook& markHoo
+     if (begin > end)
+         std::swap(begin, end);
+ 
++#if CPU(M68K)
++    // The 68k ABI aligns pointers to two bytes only: a C++ frame can hold a
++    // cell pointer at an address that is 2 modulo 4, and every frame below
++    // a frame of 4n+2 bytes is shifted that way too. So every halfword
++    // starts a candidate.
++    RELEASE_ASSERT(!(reinterpret_cast<uintptr_t>(begin) & 1));
++    RELEASE_ASSERT(!(reinterpret_cast<uintptr_t>(end) & 1));
++    {
++        TinyBloomFilter<uintptr_t> jsGCFilter = m_heap.objectSpace().blocks().filter();
++        TinyBloomFilter<uintptr_t> boxedWasmCalleeFilter;
++        HeapVersion markingVersion = m_heap.objectSpace().markingVersion();
++        HeapVersion newlyAllocatedVersion = m_heap.objectSpace().newlyAllocatedVersion();
++        char* last = static_cast<char*>(end) - sizeof(void*);
++        for (char* it = static_cast<char*>(begin); it <= last; it += 2) {
++            char* candidate;
++            memcpy(&candidate, it, sizeof(candidate));
++            genericAddPointer<false>(candidate, markingVersion, newlyAllocatedVersion, jsGCFilter, boxedWasmCalleeFilter, markHook);
++        }
++    }
++    return;
++#endif
++
+     RELEASE_ASSERT(isPointerAligned(begin));
+     RELEASE_ASSERT(isPointerAligned(end));
+     // Make a local copy of filters to show the compiler it won't alias, and can be register-allocated.
+-- 
+2.43.0
+
