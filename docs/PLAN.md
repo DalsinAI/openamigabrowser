@@ -86,7 +86,28 @@ is done when its "done when" holds on the lab instance.
 2. **ICU data from the file in both engines.** Turn on #52's option in the
    browser engine's build and in JavaScriptEngine's.
    Done when neither binary has `icudt78_dat` in its map, and both still
-   pass their tests. Saves 5.2 MB in each.
+   pass their tests. Saves 5.2 MB in each. The browser engine is done (the
+   22 October test build, 89.7 MB); JavaScriptEngine is still to rebuild.
+
+   **2a. Link and code shape (the rest of L0 and L2).** Decided on 17
+   October in the Lean Engine design, sections 5.3, 6.1 and 7, and missed
+   until 22 October. None of it changes WebCore's source:
+   - fold COMDAT copies at link time: 5.8 MB of duplicate template copies
+     (measured);
+   - PC-relative calls and addresses (`bsr.l`, `(bd,pc)`) in place of
+     absolute ones: about 0.79 million fewer relocations, 3.2 MB less of
+     relocation tables (measured count);
+   - `ALWAYS_INLINE` as plain `inline` and no `flatten` on the 68k, with
+     the hot interpreter and style paths inlined by name: the JSON parser
+     (3.06 MB) and the typed-array functions (1.67 MB) stop being giant
+     single functions; 4 to 8 MB (estimate);
+   - the Web Inspector out of the engine into webinspector.library, loaded
+     on demand: 2.6 MB.
+
+   Section GC (#45) is on and saves almost nothing; -O2 JavaScriptCore
+   costs about 6 MB for its 1.1-1.65x. Done when each change is measured
+   on the engine's map, and the test pages pass on lab copies of real
+   instances.
 3. **Text on OpenFont.** First, finish what openfont.library lacks for
    WebCore: UTF-16 input, shaping with script, language, direction and
    features, fonts opened from memory (web fonts), glyph outlines or a
