@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 05:42:01 +0000
+Subject: [PATCH] JavaScriptCore: Math.min and Math.max in line in the 68k
+ template JIT
+
+A call site whose link holds Math.min or Math.max and passes two int32s
+gives the smaller or larger in line; any other value or argument count,
+and any other function, takes the call. MinIntrinsic and MaxIntrinsic
+get trampolines of their own, so the functions keep their intrinsics.
+
+Team 3
+---
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 31 +++++++++++++++++--
+ Source/JavaScriptCore/runtime/VM.cpp          | 16 ++++++++++
+ 2 files changed, 44 insertions(+), 3 deletions(-)
+
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index d2735011330..08275fd28b5 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -2069,7 +2069,8 @@ private:
+     // Built-in functions done in line (item 3), at a call site whose call
+     // link holds one now: String.prototype.charCodeAt on a flat string and
+     // an int32 index in range; Array.prototype.push of one value onto an
+-    // Int32 or Contiguous array with room in its vector. The callee (in d0,
++    // Int32 or Contiguous array with room in its vector; Math.min and
++    // Math.max of two int32s. The callee (in d0,
+     // kept) is checked by its native function, so any function object for
+     // it will do; anything else goes on to the call. Returns a branch to
+     // after the call, or SIZE_MAX.
+@@ -2077,10 +2078,12 @@ private:
+     {
+         JSObject* cached = linkInfo.lastSeenCallee();
+         auto* function = cached && cached->type() == JSFunctionType ? static_cast<JSFunction*>(cached) : nullptr;
+-        if (!function || !function->isHostFunction() || argc != 2)
++        if (!function || !function->isHostFunction())
+             return SIZE_MAX;
+         Intrinsic intrinsic = function->intrinsic();
+-        if (intrinsic != CharCodeAtIntrinsic && intrinsic != ArrayPushIntrinsic)
++        bool oneArgument = (intrinsic == CharCodeAtIntrinsic || intrinsic == ArrayPushIntrinsic) && argc == 2;
++        bool twoArguments = (intrinsic == MinIntrinsic || intrinsic == MaxIntrinsic) && argc == 3;
++        if (!oneArgument && !twoArguments)
+             return SIZE_MAX;
+         uintptr_t native = reinterpret_cast<uintptr_t>(function->nativeFunction().taggedPtr());
+         constexpr int slot = sizeof(Register);
+@@ -2106,6 +2109,28 @@ private:
+         fail(Builder::NotEqual);
+         m_hot.word(0x0ca9); m_hot.longWord(native); m_hot.word(NativeExecutable::offsetOfNativeFunctionFor(CodeSpecializationKind::CodeForCall)); // cmpi.l #native,d16(a1)
+         fail(Builder::NotEqual);
++        if (intrinsic == MinIntrinsic || intrinsic == MaxIntrinsic) {
++            int first = index;
++            int second = index + slot;
++            m_hot.cmpFrameImm(int32Tag, first);
++            fail(Builder::NotEqual);
++            m_hot.cmpFrameImm(int32Tag, second);
++            fail(Builder::NotEqual);
++            m_hot.loadFrame(first + 4, 0);
++            m_hot.cmpFrame(second + 4, 0);
++            size_t keep = m_hot.branchShort(intrinsic == MinIntrinsic ? Builder::LessEqual : Builder::GreaterEqual);
++            m_hot.loadFrame(second + 4, 0);
++            m_hot.bindShort(keep);
++            if (dst.valid) {
++                m_hot.storeFrameImm(int32Tag, dst.hi);
++                m_hot.storeFrame(0, dst.lo);
++            }
++            size_t done = m_hot.branch(Builder::Always);
++            for (size_t i : notIntrinsic)
++                m_hot.bindBranch(i);
++            m_hot.loadFrame(callee.lo, 0);
++            return done;
++        }
+         if (intrinsic == ArrayPushIntrinsic) {
+             // this: an array (not a subclass's) of Int32 or Contiguous shape,
+             // not copy-on-write, whose vector has room; as JSArray::push.
+diff --git a/Source/JavaScriptCore/runtime/VM.cpp b/Source/JavaScriptCore/runtime/VM.cpp
+index 8d0044ea25a..9b618dd44cb 100644
+--- a/Source/JavaScriptCore/runtime/VM.cpp
++++ b/Source/JavaScriptCore/runtime/VM.cpp
+@@ -905,6 +905,22 @@ static Ref<NativeJITCode> jitCodeForCallTrampoline(Intrinsic intrinsic)
+         });
+         return result.get();
+     }
++    case MinIntrinsic: {
++        static LazyNeverDestroyed<Ref<NativeJITCode>> result;
++        static std::once_flag onceKey;
++        std::call_once(onceKey, [&] {
++            result.construct(adoptRef(*new NativeJITCode(LLInt::getCodeRef<JSEntryPtrTag>(llint_native_call_trampoline), JITType::HostCallThunk, intrinsic)));
++        });
++        return result.get();
++    }
++    case MaxIntrinsic: {
++        static LazyNeverDestroyed<Ref<NativeJITCode>> result;
++        static std::once_flag onceKey;
++        std::call_once(onceKey, [&] {
++            result.construct(adoptRef(*new NativeJITCode(LLInt::getCodeRef<JSEntryPtrTag>(llint_native_call_trampoline), JITType::HostCallThunk, intrinsic)));
++        });
++        return result.get();
++    }
+ #endif
+     default: {
+         static LazyNeverDestroyed<Ref<NativeJITCode>> result;
+-- 
+2.43.0
+

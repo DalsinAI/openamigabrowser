@@ -264,6 +264,8 @@ The patches, in order:
 - `0047-jsc-m68k-jit-array-push.patch`: `array.push(value)` is done in
   line in the template JIT for Int32 and Contiguous arrays with room in
   their vector, instead of a call into C++.
+- `0048-jsc-m68k-jit-math-min-max.patch`: `Math.min(a, b)` and
+  `Math.max(a, b)` of two int32s are done in line in the template JIT.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
