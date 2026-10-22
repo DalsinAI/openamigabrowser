@@ -117,8 +117,10 @@ is done when its "done when" holds on the lab instance.
    - JSON.parse through json.library (patch 0058), so LiteralParser is no
      longer built: 1.27 MB.
 
-   Done so far: folding (#78), the inspector out (patch 0057, #80, 3.26 MB)
-   and JSON.parse through json.library (patch 0058, #81, 1,267,592 bytes;
+   Done so far: folding (#78), the inspector left out of the build (patch
+   0057, #80, 3.26 MB; no webinspector.library exists yet, so loading it
+   on demand is still to do) and JSON.parse through json.library (patch
+   0058, #81, 1,267,592 bytes;
    LiteralParser was about 1.0 MB in the map, not the 3.06 MB above). The
    engine now needs json.library in `LIBS:`. Each saving was measured on
    its own against the 89.7 MB build; the combined build on main gives the
