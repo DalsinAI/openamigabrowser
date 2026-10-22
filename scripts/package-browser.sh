@@ -19,12 +19,22 @@
 #                  (openamigatls build)
 #   CA_BUNDLE      folder with ca-bundle.pem and ca-bundle.LICENSE
 #                  (openamigatls; S:OpenTLS/ on an installed system)
+#   WEBBROWSER_LIB webbrowser.library (default src/webbrowser/bin/, where
+#                  src/webbrowser/build-library.sh puts it)
+#   JSON_LIB       json.library (default build/json-library/, scripts/build-json-library.sh);
+#                  the Installer puts it in LIBS:
+#   EXTRAS         optional: a folder with Libs/javascript.library,
+#                  Libs/JavaScript/JavaScriptEngine, C/JS and
+#                  Libs/json.library, which the Installer offers
 #
 # OUT_DIR/OpenBrowser/            the drawer: OpenBrowser, OpenBrowser.engine,
 #                                 Unicode/, Fonts/, fontconfig/, Libs/
 #                                 (webbrowser.library, WebBrowser/, OpenTLS),
 #                                 S/OpenTLS/, Install, icons and readme
 # OUT_DIR/OpenBrowser.info        the drawer's icon
+# OUT_DIR/Install-OpenBrowser     the Installer script (SYS:System/Installer),
+# OUT_DIR/Install-OpenBrowser.info  and its icon: double-click to install
+# OUT_DIR/Extras/                 when EXTRAS is set
 # OUT_DIR.lha                     the archive, beside OUT_DIR
 #
 # The engine reads ICU's data at start (OB_ICU_DATA=file), so the drawer
@@ -49,7 +59,8 @@ mkdir -p "$D/Fonts" "$D/fontconfig" "$D/Unicode" "$D/S/OpenTLS" "$E/Fonts" "$E/f
 "$STRIP" -o "$D/OpenBrowser" "$BIN/OpenBrowser"
 "$STRIP" -o "$D/OpenBrowser.engine" "$BIN/OpenBrowser.engine"
 "$STRIP" -o "$E/WebBrowserEngine" "$BIN/WebBrowserEngine"
-if [ -f "$HERE/build/os3/webbrowser.library" ]; then cp "$HERE/build/os3/webbrowser.library" "$D/Libs/"; fi
+WBLIB=${WEBBROWSER_LIB:-"$HERE/src/webbrowser/bin/webbrowser.library"}
+if [ -f "$WBLIB" ]; then cp "$WBLIB" "$D/Libs/"; fi
 for t in "$D" "$E"; do
     cp "$OB_FONTS"/*.ttf "$t/Fonts/"
     cp "$HERE/src/webcore/fontconfig/fonts.conf" "$t/fontconfig/"
@@ -57,14 +68,18 @@ for t in "$D" "$E"; do
     cp "$ICU_DATA" "$t/Unicode/icudt78b.dat"
 done
 cp "$OPENTLS_LIBS/opentls.library" "$OPENTLS_LIBS/opencrypto.library" "$D/Libs/"
+JSONLIB=${JSON_LIB:-"$HERE/build/json-library/json.library"}
+if [ -f "$JSONLIB" ]; then cp "$JSONLIB" "$D/Libs/"; else echo "note: no $JSONLIB (scripts/build-json-library.sh)"; fi
 cp "$CA_BUNDLE/ca-bundle.pem" "$D/S/OpenTLS/"
 [ -f "$CA_BUNDLE/ca-bundle.LICENSE" ] && cp "$CA_BUNDLE/ca-bundle.LICENSE" "$D/S/OpenTLS/"
 cp "$HERE/dist/OpenBrowser/Install" "$D/Install"
 cp "$HERE/icons/OpenBrowser.info" "$OUT/OpenBrowser.info"
+cp "$HERE/dist/Install-OpenBrowser" "$HERE/dist/Install-OpenBrowser.info" "$OUT/"
+if [ -n "${EXTRAS:-}" ]; then cp -R "$EXTRAS" "$OUT/Extras"; fi
 cp "$HERE/icons/OpenBrowser/OpenBrowser.info" "$HERE/icons/OpenBrowser/OpenBrowser.readme.info" "$D/"
 cp "$HERE/openbrowser.readme" "$D/OpenBrowser.readme"
 cp "$HERE/THIRD_PARTY_NOTICES.md" "$HERE/LICENSE" "$D/"
-[ -f "$D/Libs/webbrowser.library" ] || echo "note: no build/os3/webbrowser.library (src/webbrowser/build-library.sh); the drawer runs its own engine without it"
+[ -f "$D/Libs/webbrowser.library" ] || echo "note: no $WBLIB (src/webbrowser/build-library.sh); the drawer runs its own engine without it"
 if command -v jlha >/dev/null 2>&1; then
     (cd "$(dirname "$OUT")" && rm -f "$(basename "$OUT").lha" && jlha ao2q "$(basename "$OUT").lha" "$(basename "$OUT")" >/dev/null)
     echo "$OUT.lha"
