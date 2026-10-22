@@ -4,6 +4,10 @@
  *   JS FILE/A [ARGS/M]            runs a script file
  *   JS EVAL "print(6 * 7)"        runs the text given
  *   STACK/K/N                     the script task's stack in KB (default 512)
+ *   CACHE/K                       where a FILE's translation is kept (default
+ *                                 LIBS:JavaScript/Cache): made on its first
+ *                                 run, loaded on the next
+ *   NOCACHE/S                     keeps none
  *
  * The script sees `arguments` (the ARGS, as strings) and three functions:
  *   print(...)              writes its arguments, spaces between, then a newline
@@ -146,14 +150,17 @@ static STRPTR load(CONST_STRPTR name, LONG *size)
     return bytes;
 }
 
-enum { ARG_FILE, ARG_EVAL, ARG_STACK, ARG_ARGS, ARG_COUNT };
+enum { ARG_FILE, ARG_EVAL, ARG_STACK, ARG_CACHE, ARG_NOCACHE, ARG_ARGS, ARG_COUNT };
 
 int main(void)
 {
     LONG args[ARG_COUNT] = { 0 };
-    struct RDArgs *rd = ReadArgs((CONST_STRPTR)"FILE,EVAL/K,STACK/K/N,ARGS/M", args, NULL);
+    struct RDArgs *rd = ReadArgs((CONST_STRPTR)"FILE,EVAL/K,STACK/K/N,CACHE/K,NOCACHE/S,ARGS/M", args, NULL);
     struct Context c;
-    struct TagItem tags[] = { { JSA_StackSize, 512 * 1024 }, { JSA_Name, (ULONG)"JS" }, { TAG_DONE, 0 } };
+    struct TagItem tags[] = {
+        { JSA_StackSize, 512 * 1024 }, { JSA_Name, (ULONG)"JS" },
+        { JSA_CacheDir, (ULONG)"LIBS:JavaScript/Cache" }, { TAG_DONE, 0 }
+    };
     JSTask t;
     JSValue global, list;
     STRPTR source;
@@ -177,6 +184,10 @@ int main(void)
     }
     if (args[ARG_STACK] && *(LONG *)args[ARG_STACK] >= 64)
         tags[0].ti_Data = *(LONG *)args[ARG_STACK] * 1024;
+    if (args[ARG_CACHE])
+        tags[2].ti_Data = args[ARG_CACHE];
+    if (args[ARG_NOCACHE] || !args[ARG_FILE])
+        tags[2].ti_Tag = TAG_IGNORE;    /* EVAL text is not kept */
     if (!(t = JS_NewTask(tags))) {
         put(c.out, "JS: the JavaScript engine did not start (LIBS:JavaScript/JavaScriptEngine)\n");
         CloseLibrary(JavaScriptBase);

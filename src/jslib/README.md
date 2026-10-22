@@ -22,11 +22,27 @@ CloseLibrary(JavaScriptBase);
 
 From the Shell: `JS script.js arg1 arg2` or `JS EVAL "print(6 * 7)"`.
 
+## Translate once
+
+A task made with `JSA_CacheDir` keeps what the engine makes from each
+script in that folder: the script's own code when it first runs, and each
+function's when that function is first called. The next run of the same
+text loads them and makes nothing again; code never called is never made.
+One file per script text (`<hash>-<length>.jsc`), written when the task
+ends; a file from another engine version, or a spoilt one, is made again.
+`JS` keeps its FILE scripts in `LIBS:JavaScript/Cache` (`CACHE` for
+another folder, `NOCACHE` for none). In the tests a 1,500-function script
+runs in about 950 ms the first time and 170 ms loaded.
+
+What is kept today is JavaScriptCore's bytecode, as `jsc --diskCachePath`
+keeps it. Keeping the 68k template JIT's code beside it is the next step.
+
 ## How it is put together
 
 | Part | What it is |
 | --- | --- |
 | `javascript_lib.c` | The library (3.6 KB, C, no C library): RomTag, the 30 vectors in the SFD's order, each in its registers. It holds no engine: `JS_NewTask` starts `LIBS:JavaScript/JavaScriptEngine` the first time, then calls the engine's table through its public port; every other call goes straight to the table the task carries. |
+| `jsl_cache.cpp` | Translate once: each script's translations kept in, and loaded from, the task's cache folder. On JavaScriptCore's private interface, so built with its own flags. |
 | `jsl_core.cpp` | The engine core, on JavaScriptCore's C interface: script tasks, values, calls, host classes (one wrapper per program object, found again through a weak reference; the class's release function is told when the collector drops it), errors with file and line. |
 | `jsl_engine.c` | JavaScriptEngine's main: the public port `JAVASCRIPT.ENGINE` with the table; starts and ends script tasks on its own process; quits after `ENV:JavaScriptIdleQuit` seconds (60) with none alive. |
 | `jsl_os.h`, `jsl_os_exec.c`, `jsl_os_posix.c` | What the core needs from the system: a script thread (a pthread) and its mailbox (an Exec port on AmigaOS). The POSIX layer is for the tests. |
@@ -57,13 +73,14 @@ DOS calls are fine. A slot function returns a new value (`JS_New*`,
   (os32-gcc16, the patched WebKit tree).
 - Core tests: `tests/jslib/run.sh` builds `tests/jslib/core_test.c` with the
   core against the 68k JIT lab's m68k-linux JavaScriptCore and runs it under
-  qemu-m68k (68040): 57 checks of values, calls, errors, host classes,
-  wrapper release by the collector, jobs, and three tasks from three
+  qemu-m68k (68040): 69 checks of values, calls, errors, host classes,
+  wrapper release by the collector, jobs, translate once (saved, loaded,
+  added to, a spoilt file made again), and three tasks from three
   threads. They also pass with `JSC_slowPathAllocsBetweenGCs=50`.
 
 Install: `javascript.library` in `LIBS:`, `JavaScriptEngine` in
 `LIBS:JavaScript/`, `JS` in `C:`.
 
-Next (the design's phases): the translation cache (each script's 68k saved
-as a hunk on first call, loaded on the next run), then the host classes
-proved on OpenBrowser Lite, then OpenBrowser itself on the library.
+Next (the design's phases): the 68k code kept with the translation, then
+the host classes proved on OpenBrowser Lite, then OpenBrowser itself on the
+library.
