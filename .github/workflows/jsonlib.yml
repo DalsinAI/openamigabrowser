@@ -1,0 +1,93 @@
+name: json.library
+
+# json.library (src/jsonlib, OpenJSON): the core's tests on the host and
+# under qemu-m68k against Python's json and Node's number formatting, the
+# SDK headers against the SFD, and the 68040 build with the OpenAmigaGCC
+# release and OpenNDK, pinned as lite.yml pins them.
+on:
+  push:
+    paths:
+      - 'src/jsonlib/**'
+      - 'tests/jsonlib/**'
+      - 'scripts/build-json-library.sh'
+      - 'scripts/gen-jsonlib-sdk.sh'
+      - '.github/workflows/jsonlib.yml'
+  pull_request:
+    paths:
+      - 'src/jsonlib/**'
+      - 'tests/jsonlib/**'
+      - 'scripts/build-json-library.sh'
+      - 'scripts/gen-jsonlib-sdk.sh'
+      - '.github/workflows/jsonlib.yml'
+  workflow_dispatch:
+
+env:
+  OPENSDK_REF: 5bfeaea0d004e86afb990fddb591bf0039f09233      # openamigasdk main, as lite.yml
+  TC_URL: https://github.com/DalsinAI/openamigagcc/releases/download/v16.2.0-open3/openamigagcc-16.2.0-open3-x86_64-linux.tar.xz
+  TC_SHA256: 9fcc136ab59e3bb5b91d2764d0bf290b709d72d7380be4ce0cdf005edf8eff21
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DalsinAI/openamigasdk
+          ref: ${{ env.OPENSDK_REF }}
+          path: openamigasdk
+      - name: m68k cross compiler and qemu-m68k
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++-m68k-linux-gnu qemu-user
+      - name: Core tests (host with sanitizers, 68040 -O2 and -Os under qemu)
+        run: OPENSDK_SRC=$PWD/openamigasdk sh tests/jsonlib/run.sh
+
+  amiga:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DalsinAI/openamigasdk
+          ref: ${{ env.OPENSDK_REF }}
+          path: openamigasdk
+      - name: Fetch the toolchain
+        run: |
+          mkdir -p tc
+          curl -fsSL -o tc/tc.tar.xz "$TC_URL"
+          echo "$TC_SHA256  tc/tc.tar.xz" | sha256sum -c -
+          tar xf tc/tc.tar.xz -C tc
+      - name: 68040 build (json.library and JSONTest)
+        run: |
+          TOOLCHAIN_DIR=tc/openamigagcc-16.2.0-open3-x86_64-linux \
+          NDK_INCLUDE=$PWD/openamigasdk/OpenNDK/Include_H \
+          OPENSDK_SRC=$PWD/openamigasdk \
+          scripts/build-json-library.sh build/json-library
+      - name: Check the library
+        run: |
+          D=tc/openamigagcc-16.2.0-open3-x86_64-linux/bin
+          L=build/json-library/json.library
+          for f in $L build/json-library/tests/JSONTest; do
+            $D/m68k-amigaos-objdump -f "$f" | grep -q 'file format amiga' || { echo "$f is not an Amiga executable"; exit 1; }
+          done
+          if grep -E 'lib(nix|c)[^ ]*\.a\(' build/json-library/json.library.map; then
+            echo "json.library links a C library"; exit 1
+          fi
+          # its only global state: SysBase, set once
+          G=$($D/m68k-amigaos-nm $L | awk '$2 ~ /^[bBcCdD]$/ {print $3}' | grep -v '^__' | sort | tr '\n' ' ')
+          echo "writable globals: $G"
+          [ "$G" = "_SysBase " ] || { echo "json.library has other writable globals"; exit 1; }
+          strings $L | grep '^\$VER: json.library 1\.'
+          echo "### json.library" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -l $L build/json-library/tests/JSONTest >> "$GITHUB_STEP_SUMMARY"
+          sha256sum $L build/json-library/tests/JSONTest | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: json-library-68040
+          path: |
+            build/json-library/json.library
+            build/json-library/tests/JSONTest
+          retention-days: 30
