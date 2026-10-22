@@ -33,7 +33,8 @@ pages in it through its ARexx port, `AMIGACHROME.BROWSER`:
 1> rx "address AMIGACHROME.BROWSER 'OPENURL http://info.cern.ch/'"
 ```
 
-See [docs/PHASE_PLAN.md](docs/PHASE_PLAN.md) for what comes next.
+See [docs/PLAN.md](docs/PLAN.md) for the plan: the decisions, where each
+stands, and the work in order. [docs/PHASE_PLAN.md](docs/PHASE_PLAN.md) has the history.
 
 ## What is here
 
