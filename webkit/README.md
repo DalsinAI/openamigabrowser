@@ -266,6 +266,9 @@ The patches, in order:
   their vector, instead of a call into C++.
 - `0048-jsc-m68k-jit-math-min-max.patch`: `Math.min(a, b)` and
   `Math.max(a, b)` of two int32s are done in line in the template JIT.
+- `0049-jsc-m68k-jit-new-array.patch`: `[]` and `[a, b, ...]` (up to
+  eight elements) are made in line in the template JIT, butterfly and
+  cell from the free lists, instead of a call into C++.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
