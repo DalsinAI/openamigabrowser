@@ -61,7 +61,21 @@
 #                   linker drops the ones nothing uses (-ffunction-sections
 #                   -fdata-sections, --gc-sections). For a new build folder;
 #                   an existing folder keeps its choice.       (default 0)
-#   OB_ICU_DATA     "file": the programs read ICU's data (icudt78b.dat) at
+#   OB_FOLD         1: after a program links, fold its duplicate template
+#                   copies (scripts/hunkfold.py) and link it again: about
+#                   6 MB less per program. Our ld keeps every object's copy
+#                   of a template function that the object calls itself;
+#                   folding rewrites copies of the archives in
+#                   BUILD/lib-folded/PROGRAM/ so that only the copy the
+#                   plain link used still defines the name, and
+#                   --gc-sections drops the rest. Needs a folder that links
+#                   with --gc-sections. ninja's own archives and programs'
+#                   build state are untouched, so builds stay incremental;
+#                   the plain link's map is kept as bin/NAME.plain.map and
+#                   bin/NAME.map is the folded program's. 0: programs as
+#                   ninja links them.
+#                   (default 1 when the folder links with --gc-sections)
+#   OB_ICU_DATA    "file": the programs read ICU's data (icudt78b.dat) at
 #                   start from LOCALE:Unicode/ or PROGDIR:Unicode/, which
 #                   keeps 5 MB of tables out of each program; "linked": the
 #                   tables are linked in. A CMake option of src/webcore, so
@@ -91,6 +105,12 @@
 #   build-engine         build the engine, if its fingerprint has changed
 #   build-browser        build OBCore and OpenBrowser only
 #   build-tests          build obcore-view and obcore-dump only
+#   fold [PROGRAM...]    fold and link again the programs ninja has linked
+#                        since they were last folded (OpenBrowser.engine,
+#                        obcore-view, obcore-dump, WebBrowserEngine; or the
+#                        ones named). build-browser and build-tests fold
+#                        their programs when OB_FOLD is 1; run this after
+#                        "ninja WebBrowserEngine"
 #   test-browser         stage the programs, test pages and settings in
 #                        OB_TEST_DIR, with an AmigaDOS script that runs them
 #   clean-browser        remove the browser's objects and programs
@@ -440,13 +460,137 @@ browser_build() {
     fi
 }
 
+# Folding (OB_FOLD, scripts/hunkfold.py). Our ld keeps every object's copy
+# of a template function the object calls itself: bfd/amigaos.c makes a hunk
+# link-once only when its HUNK_EXT holds weak definitions alone, and
+# --gc-sections keeps every hunk that defines a name something uses, not
+# only the one the name resolved to. hunkfold rewrites copies of the
+# archives so that only the copy the plain link used still defines each
+# name; linked again, --gc-sections drops the others.
+FOLD_PROGRAMS="OpenBrowser.engine obcore-view obcore-dump WebBrowserEngine"
+
+links_with_gc() {
+    sed -n 's/^CMAKE_EXE_LINKER_FLAGS:[A-Z]*=//p' "$BUILD/CMakeCache.txt" 2>/dev/null | grep -q -- --gc-sections
+}
+
+# Whether build-browser and build-tests fold their programs.
+fold_wanted() {
+    case "${OB_FOLD:-}" in
+        0) return 1 ;;
+        1) return 0 ;;
+        "") links_with_gc && [ "$(generator)" = Ninja ] ;;
+        *) die "OB_FOLD must be 0 or 1" ;;
+    esac
+}
+
+file_size() { wc -c < "$1" | tr -d ' '; }
+
+# fold_program NAME: fold the archives for one program ninja has linked, and
+# link it again with its own link command, pointed at the folded archives.
+# The winners come from that program's own map, so each program gets its
+# own folded archives (a winner from another program's link could pull in a
+# member this one never linked); "hunkfold.py members" checks that the
+# folded link took exactly the plain link's archive members.
+fold_program() {
+    f_prog=$1
+    f_bin="$BUILD/bin/$f_prog"
+    f_out="$BUILD/lib-folded/$f_prog"
+    if [ ! -f "$f_bin" ]; then
+        echo "fold: no $f_bin, skipped"
+        return
+    fi
+    f_sum=$(cksum < "$f_bin")
+    if [ -f "$f_out/stamp" ] && [ "$(cat "$f_out/stamp")" = "$f_sum" ]; then
+        echo "fold: $f_prog already folded"
+        return
+    fi
+    f_cmd=$(cd "$BUILD" && ninja -t commands -s "bin/$f_prog") || die "fold: ninja has no link command for bin/$f_prog"
+    f_map=$(printf '%s\n' "$f_cmd" | sed -n 's/.*-Wl,-Map=\([^ ]*\).*/\1/p')
+    [ -n "$f_map" ] || die "fold: the link command of $f_prog writes no -Map"
+    f_map="$BUILD/bin/$(basename "$f_map")"
+    f_plain="${f_map%.map}.plain.map"
+    [ -f "$f_map" ] || die "fold: no link map $f_map"
+    f_strip=$(printf '%s\n' "$f_cmd" | sed -n 's/^: && \([^ ]*\)g++ .*/\1strip/p')
+    [ -x "$f_strip" ] || f_strip="$GCC16/prefix/bin/m68k-amigaos-strip"
+    f_log="$BUILD/logs/fold-$f_prog-$(date -u +%Y%m%dT%H%M%SZ).log"
+    f_start=$(date +%s)
+    hunkfold() { python3 "$HERE/hunkfold.py" "$@" >> "$f_log" 2>&1; }
+
+    # The map of ninja's (plain) link names the winners.
+    cp "$f_map" "$f_plain"
+    rm -rf "$f_out"
+    mkdir -p "$f_out"
+    echo "== winners from $f_plain" > "$f_log"
+    hunkfold winners "$f_plain" "$f_out/winners.txt" || die "fold: no winners from $f_plain (log: $f_log)"
+    for f_lib in "$BUILD"/lib/lib*.a; do
+        f_name=$(basename "$f_lib")
+        echo "== $f_name" >> "$f_log"
+        hunkfold fold "$f_lib" "$f_out/$f_name" --name "lib/$f_name" --winners "$f_out/winners.txt" \
+            || die "fold: $f_name failed (log: $f_log)"
+    done
+
+    # The same link, with the folded archives, into bin/NAME.folding.
+    f_cmd=$(printf '%s\n' "$f_cmd" | sed \
+        -e "s# lib/\(lib[^ /]*\.a\)# lib-folded/$f_prog/\1#g" \
+        -e "s#$BUILD/lib/\(lib[^ /]*\.a\)#$BUILD/lib-folded/$f_prog/\1#g" \
+        -e "s#-Wl,-Map=[^ ]*#-Wl,-Map=$f_map#" \
+        -e "s# -o bin/$f_prog # -o bin/$f_prog.folding #")
+    case "$f_cmd" in
+        *"lib-folded/$f_prog/"*"-o bin/$f_prog.folding "*|*"-o bin/$f_prog.folding "*"lib-folded/$f_prog/"*) ;;
+        *) die "fold: cannot point the link command of $f_prog at the folded archives" ;;
+    esac
+    echo "== link" >> "$f_log"
+    printf '%s\n' "$f_cmd" >> "$f_log"
+    rm -f "$f_bin.folding"
+    if ! (cd "$BUILD" && sh -c "$f_cmd") >> "$f_log" 2>&1; then
+        cp "$f_plain" "$f_map"
+        rm -f "$f_bin.folding"
+        die "fold: linking $f_prog failed (log: $f_log); bin/$f_prog is ninja's"
+    fi
+    echo "== members" >> "$f_log"
+    if ! hunkfold members "$f_plain" "$f_map"; then
+        cp "$f_plain" "$f_map"
+        rm -f "$f_bin.folding"
+        die "fold: the folded $f_prog links other archive members (log: $f_log); bin/$f_prog is ninja's"
+    fi
+    echo "== copies, plain then folded" >> "$f_log"
+    hunkfold copies "$f_plain"
+    hunkfold copies "$f_map"
+
+    f_before=$(file_size "$f_bin")
+    f_after=$(file_size "$f_bin.folding")
+    "$f_strip" -o "$f_out/stripped" "$f_bin"
+    f_sbefore=$(file_size "$f_out/stripped")
+    "$f_strip" -o "$f_out/stripped" "$f_bin.folding"
+    f_safter=$(file_size "$f_out/stripped")
+    rm -f "$f_out/stripped"
+    mv "$f_bin.folding" "$f_bin"
+    cksum < "$f_bin" > "$f_out/stamp"
+    f_line="$(date -u +%Y-%m-%dT%H:%M:%SZ) fold $f_prog: $f_before -> $f_after bytes, stripped $f_sbefore -> $f_safter ($(( f_sbefore - f_safter )) less), $(( $(date +%s) - f_start )) s"
+    echo "$f_line" >> "$BUILD/build-report.txt"
+    echo "$f_line"
+    echo "  log: $f_log"
+}
+
+fold_programs() {
+    [ -f "$BUILD/build.ninja" ] || die "fold needs a build folder made with Ninja: $BUILD"
+    links_with_gc || die "fold: $BUILD does not link with --gc-sections (OB_GC_SECTIONS=1 for a new folder)"
+    command -v python3 >/dev/null 2>&1 || die "fold needs python3"
+    mkdir -p "$BUILD/logs"
+    for prog; do
+        fold_program "$prog"
+    done
+}
+
 build_browser() {
     browser_build browser OBCore OpenBrowser OpenBrowserLauncher
+    if fold_wanted; then fold_programs OpenBrowser.engine; fi
     ls -l "$BUILD/bin/OpenBrowser" "$BUILD/bin/OpenBrowser.engine"
 }
 
 build_tests() {
     browser_build tests OBCore obcore-view obcore-dump
+    if fold_wanted; then fold_programs obcore-view obcore-dump; fi
     ls -l "$BUILD/bin/obcore-view" "$BUILD/bin/obcore-dump"
 }
 
@@ -518,7 +662,8 @@ clean_browser() {
         "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowserLauncher.dir \
         "$BUILD"/OpenBrowser/CMakeFiles/obcore-view.dir "$BUILD"/OpenBrowser/CMakeFiles/obcore-dump.dir
     rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/OpenBrowser.engine \
-        "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump
+        "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump "$BUILD"/bin/*.plain.map
+    rm -rf "$BUILD"/lib-folded
     echo "Removed the browser's objects and programs from $BUILD"
 }
 
@@ -530,7 +675,8 @@ clean_engine() {
         exit 1
     fi
     cmake --build "$BUILD" --target clean
-    rm -f "$BUILD/engine-fingerprint"
+    rm -f "$BUILD/engine-fingerprint" "$BUILD"/bin/*.plain.map
+    rm -rf "$BUILD"/lib-folded
     echo "Removed every object from $BUILD"
 }
 
@@ -540,6 +686,7 @@ case "$MODE" in
     build-engine) build_engine ;;
     build-browser) build_browser ;;
     build-tests) build_tests ;;
+    fold) shift; [ $# -gt 0 ] || set -- $FOLD_PROGRAMS; fold_programs "$@" ;;
     test-browser) test_browser ;;
     clean-browser) clean_browser ;;
     clean-engine) clean_engine "${2:-}" ;;
