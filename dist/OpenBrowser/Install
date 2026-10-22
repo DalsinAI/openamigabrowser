@@ -1,0 +1,50 @@
+; Install: OpenBrowser test version, 22 October 2026 (scripts/package-browser.sh puts it in the drawer).
+; MIT, Copyright (c) 2026 AmigaChrome Team.
+; Run it from this drawer in a Shell:  CD <this drawer>  then  Execute Install
+; Then reboot (or quit any running OpenBrowser first), and start OpenBrowser
+; from this drawer.
+;
+; What it does:
+;  - LIBS:opentls.library, LIBS:opencrypto.library and S:OpenTLS/ca-bundle.pem
+;    are copied only when missing (https needs them);
+;  - when webbrowser.library is installed (LIBS:WebBrowser), the browser runs
+;    the engine in LIBS:WebBrowser rather than this drawer's. That engine is
+;    renamed WebBrowserEngine.before-20261022 (nothing is copied, so System:
+;    keeps its free space), and webbrowser.library then runs the new engine
+;    in this drawer's Libs/WebBrowser. To go back, rename it back.
+;  - the engine reads its Unicode data from Unicode/ in this drawer, so
+;    nothing goes into LOCALE:.
+FailAt 21
+If NOT EXISTS LIBS:opentls.library
+  Copy Libs/opentls.library LIBS: QUIET
+  Echo "Installed LIBS:opentls.library"
+Else
+  Echo "LIBS:opentls.library is already there, kept"
+EndIf
+If NOT EXISTS LIBS:opencrypto.library
+  Copy Libs/opencrypto.library LIBS: QUIET
+  Echo "Installed LIBS:opencrypto.library"
+Else
+  Echo "LIBS:opencrypto.library is already there, kept"
+EndIf
+If NOT EXISTS S:OpenTLS/ca-bundle.pem
+  MakeDir S:OpenTLS >NIL:
+  Copy S/OpenTLS/#? S:OpenTLS/ QUIET
+  Echo "Installed S:OpenTLS/ca-bundle.pem (the certificates for https)"
+Else
+  Echo "S:OpenTLS/ca-bundle.pem is already there, kept"
+EndIf
+If EXISTS LIBS:WebBrowser/WebBrowserEngine
+  If EXISTS LIBS:WebBrowser/WebBrowserEngine.before-20261022
+    Echo "LIBS:WebBrowser has both WebBrowserEngine and WebBrowserEngine.before-20261022;"
+    Echo "nothing was changed. Move one of them away, then run Install again."
+  Else
+    Rename LIBS:WebBrowser/WebBrowserEngine LIBS:WebBrowser/WebBrowserEngine.before-20261022
+    Echo "Renamed the installed engine to LIBS:WebBrowser/WebBrowserEngine.before-20261022;"
+    Echo "webbrowser.library now runs the new engine in this drawer."
+  EndIf
+EndIf
+If NOT EXISTS LIBS:bsdsocket.library
+  Echo "No LIBS:bsdsocket.library: turn networking on for this instance in Cradle, or install OpenSocket from OpenUp."
+EndIf
+Echo "Done. Reboot, then start OpenBrowser from this drawer."
