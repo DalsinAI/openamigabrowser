@@ -1,0 +1,54 @@
+; Install: OpenBrowser test version, 22 October 2026 (scripts/package-browser.sh puts it in the drawer).
+; MIT, Copyright (c) 2026 AmigaChrome Team.
+; Run it from this drawer in a Shell:  CD <this drawer>  then  Execute Install
+; Then reboot (or quit any running OpenBrowser first), and start OpenBrowser
+; from this drawer.
+;
+; What it does:
+;  - LIBS:opentls.library, LIBS:opencrypto.library and S:OpenTLS/ca-bundle.pem
+;    are copied only when missing (https needs them);
+;  - LOCALE:Unicode/icudt78b.dat (the Unicode data the new engine reads at
+;    start) is copied when missing;
+;  - when webbrowser.library is installed (LIBS:WebBrowser), the browser runs
+;    the engine in LIBS:WebBrowser, so the new engine goes there; the old one
+;    is kept as LIBS:WebBrowser/WebBrowserEngine.before-20261022.
+FailAt 21
+If NOT EXISTS LIBS:opentls.library
+  Copy Libs/opentls.library LIBS: QUIET
+  Echo "Installed LIBS:opentls.library"
+Else
+  Echo "LIBS:opentls.library is already there, kept"
+EndIf
+If NOT EXISTS LIBS:opencrypto.library
+  Copy Libs/opencrypto.library LIBS: QUIET
+  Echo "Installed LIBS:opencrypto.library"
+Else
+  Echo "LIBS:opencrypto.library is already there, kept"
+EndIf
+If NOT EXISTS S:OpenTLS/ca-bundle.pem
+  MakeDir S:OpenTLS >NIL:
+  Copy S/OpenTLS/#? S:OpenTLS/ QUIET
+  Echo "Installed S:OpenTLS/ca-bundle.pem (the certificates for https)"
+Else
+  Echo "S:OpenTLS/ca-bundle.pem is already there, kept"
+EndIf
+If NOT EXISTS LOCALE:Unicode/icudt78b.dat
+  MakeDir LOCALE:Unicode >NIL:
+  Copy Unicode/icudt78b.dat LOCALE:Unicode/ QUIET
+  Echo "Installed LOCALE:Unicode/icudt78b.dat"
+Else
+  Echo "LOCALE:Unicode/icudt78b.dat is already there, kept"
+EndIf
+If EXISTS LIBS:WebBrowser/WebBrowserEngine
+  If NOT EXISTS LIBS:WebBrowser/WebBrowserEngine.before-20261022
+    Rename LIBS:WebBrowser/WebBrowserEngine LIBS:WebBrowser/WebBrowserEngine.before-20261022
+    Echo "Kept the old engine as LIBS:WebBrowser/WebBrowserEngine.before-20261022"
+  EndIf
+  Copy Libs/WebBrowser/WebBrowserEngine LIBS:WebBrowser/ QUIET
+  Copy Libs/WebBrowser/blocklist LIBS:WebBrowser/ QUIET
+  Echo "Installed the new engine in LIBS:WebBrowser"
+EndIf
+If NOT EXISTS LIBS:bsdsocket.library
+  Echo "No LIBS:bsdsocket.library: turn networking on for this instance in Cradle, or install OpenSocket from OpenUp."
+EndIf
+Echo "Done. Reboot, then start OpenBrowser from this drawer."
