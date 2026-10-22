@@ -61,6 +61,12 @@
 #                   linker drops the ones nothing uses (-ffunction-sections
 #                   -fdata-sections, --gc-sections). For a new build folder;
 #                   an existing folder keeps its choice.       (default 0)
+#   OB_PCREL        1: pc-relative code (-mpcrel -fPIC: bsr.l and (bd,pc),
+#                   32-bit displacements on the 68040) linked as one hunk
+#                   (toolchain/amigaos3-onehunk.ld), so calls and addresses
+#                   inside the program need no relocation at load time;
+#                   .data and .bss move into the code hunk. For a new build
+#                   folder; an existing folder keeps its choice. (default 0)
 #   OB_FOLD         1: after a program links, fold its duplicate template
 #                   copies (scripts/hunkfold.py) and link it again: about
 #                   6 MB less per program. Our ld keeps every object's copy
@@ -336,6 +342,19 @@ configure_engine() {
            export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-ffunction-sections -fdata-sections"
            export LDFLAGS="${LDFLAGS:+$LDFLAGS }-Wl,--gc-sections" ;;
         *) echo "OB_GC_SECTIONS must be 0 or 1" >&2; exit 2 ;;
+    esac
+    # -mpcrel alone gives 16-bit (d16,pc) data references, which cannot
+    # reach across a 70 MB program; with -fPIC they are 32-bit (bd,pc). Our
+    # ld resolves pc-relative references only inside one hunk, hence the
+    # one-hunk script.
+    case "${OB_PCREL:-0}" in
+        0) ;;
+        1) export CFLAGS="${CFLAGS:+$CFLAGS }-mpcrel -fPIC"
+           export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-mpcrel -fPIC"
+           export LDFLAGS="${LDFLAGS:+$LDFLAGS }-Wl,-T,$ROOT/toolchain/amigaos3-onehunk.ld"
+           # the files GCC cannot build pc-relative stay absolute
+           set -- "$@" -DCMAKE_PROJECT_WebKit_INCLUDE="$ROOT/scripts/cmake/ob-pcrel.cmake" ;;
+        *) echo "OB_PCREL must be 0 or 1" >&2; exit 2 ;;
     esac
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "$(generator)" "$@" \
       -DPORT=Amiga \
