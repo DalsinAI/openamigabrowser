@@ -122,9 +122,12 @@ is done when its "done when" holds on the lab instance.
    on demand is still to do) and JSON.parse through json.library (patch
    0058, #81, 1,267,592 bytes;
    LiteralParser was about 1.0 MB in the map, not the 3.06 MB above). The
-   engine now needs json.library in `LIBS:`. Each saving was measured on
-   its own against the 89.7 MB build; the combined build on main gives the
-   real total. Still to do: no forced inlining (patch 0056) and -mpcrel.
+   engine now needs json.library in `LIBS:`. Patch 0056 (#83) makes
+   forced inlining a plain inline outside JavaScriptCore, WTF and WebCore's
+   style, layout and DOM code: 1,163,792 bytes, with the DOM bench within
+   timer noise. Measured together, main with 0057 and 0058 is 79,535,312
+   bytes stripped and folded, and 78,371,520 with 0056. Still to do:
+   -mpcrel.
 
    Section GC (`OB_GC_SECTIONS`, #45) is off by default; the 22 October
    test build turned it on, and it saves almost nothing on its own; with
