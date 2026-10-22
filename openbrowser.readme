@@ -1,32 +1,54 @@
-Short:        WebKit JavaScript engine for AmigaOS 3.2
+Short:        WebKit web browser for AmigaOS 3.2 (68040+FPU)
 Author:       AmigaChrome Team
 Uploader:     UPLOADER-PLACEHOLDER
 Type:         comm/www
-Version:      0.1
+Version:      0.8
 Architecture: m68k-amigaos >= 3.2
 Distribution: Aminet
 
-OpenBrowser is a web browser for AmigaOS 3.2, built on WebKit. This first
-release is its JavaScript engine only: WebKit's JavaScriptCore (JSC), the
-"jsc" shell, ported to AmigaOS 3.2 on the 68040 with its FPU.
+OpenBrowser is a web browser for AmigaOS 3.2 built on WebKit: WebCore lays
+out and draws real web pages, and JavaScriptCore runs their JavaScript with
+the Team's 68k template JIT. Pages are fetched with HTTP/2 and https
+(OpenTLS), pictures are decoded by the system's datatypes, and pages seen
+before load from a disk cache.
 
-    jsc -e "print(1+1)"
-    jsc script.js
+This is a test version (0.8 test, 22 October 2026). Things will still go
+wrong; reports are welcome.
 
-What works: the C-loop interpreter (no JIT), functions, objects, arrays,
-strings, JSON, RegExp, Date, exceptions and full double-precision maths.
+Installing
+----------
+Double-click Install-OpenBrowser (the Installer). It checks for AmigaOS 3.2
+and a 68040 or 68060 with its FPU, asks where the OpenBrowser drawer goes
+(about 195 MB; Work: rather than System:), and adds only what is missing or
+too old: opentls.library 1.2+, opencrypto.library 2.1+, json.library, and
+the certificates in S:OpenTLS. With webbrowser.library installed, the
+installed engine is kept as LIBS:WebBrowser/WebBrowserEngine.before-20261022
+and LIBS:WebBrowser/WebBrowserEngine becomes a small script that runs the
+new engine in the drawer. Nothing is deleted. Novice, Intermediate and
+Expert levels, pretend mode and the log all work.
 
-Requirements:
-  - AmigaOS 3.2 or newer
-  - a 68040 with FPU (hard float; not an LC or EC040)
-  - about 80 MB of free Fast RAM (the program is 71 MB)
-  - Stack 4194304 (4 MB) in the shell before running it
+From a Shell instead: CD into the OpenBrowser drawer and type
+Execute Install.
 
-Not yet: web pages. The browser window (GadTools), image support through
-datatypes and page drawing come next.
+Reboot after installing, then double-click OpenBrowser.
 
-Licences: OpenBrowser's own parts are MIT, Copyright (c) 2026 AmigaChrome Team.
-JavaScriptCore is LGPL-2/BSD and ICU is under the Unicode licence; see
+Requirements
+------------
+- AmigaOS 3.2 or newer
+- a 68040 or 68060 with its FPU (hard float; not an LC or EC CPU)
+- about 120 MB of free Fast RAM
+- a TCP/IP stack with bsdsocket.library (OpenSocket or another)
+
+Undo
+----
+Delete the OpenBrowser drawer. If webbrowser.library was installed, delete
+the small script LIBS:WebBrowser/WebBrowserEngine and rename
+WebBrowserEngine.before-20261022 back to WebBrowserEngine. Libraries kept as
+*.before-20261022 in LIBS: can be renamed back the same way. The Installer's
+log, Install-OpenBrowser.log in the drawer, lists everything it did.
+
+Licences: OpenBrowser's own parts are MIT, Copyright (c) 2026 AmigaChrome
+Team. WebKit is LGPL-2/BSD and ICU is under the Unicode licence; see
 THIRD_PARTY_NOTICES.md. If you base work on this, please say what it is
 based on.
 
