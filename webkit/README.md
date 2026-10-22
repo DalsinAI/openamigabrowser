@@ -250,6 +250,12 @@ The patches, in order:
   object literals) and `create_this` (`new F()` on a JS function) make the
   object in line from the allocator's free list, as the baseline JIT does,
   instead of calling into C++.
+- `0045-jsc-m68k-conservative-scan-halfwords.patch`: the garbage
+  collector's conservative scan of the machine stack reads a candidate
+  pointer at every halfword on the 68k, where pointers are only 2-byte
+  aligned. It used to read only every 4 bytes and could miss a live
+  object that C++ code still held, which then got freed (crashes and
+  wrong values under GC pressure, with and without the JIT).
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
