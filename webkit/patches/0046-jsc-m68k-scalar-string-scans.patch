@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 05:28:29 +0000
+Subject: [PATCH] WTF, JavaScriptCore: scalar string scans on the 68k
+
+The 68k has no vector unit, so SIMD::find and SIMD::reverseFind's
+16-byte vector path (equal, lessThan, findFirstNonZeroIndex on
+simde vectors) compiles to byte-at-a-time code through the stack,
+several times slower than their scalar loop. On M68K they now always
+take the scalar loop (SIMD::hasVectorUnit), as does LiteralParser's
+tryConsumeStringEqualTo. That covers JSON.parse's string lexing, the
+JavaScript lexer's string and comment scans, the URL parser and
+String find.
+
+Team 3
+---
+ Source/JavaScriptCore/runtime/LiteralParser.cpp |  2 +-
+ Source/WTF/wtf/SIMDHelpers.h                    | 12 ++++++++++--
+ 2 files changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/Source/JavaScriptCore/runtime/LiteralParser.cpp b/Source/JavaScriptCore/runtime/LiteralParser.cpp
+index a8049ff914e..d4648812bbe 100644
+--- a/Source/JavaScriptCore/runtime/LiteralParser.cpp
++++ b/Source/JavaScriptCore/runtime/LiteralParser.cpp
+@@ -974,7 +974,7 @@ ALWAYS_INLINE bool LiteralParser<CharType, reviverMode>::Lexer::tryConsumeString
+     ASSERT(m_mode == StrictJSON);
+     constexpr size_t stride8 = SIMD::stride<uint8_t>;
+     const CharType* body = m_ptr + 1;
+-    if (sizeof(CharType) == 1 && expected.size() < stride8) {
++    if (SIMD::hasVectorUnit && sizeof(CharType) == 1 && expected.size() < stride8) {
+         if (m_end - body < static_cast<ptrdiff_t>(stride8) || *m_ptr != '"')
+             return false;
+         auto input = SIMD::load(std::bit_cast<const uint8_t*>(body));
+diff --git a/Source/WTF/wtf/SIMDHelpers.h b/Source/WTF/wtf/SIMDHelpers.h
+index 58c60045152..13c896d68d6 100644
+--- a/Source/WTF/wtf/SIMDHelpers.h
++++ b/Source/WTF/wtf/SIMDHelpers.h
+@@ -739,6 +739,14 @@ ALWAYS_INLINE simde_uint64x2_t greaterThanOrEqual(simde_uint64x2_t lhs, simde_ui
+     return simde_vcgeq_u64(lhs, rhs);
+ }
+ 
++// No vector unit on the 68k: the compiler emulates each 16-byte vector one
++// lane at a time, through the stack, several times slower than a scalar loop.
++#if CPU(M68K)
++inline constexpr bool hasVectorUnit = false;
++#else
++inline constexpr bool hasVectorUnit = true;
++#endif
++
+ template<typename CharacterType, size_t threshold = SIMD::stride<CharacterType>>
+ ALWAYS_INLINE const CharacterType* find(std::span<const CharacterType> span, NOESCAPE const auto& vectorMatch, NOESCAPE const auto& scalarMatch)
+ {
+@@ -747,7 +755,7 @@ ALWAYS_INLINE const CharacterType* find(std::span<const CharacterType> span, NOE
+     static_assert(threshold >= stride);
+     const auto* cursor = span.data();
+     const auto* end = std::to_address(span.end());
+-    if (span.size() >= threshold) {
++    if (hasVectorUnit && span.size() >= threshold) {
+         for (; cursor + stride <= end; cursor += stride) {
+             if (auto index = vectorMatch(SIMD::load(std::bit_cast<const UnsignedType*>(cursor))))
+                 return cursor + index.value();
+@@ -775,7 +783,7 @@ ALWAYS_INLINE const CharacterType* reverseFind(std::span<const CharacterType> sp
+     static_assert(threshold >= stride);
+     const auto* begin = span.data();
+     const auto* end = std::to_address(span.end());
+-    if (span.size() >= threshold) {
++    if (hasVectorUnit && span.size() >= threshold) {
+         size_t remaining = span.size();
+         while (remaining >= stride) {
+             remaining -= stride;
+-- 
+2.43.0
+
