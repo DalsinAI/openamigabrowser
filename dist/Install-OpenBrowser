@@ -80,7 +80,8 @@
         (makedir "S:OpenTLS")
         (copyfiles (source "OpenBrowser/S/OpenTLS") (dest "S:OpenTLS") (all) (nogauge))))
 
-; json.library: JSON for the browser and any other program (23 KB)
+; json.library: JSON for the browser and any other program (23 KB); the
+; engine's JSON.parse parses through it
 (copylib (source "OpenBrowser/Libs/json.library") (dest "LIBS:") (nogauge)
     (prompt "Installing json.library") (help @copylib-help) (confirm "expert"))
 

@@ -1,0 +1,1245 @@
+From 578c95c600711540f496580468279625ff5fec39 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 21:05:48 +0100
+Subject: [PATCH] JavaScriptCore: JSON.parse through json.library on the 68k
+
+On PLATFORM(AMIGA) and OS(AMIGAOS3) (the browser and javascript.library's
+engine), JSON.parse, JSON.parse with a reviver, JSON.rawJSON and the C++
+JSONParse calls parse with json.library's JSONParse into one flat block,
+then make the values in one loop over its nodes (JSONLibraryParser.cpp).
+"__proto__" is a plain own property, the last of equal keys wins in the
+first one's place, numbers are correctly rounded (32-bit integers taken
+straight), unpaired surrogates are read again from the source text, a
+reviver gets each value's source text, and syntax errors give the line
+and column. Nesting deeper than 1024 levels is the RangeError a reviver's
+parse gave. LiteralParser is not built there, nor eval's JSON and JSONP
+fast paths (ordinary parsing does those programs). json.library is opened
+once (LIBS:, then PROGDIR:Libs/); without it JSON.parse throws an Error
+that says so.
+
+The fast stringifier also checks the stack on the 68k: GCC makes
+append()'s frame bigger than its 384-byte estimate, and with no guard page
+a deep or cyclic value ran off the stack.
+
+Team 3
+---
+ Source/JavaScriptCore/API/JSValueRef.cpp      |   4 +
+ Source/JavaScriptCore/Sources.txt             |   1 +
+ .../interpreter/Interpreter.cpp               |   7 +
+ .../runtime/JSGlobalObjectFunctions.cpp       |   2 +
+ .../runtime/JSONLibraryParser.cpp             | 893 ++++++++++++++++++
+ Source/JavaScriptCore/runtime/JSONObject.cpp  |  60 +-
+ .../JavaScriptCore/runtime/LiteralParser.cpp  |   4 +
+ Source/JavaScriptCore/runtime/LiteralParser.h |  21 +
+ 8 files changed, 989 insertions(+), 3 deletions(-)
+ create mode 100644 Source/JavaScriptCore/runtime/JSONLibraryParser.cpp
+
+diff --git a/Source/JavaScriptCore/API/JSValueRef.cpp b/Source/JavaScriptCore/API/JSValueRef.cpp
+index 52eb822b038..c422ab10445 100644
+--- a/Source/JavaScriptCore/API/JSValueRef.cpp
++++ b/Source/JavaScriptCore/API/JSValueRef.cpp
+@@ -697,12 +697,16 @@ JSValueRef JSValueMakeFromJSONString(JSContextRef ctx, JSStringRef string)
+     JSGlobalObject* globalObject = toJS(ctx);
+     JSLockHolder locker(globalObject);
+     String str = string->string();
++#if USE(OB_JSON_LIBRARY)
++    return toRef(globalObject, JSONParse(globalObject, str));
++#else
+     if (str.is8Bit()) {
+         LiteralParser<Latin1Character, JSONReviverMode::Disabled> parser(globalObject, str.span8(), StrictJSON);
+         return toRef(globalObject, parser.tryLiteralParse());
+     }
+     LiteralParser<char16_t, JSONReviverMode::Disabled> parser(globalObject, str.span16(), StrictJSON);
+     return toRef(globalObject, parser.tryLiteralParse());
++#endif
+ }
+ 
+ JSStringRef JSValueCreateJSONString(JSContextRef ctx, JSValueRef apiValue, unsigned indent, JSValueRef* exception)
+diff --git a/Source/JavaScriptCore/Sources.txt b/Source/JavaScriptCore/Sources.txt
+index 3fd65a1a052..5b059eb55f6 100644
+--- a/Source/JavaScriptCore/Sources.txt
++++ b/Source/JavaScriptCore/Sources.txt
+@@ -949,6 +949,7 @@ runtime/JSModuleLoader.cpp
+ runtime/JSModuleNamespaceObject.cpp
+ runtime/JSModuleRecord.cpp
+ runtime/JSNativeStdFunction.cpp
++runtime/JSONLibraryParser.cpp @no-unify
+ runtime/JSONObject.cpp
+ runtime/JSObject.cpp
+ runtime/JSOrderedHashTable.cpp
+diff --git a/Source/JavaScriptCore/interpreter/Interpreter.cpp b/Source/JavaScriptCore/interpreter/Interpreter.cpp
+index ebf37846de2..55dbd769a5c 100644
+--- a/Source/JavaScriptCore/interpreter/Interpreter.cpp
++++ b/Source/JavaScriptCore/interpreter/Interpreter.cpp
+@@ -180,6 +180,7 @@ JSValue eval(CallFrame* callFrame, JSValue thisValue, JSScope* callerScopeChain,
+             SourceProfiler::profile(SourceProfiler::Type::Eval, source);
+         }
+ 
++#if !USE(OB_JSON_LIBRARY)
+         if (!(lexicallyScopedFeatures & StrictModeLexicallyScopedFeature)) {
+             JSValue parsedValue;
+             if (programSource.is8Bit()) {
+@@ -194,6 +195,7 @@ JSValue eval(CallFrame* callFrame, JSValue thisValue, JSScope* callerScopeChain,
+             if (parsedValue)
+                 RELEASE_AND_RETURN(scope, parsedValue);
+         }
++#endif
+         
+         TDZEnvironment variablesUnderTDZ;
+         PrivateNameEnvironment privateNameEnvironment;
+@@ -1053,6 +1055,10 @@ JSValue Interpreter::executeProgram(const SourceCode& source, JSGlobalObject*, J
+     if (vm.disallowVMEntryCount) [[unlikely]]
+         return VM::checkVMEntryPermission();
+ 
++#if USE(OB_JSON_LIBRARY)
++    if (source.provider()->sourceTaintedOrigin() == SourceTaintedOrigin::Untainted && program->source().view().isNull())
++        return jsUndefined();
++#else
+     // First check if the "program" is actually just a JSON object. If so,
+     // we'll handle the JSON object here. Else, we'll handle real JS code
+     // below at failedJSONP.
+@@ -1194,6 +1200,7 @@ JSValue Interpreter::executeProgram(const SourceCode& source, JSGlobalObject*, J
+         return result;
+     }
+ failedJSONP:
++#endif
+     // If we get here, then we have already proven that the script is not a JSON
+     // object.
+ 
+diff --git a/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp b/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp
+index 38b891fd92b..4f357834289 100644
+--- a/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp
++++ b/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp
+@@ -505,6 +505,7 @@ JSC_DEFINE_HOST_FUNCTION(globalFuncEval, (JSGlobalObject* globalObject, CallFram
+         SourceProfiler::profile(SourceProfiler::Type::Eval, source);
+     }
+ 
++#if !USE(OB_JSON_LIBRARY)
+     JSValue parsedValue;
+     if (programSource.is8Bit()) {
+         LiteralParser<Latin1Character, JSONReviverMode::Disabled> preparser(globalObject, programSource.span8(), SloppyJSON, nullptr);
+@@ -516,6 +517,7 @@ JSC_DEFINE_HOST_FUNCTION(globalFuncEval, (JSGlobalObject* globalObject, CallFram
+     RETURN_IF_EXCEPTION(scope, { });
+     if (parsedValue)
+         return JSValue::encode(parsedValue);
++#endif
+ 
+     SourceOrigin sourceOrigin = callFrame->callerSourceOrigin(vm);
+     SourceTaintedOrigin sourceTaintedOrigin = computeNewSourceTaintedOriginFromStack(vm, callFrame);
+diff --git a/Source/JavaScriptCore/runtime/JSONLibraryParser.cpp b/Source/JavaScriptCore/runtime/JSONLibraryParser.cpp
+new file mode 100644
+index 00000000000..a53009d9d4f
+--- /dev/null
++++ b/Source/JavaScriptCore/runtime/JSONLibraryParser.cpp
+@@ -0,0 +1,893 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// JSON.parse through json.library (OpenJSON) on the Team's 68k targets.
++// The library checks the text and parses it into one flat block of nodes in
++// document order; this file makes the JavaScript values from the block, with
++// ECMAScript's JSON.parse semantics: "__proto__" is a plain own property,
++// the last of equal keys wins (in the first one's place), numbers are
++// correctly rounded doubles (integers that fit 32 bits come as integers),
++// unpaired surrogates are kept, and syntax errors say where they are. With a
++// reviver it also records each value's source text for the reviver's context
++// argument (JSONRanges), as LiteralParser does. LiteralParser itself is not
++// built on these targets.
++
++#include "config.h"
++#include "LiteralParser.h"
++
++#if USE(OB_JSON_LIBRARY)
++
++#include "GCMemoryOperations.h"
++#include "JSArray.h"
++#include "JSCInlines.h"
++#include "JSONCacheInlines.h"
++#include "ObjectConstructor.h"
++#include <mutex>
++#include <stdlib.h>
++#include <unicode/utf16.h>
++#include <wtf/ASCIICType.h>
++#include <wtf/Range.h>
++#include <wtf/FastFloat.h>
++#include <wtf/text/MakeString.h>
++#include <wtf/text/StringBuilder.h>
++
++#if defined(OB_JSON_LIBRARY_HOST)
++// The host test build links json.library's own core (src/jsonlib/json_core.cpp
++// in openamigabrowser) through these two.
++extern "C" void* obJSONHostParse(const unsigned char* text, unsigned length, unsigned flags, void* error);
++extern "C" void obJSONHostFree(void* doc);
++#endif
++
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
++
++namespace JSC {
++
++namespace {
++
++// json.library's block and error (libraries/json.h): a header, then 8-byte
++// nodes in document order, then the pool of strings (UTF-8) and number texts.
++struct JSONLibraryDoc {
++    uint32_t magic, size, nodes, nodeOffset, poolOffset, poolSize, flags, reserved;
++};
++struct JSONLibraryNode {
++    uint32_t head, data;
++};
++struct JSONLibraryError {
++    int32_t code;
++    uint32_t offset, line, column;
++};
++
++enum : uint32_t { NodeNull = 1, NodeFalse, NodeTrue, NodeInt, NodeNumber, NodeString, NodeArray, NodeObject };
++enum : int32_t {
++    ErrorNoMemory = 1, ErrorSyntax, ErrorEOF, ErrorControl, ErrorEscape, ErrorUTF8, ErrorNumber, ErrorDepth,
++    ErrorTooBig, ErrorTrailing
++};
++constexpr uint32_t parseLatin1 = 4; // JSONF_LATIN1
++
++ALWAYS_INLINE uint32_t nodeType(const JSONLibraryNode& node) { return node.head >> 28; }
++ALWAYS_INLINE uint32_t nodeField(const JSONLibraryNode& node) { return node.head & 0x0FFFFFFFu; }
++
++#if defined(OB_JSON_LIBRARY_HOST)
++
++bool openJSONLibrary() { return true; }
++
++const JSONLibraryDoc* libraryParse(const uint8_t* text, uint32_t length, uint32_t flags, JSONLibraryError* error)
++{
++    return static_cast<const JSONLibraryDoc*>(obJSONHostParse(text, length, flags, error));
++}
++
++void libraryFree(const JSONLibraryDoc* doc)
++{
++    obJSONHostFree(const_cast<JSONLibraryDoc*>(doc));
++}
++
++#else
++
++#ifdef __HAVE_68881__
++#define OB_JSON_FP_CLOBBER "fp0", "fp1",
++#else
++#define OB_JSON_FP_CLOBBER
++#endif
++
++void* s_jsonBase;
++std::once_flag s_jsonOnce;
++
++// exec.library's OpenLibrary and CloseLibrary, and json.library's JSONParse
++// and JSONFreeDoc, called in their registers (no Amiga headers here, as this
++// file is built with JavaScriptCore's own).
++void* execOpenLibrary(const char* name, uint32_t version)
++{
++    register uint32_t d0 __asm("d0") = version;
++    register uint32_t d1 __asm("d1") = 0;
++    register uint32_t a0 __asm("a0") = 0;
++    register uint32_t a1 __asm("a1") = reinterpret_cast<uint32_t>(name);
++    register void* a6 __asm("a6") = *reinterpret_cast<void* volatile*>(4);
++    __asm__ __volatile__("jsr -552(%/a6)"
++        : "+r"(d0), "+r"(d1), "+r"(a0), "+r"(a1)
++        : "r"(a6)
++        : OB_JSON_FP_CLOBBER "cc", "memory");
++    return reinterpret_cast<void*>(d0);
++}
++
++void execCloseLibrary(void* base)
++{
++    register uint32_t d0 __asm("d0") = 0;
++    register uint32_t d1 __asm("d1") = 0;
++    register uint32_t a0 __asm("a0") = 0;
++    register uint32_t a1 __asm("a1") = reinterpret_cast<uint32_t>(base);
++    register void* a6 __asm("a6") = *reinterpret_cast<void* volatile*>(4);
++    __asm__ __volatile__("jsr -414(%/a6)"
++        : "+r"(d0), "+r"(d1), "+r"(a0), "+r"(a1)
++        : "r"(a6)
++        : OB_JSON_FP_CLOBBER "cc", "memory");
++}
++
++void closeJSONLibrary()
++{
++    if (void* base = s_jsonBase) {
++        s_jsonBase = nullptr;
++        execCloseLibrary(base);
++    }
++}
++
++// LIBS:json.library, or the one in the program's drawer when it is not
++// installed. Opened once, for every thread, and closed at exit.
++bool openJSONLibrary()
++{
++    std::call_once(s_jsonOnce, [] {
++        void* base = execOpenLibrary("json.library", 1);
++        if (!base)
++            base = execOpenLibrary("PROGDIR:Libs/json.library", 1);
++        s_jsonBase = base;
++        if (base)
++            atexit(closeJSONLibrary);
++    });
++    return s_jsonBase;
++}
++
++const JSONLibraryDoc* libraryParse(const uint8_t* text, uint32_t length, uint32_t flags, JSONLibraryError* error)
++{
++    register uint32_t d0 __asm("d0") = length;
++    register uint32_t d1 __asm("d1") = flags;
++    register uint32_t a0 __asm("a0") = reinterpret_cast<uint32_t>(text);
++    register uint32_t a1 __asm("a1") = reinterpret_cast<uint32_t>(error);
++    register void* a6 __asm("a6") = s_jsonBase;
++    __asm__ __volatile__("jsr -42(%/a6)"
++        : "+r"(d0), "+r"(d1), "+r"(a0), "+r"(a1)
++        : "r"(a6)
++        : OB_JSON_FP_CLOBBER "cc", "memory");
++    return reinterpret_cast<const JSONLibraryDoc*>(d0);
++}
++
++void libraryFree(const JSONLibraryDoc* doc)
++{
++    register uint32_t d0 __asm("d0") = 0;
++    register uint32_t d1 __asm("d1") = 0;
++    register uint32_t a0 __asm("a0") = reinterpret_cast<uint32_t>(doc);
++    register uint32_t a1 __asm("a1") = 0;
++    register void* a6 __asm("a6") = s_jsonBase;
++    __asm__ __volatile__("jsr -48(%/a6)"
++        : "+r"(d0), "+r"(d1), "+r"(a0), "+r"(a1)
++        : "r"(a6)
++        : OB_JSON_FP_CLOBBER "cc", "memory");
++}
++
++#endif
++
++class DocHolder {
++    WTF_MAKE_NONCOPYABLE(DocHolder);
++public:
++    explicit DocHolder(const JSONLibraryDoc* doc) : m_doc(doc) { }
++    ~DocHolder() { if (m_doc) libraryFree(m_doc); }
++private:
++    const JSONLibraryDoc* m_doc;
++};
++
++ALWAYS_INLINE bool isASCIIBytes(const uint8_t* bytes, uint32_t length)
++{
++    uint8_t all = 0;
++    for (uint32_t i = 0; i < length; ++i)
++        all |= bytes[i];
++    return !(all & 0x80);
++}
++
++// The pool's strings are UTF-8 the library has checked. An unpaired
++// surrogate escape comes out as U+FFFD, so a string holding U+FFFD gives a
++// null String here and is read again from the source text.
++String poolStringToString(const uint8_t* bytes, uint32_t length)
++{
++    auto next = [&](uint32_t& i) -> char32_t {
++        uint8_t c = bytes[i++];
++        if (c < 0x80)
++            return c;
++        if (c < 0xE0) {
++            char32_t r = ((c & 0x1F) << 6) | (bytes[i] & 0x3F);
++            i += 1;
++            return r;
++        }
++        if (c < 0xF0) {
++            char32_t r = ((c & 0x0F) << 12) | ((bytes[i] & 0x3F) << 6) | (bytes[i + 1] & 0x3F);
++            i += 2;
++            return r;
++        }
++        char32_t r = ((c & 0x07) << 18) | ((bytes[i] & 0x3F) << 12) | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F);
++        i += 3;
++        return r;
++    };
++
++    unsigned units = 0;
++    char32_t all = 0;
++    for (uint32_t i = 0; i < length;) {
++        char32_t c = next(i);
++        if (c == 0xFFFD)
++            return { };
++        all |= c;
++        units += c > 0xFFFF ? 2 : 1;
++    }
++    if (all < 0x100) {
++        std::span<Latin1Character> out;
++        String result = String::createUninitialized(units, out);
++        unsigned o = 0;
++        for (uint32_t i = 0; i < length;)
++            out[o++] = static_cast<Latin1Character>(next(i));
++        return result;
++    }
++    std::span<char16_t> out;
++    String result = String::createUninitialized(units, out);
++    unsigned o = 0;
++    for (uint32_t i = 0; i < length;) {
++        char32_t c = next(i);
++        if (c > 0xFFFF) {
++            out[o++] = U16_LEAD(c);
++            out[o++] = U16_TRAIL(c);
++        } else
++            out[o++] = static_cast<char16_t>(c);
++    }
++    return result;
++}
++
++// A 16-bit source as UTF-8 for the library. An unpaired surrogate becomes
++// U+FFFD (inside a string it is read again from the source; anywhere else it
++// is a syntax error either way), and so does a byte order mark at the start,
++// which JSON.parse does not skip but the library would.
++bool sourceToUTF8(std::span<const char16_t> source, Vector<uint8_t>& out)
++{
++    uint64_t size = 0;
++    for (size_t i = 0; i < source.size(); ++i) {
++        char16_t c = source[i];
++        if (c < 0x80)
++            size += 1;
++        else if (c < 0x800)
++            size += 2;
++        else if (U16_IS_LEAD(c) && i + 1 < source.size() && U16_IS_TRAIL(source[i + 1])) {
++            size += 4;
++            ++i;
++        } else
++            size += 3;
++    }
++    if (size > 0x7FFFFFFFu || !out.tryReserveCapacity(size))
++        return false;
++    out.grow(size);
++    uint8_t* p = out.mutableSpan().data();
++    for (size_t i = 0; i < source.size(); ++i) {
++        char32_t c = source[i];
++        if (c < 0x80) {
++            *p++ = c;
++            continue;
++        }
++        if (c < 0x800) {
++            *p++ = 0xC0 | (c >> 6);
++            *p++ = 0x80 | (c & 0x3F);
++            continue;
++        }
++        if (U16_IS_SURROGATE(c) || (!i && c == 0xFEFF)) {
++            if (U16_IS_LEAD(c) && i + 1 < source.size() && U16_IS_TRAIL(source[i + 1]))
++                c = U16_GET_SUPPLEMENTARY(c, source[++i]);
++            else
++                c = 0xFFFD;
++        }
++        if (c > 0xFFFF) {
++            *p++ = 0xF0 | (c >> 18);
++            *p++ = 0x80 | ((c >> 12) & 0x3F);
++        } else
++            *p++ = 0xE0 | (c >> 12);
++        *p++ = 0x80 | ((c >> 6) & 0x3F);
++        *p++ = 0x80 | (c & 0x3F);
++    }
++    return true;
++}
++
++// The library's byte offset as an index into a 16-bit source.
++unsigned sourceIndex(std::span<const char16_t> source, uint32_t offset)
++{
++    uint32_t bytes = 0;
++    size_t i = 0;
++    while (i < source.size() && bytes < offset) {
++        char16_t c = source[i++];
++        if (c < 0x80)
++            bytes += 1;
++        else if (c < 0x800)
++            bytes += 2;
++        else if (U16_IS_LEAD(c) && i < source.size() && U16_IS_TRAIL(source[i])) {
++            bytes += 4;
++            ++i;
++        } else
++            bytes += 3;
++    }
++    return i;
++}
++
++unsigned sourceIndex(std::span<const Latin1Character> source, uint32_t offset)
++{
++    return std::min<size_t>(offset, source.size());
++}
++
++template<typename CharType>
++String errorPlace(std::span<const CharType> source, unsigned index)
++{
++    unsigned line = 1;
++    unsigned column = 1;
++    for (unsigned i = 0; i < index && i < source.size(); ++i) {
++        if (source[i] == '\n') {
++            ++line;
++            column = 1;
++        } else
++            ++column;
++    }
++    return makeString(" at line "_s, line, ", column "_s, column);
++}
++
++template<typename CharType>
++String syntaxErrorMessage(std::span<const CharType> source, const JSONLibraryError& error, unsigned index)
++{
++    String what;
++    switch (error.code) {
++    case ErrorSyntax:
++        if (index < source.size())
++            what = makeString("Unexpected token '"_s, static_cast<char16_t>(source[index]), "'"_s);
++        else
++            what = "Unexpected EOF"_s;
++        break;
++    case ErrorEOF:
++        what = "Unexpected EOF"_s;
++        break;
++    case ErrorControl:
++        what = "Unescaped control character in string"_s;
++        break;
++    case ErrorEscape:
++        what = "Invalid escape in string"_s;
++        break;
++    case ErrorNumber:
++        what = "Invalid number"_s;
++        break;
++    case ErrorTrailing:
++        what = "Unexpected content at end of JSON literal"_s;
++        break;
++    default:
++        what = "Unable to parse JSON string"_s;
++        break;
++    }
++    return makeString("JSON Parse error: "_s, what, errorPlace(source, index));
++}
++
++template<typename CharType>
++class BlockBuilder {
++    WTF_MAKE_NONCOPYABLE(BlockBuilder);
++    WTF_FORBID_HEAP_ALLOCATION;
++public:
++    BlockBuilder(JSGlobalObject* globalObject, std::span<const CharType> source, const JSONLibraryDoc* doc, JSONRanges* ranges)
++        : m_globalObject(globalObject)
++        , m_vm(globalObject->vm())
++        , m_cache(m_vm.jsonCache())
++        , m_source(source)
++        , m_nodes(std::bit_cast<const JSONLibraryNode*>(std::bit_cast<const uint8_t*>(doc) + doc->nodeOffset))
++        , m_pool(std::bit_cast<const uint8_t*>(doc) + doc->poolOffset)
++        , m_ranges(ranges)
++    {
++    }
++
++    JSValue build();
++
++private:
++    JSValue makePrimitive(uint32_t index);
++    JSValue makeStringValue(uint32_t index);
++    Identifier makeIdentifier(uint32_t index);
++    JSArray* materializeArray(MarkedArgumentBuffer& elements, unsigned base);
++
++    // Objects made from JSON mostly share their shapes. When the object's
++    // Structure already has the transition that adds this key, take it
++    // without putDirect's lookups, as LiteralParser's fast path does: an
++    // ASCII key is compared with the Structure's single transition and
++    // looked up in the JSONCache's transitions before any Identifier is
++    // made. A key the object has already (a duplicate) has no such
++    // transition and goes to putDirect.
++    ALWAYS_INLINE bool putWithTransition(JSObject* object, Structure* structure, Structure* newStructure, JSValue value)
++    {
++        PropertyOffset offset = newStructure->transitionOffset();
++        if (offset >= firstOutOfLineOffset && structure->outOfLineCapacity() != newStructure->outOfLineCapacity())
++            return false;
++        validateOffset(offset);
++        object->putDirectWithoutBarrier(offset, value);
++        object->setStructureIDDirectly(newStructure->id());
++        m_vm.writeBarrier(object);
++        return true;
++    }
++    ALWAYS_INLINE bool putThroughCachedTransition(JSObject* object, std::span<const Latin1Character> name, JSValue value)
++    {
++        Structure* structure = object->structure();
++        if (structure->isDictionary())
++            return false;
++        Structure* newStructure = structure->trySingleTransition();
++        if (newStructure && newStructure->transitionKind() == TransitionKind::PropertyAddition
++            && !newStructure->transitionPropertyAttributes() && WTF::equal(newStructure->transitionPropertyName(), name))
++            return putWithTransition(object, structure, newStructure, value);
++        if (!newStructure) {
++            if ((newStructure = m_cache.getTransition(structure, name)))
++                return putWithTransition(object, structure, newStructure, value);
++        }
++        return false;
++    }
++    ALWAYS_INLINE bool putThroughExistingTransition(JSObject* object, const Identifier& key, std::span<const Latin1Character> asciiName, JSValue value)
++    {
++        Structure* structure = object->structure();
++        if (structure->isDictionary())
++            return false;
++        PropertyOffset offset = 0;
++        Structure* newStructure = Structure::addPropertyTransitionToExistingStructure(structure, key.impl(), 0, offset);
++        if (!newStructure)
++            return false;
++        if (asciiName.data() && !structure->hasBeenDictionary() && newStructure->transitionKind() == TransitionKind::PropertyAddition && !newStructure->transitionPropertyAttributes())
++            m_cache.addTransition(structure, newStructure, asciiName);
++        return putWithTransition(object, structure, newStructure, value);
++    }
++
++    // An object's key waiting for its value: an ASCII key stays in the pool
++    // until then; any other is made at once (it may need the source cursor).
++    struct PendingKey {
++        uint32_t node;
++        Identifier identifier;
++    };
++    PendingKey makePendingKey(uint32_t index)
++    {
++        const JSONLibraryNode& node = m_nodes[index];
++        if (isASCIIBytes(m_pool + nodeField(node), node.data) && !m_ranges)
++            return { index, Identifier() };
++        return { index, makeIdentifier(index) };
++    }
++
++    // The source cursor: where node `index` starts in the source text, for
++    // the reviver's source ranges and for strings read again from the source.
++    // Nodes are in document order, so the cursor only moves forward.
++    static ALWAYS_INLINE bool isSeparator(CharType c)
++    {
++        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',' || c == ':' || c == ']' || c == '}';
++    }
++    void skipToken()
++    {
++        CharType c = m_source[m_cursor];
++        if (c == '"') {
++            ++m_cursor;
++            while (m_source[m_cursor] != '"')
++                m_cursor += m_source[m_cursor] == '\\' ? 2 : 1;
++            ++m_cursor;
++        } else if (c == '{' || c == '[')
++            ++m_cursor;
++        else if (c == 't' || c == 'n')
++            m_cursor += 4;
++        else if (c == 'f')
++            m_cursor += 5;
++        else {
++            while (m_cursor < m_source.size() && (isASCIIDigit(c = m_source[m_cursor]) || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E'))
++                ++m_cursor;
++        }
++    }
++    unsigned cursorTo(uint32_t index)
++    {
++        if (m_tokenNode == index)
++            return m_tokenStart;
++        while (m_cursorNode < index) {
++            while (isSeparator(m_source[m_cursor]))
++                ++m_cursor;
++            skipToken();
++            ++m_cursorNode;
++        }
++        while (m_cursor < m_source.size() && isSeparator(m_source[m_cursor]))
++            ++m_cursor;
++        m_tokenNode = index;
++        m_tokenStart = m_cursor;
++        return m_cursor;
++    }
++    // Past the token of the node the cursor is at.
++    unsigned tokenEnd()
++    {
++        skipToken();
++        ++m_cursorNode;
++        return m_cursor;
++    }
++    // Past the ] or } that closes the container whose last child the cursor passed.
++    unsigned closeContainer()
++    {
++        while (m_source[m_cursor] != ']' && m_source[m_cursor] != '}')
++            ++m_cursor;
++        return ++m_cursor;
++    }
++    String stringFromSource(uint32_t index);
++
++    JSGlobalObject* m_globalObject;
++    VM& m_vm;
++    JSONCache& m_cache;
++    std::span<const CharType> m_source;
++    const JSONLibraryNode* m_nodes;
++    const uint8_t* m_pool;
++    JSONRanges* m_ranges;
++    unsigned m_cursor { 0 };
++    uint32_t m_cursorNode { 0 };
++    uint32_t m_tokenNode { 0xFFFFFFFFu };
++    unsigned m_tokenStart { 0 };
++};
++
++// A string exactly as its source spells it: escapes give their code units,
++// so unpaired surrogates stay as they are.
++template<typename CharType>
++String BlockBuilder<CharType>::stringFromSource(uint32_t index)
++{
++    unsigned i = cursorTo(index) + 1;
++    StringBuilder builder;
++    while (true) {
++        CharType c = m_source[i++];
++        if (c == '"')
++            break;
++        if (c != '\\') {
++            builder.append(static_cast<char16_t>(c));
++            continue;
++        }
++        CharType e = m_source[i++];
++        switch (e) {
++        case 'b': builder.append('\b'); break;
++        case 'f': builder.append('\f'); break;
++        case 'n': builder.append('\n'); break;
++        case 'r': builder.append('\r'); break;
++        case 't': builder.append('\t'); break;
++        case 'u': {
++            char16_t unit = (toASCIIHexValue(m_source[i]) << 12) | (toASCIIHexValue(m_source[i + 1]) << 8)
++                | (toASCIIHexValue(m_source[i + 2]) << 4) | toASCIIHexValue(m_source[i + 3]);
++            i += 4;
++            builder.append(unit);
++            break;
++        }
++        default:
++            builder.append(static_cast<char16_t>(e));
++            break;
++        }
++    }
++    return builder.toString();
++}
++
++template<typename CharType>
++Identifier BlockBuilder<CharType>::makeIdentifier(uint32_t index)
++{
++    const JSONLibraryNode& node = m_nodes[index];
++    const uint8_t* bytes = m_pool + nodeField(node);
++    if (isASCIIBytes(bytes, node.data))
++        return Identifier::fromString(m_vm, m_cache.makeIdentifier(m_vm, std::span<const Latin1Character> { bytes, node.data }));
++    String string = poolStringToString(bytes, node.data);
++    if (string.isNull())
++        string = stringFromSource(index);
++    return Identifier::fromString(m_vm, string);
++}
++
++template<typename CharType>
++JSValue BlockBuilder<CharType>::makeStringValue(uint32_t index)
++{
++    const JSONLibraryNode& node = m_nodes[index];
++    const uint8_t* bytes = m_pool + nodeField(node);
++    if (isASCIIBytes(bytes, node.data))
++        return m_cache.makeJSString(m_vm, std::span<const Latin1Character> { bytes, node.data });
++    String string = poolStringToString(bytes, node.data);
++    if (string.isNull())
++        string = stringFromSource(index);
++    return jsString(m_vm, WTF::move(string));
++}
++
++template<typename CharType>
++JSValue BlockBuilder<CharType>::makePrimitive(uint32_t index)
++{
++    const JSONLibraryNode& node = m_nodes[index];
++    switch (nodeType(node)) {
++    case NodeNull:
++        return jsNull();
++    case NodeFalse:
++        return jsBoolean(false);
++    case NodeTrue:
++        return jsBoolean(true);
++    case NodeInt:
++        return jsNumber(static_cast<int32_t>(node.data));
++    case NodeNumber: {
++        size_t parsedLength;
++        return jsNumber(parseDouble(std::span<const Latin1Character> { m_pool + nodeField(node), node.data }, parsedLength));
++    }
++    default:
++        return makeStringValue(index);
++    }
++}
++
++// As LiteralParser's: one allocation of the right shape from the elements.
++template<typename CharType>
++JSArray* BlockBuilder<CharType>::materializeArray(MarkedArgumentBuffer& elements, unsigned base)
++{
++    VM& vm = m_vm;
++    auto scope = DECLARE_THROW_SCOPE(vm);
++
++    unsigned length = elements.size() - base;
++    JSValue* values = elements.begin() + base;
++
++    IndexingType indexingType = ArrayWithInt32;
++    for (unsigned i = 0; i < length; ++i) {
++        JSValue value = values[i];
++        if (value.isInt32())
++            continue;
++        if (value.isDouble()) {
++            indexingType = ArrayWithDouble;
++            continue;
++        }
++        indexingType = ArrayWithContiguous;
++        break;
++    }
++
++    {
++        ObjectInitializationScope initializationScope(vm);
++        Structure* structure = m_globalObject->arrayStructureForIndexingTypeDuringAllocation(indexingType);
++        if (JSArray* array = JSArray::tryCreateUninitializedRestricted(initializationScope, structure, length)) [[likely]] {
++            IndexingType shape = array->indexingType() & IndexingShapeMask;
++            if (shape == DoubleShape) {
++                double* data = array->butterfly()->contiguousDouble().data();
++                for (unsigned i = 0; i < length; ++i)
++                    data[i] = values[i].asNumber();
++            } else if (shape == Int32Shape)
++                memcpy(std::bit_cast<JSValue*>(array->butterfly()->contiguous().data()), values, length * sizeof(JSValue));
++            else if (shape == ContiguousShape) {
++                gcSafeMemcpy(std::bit_cast<JSValue*>(array->butterfly()->contiguous().data()), values, length * sizeof(JSValue));
++                vm.writeBarrier(array);
++            } else {
++                for (unsigned i = 0; i < length; ++i)
++                    array->initializeIndex(initializationScope, i, values[i]);
++            }
++            return array;
++        }
++    }
++
++    JSArray* array = constructEmptyArray(m_globalObject, nullptr);
++    RETURN_IF_EXCEPTION(scope, nullptr);
++    for (unsigned i = 0; i < length; ++i) {
++        array->putDirectIndex(m_globalObject, i, values[i]);
++        RETURN_IF_EXCEPTION(scope, nullptr);
++    }
++    return array;
++}
++
++// One loop over the nodes, never a recursion: a container's children follow
++// it, an object's as key, value, key, value.
++template<typename CharType>
++JSValue BlockBuilder<CharType>::build()
++{
++    VM& vm = m_vm;
++    auto scope = DECLARE_THROW_SCOPE(vm);
++
++    struct Frame {
++        uint32_t remaining;
++        unsigned elementBase;
++        bool isObject;
++    };
++    Vector<Frame, 16> frames;
++    MarkedArgumentBuffer objects;
++    MarkedArgumentBuffer elements;
++    Vector<PendingKey, 16> keys;
++    JSONCache::ParsingScope parsingScope(m_cache);
++    Vector<JSONRanges::Entry, 8> rangesStack;
++
++    uint32_t index = 0;
++    JSValue value;
++    JSONRanges::Entry valueRange;
++
++    while (true) {
++        const JSONLibraryNode& node = m_nodes[index];
++        uint32_t type = nodeType(node);
++        unsigned start = m_ranges ? cursorTo(index) : 0;
++
++        if (type == NodeArray || type == NodeObject) {
++            bool isObject = type == NodeObject;
++            uint32_t count = nodeField(node);
++            JSObject* object = nullptr;
++            if (isObject)
++                object = constructEmptyObject(m_globalObject);
++            if (m_ranges)
++                tokenEnd();
++            ++index;
++            if (!count) {
++                if (isObject)
++                    value = object;
++                else {
++                    value = constructEmptyArray(m_globalObject, nullptr);
++                    RETURN_IF_EXCEPTION(scope, { });
++                }
++                if (m_ranges) {
++                    valueRange = { m_ranges->record(value), WTF::Range<unsigned> { start, closeContainer() }, { } };
++                    if (isObject)
++                        valueRange.properties = JSONRanges::Object { };
++                    else
++                        valueRange.properties = JSONRanges::Array { };
++                }
++            } else {
++                frames.append({ count, static_cast<unsigned>(elements.size()), isObject });
++                if (isObject)
++                    objects.appendWithCrashOnOverflow(object);
++                if (m_ranges) {
++                    if (isObject)
++                        rangesStack.append({ m_ranges->record(object), WTF::Range<unsigned> { start }, JSONRanges::Object { } });
++                    else
++                        rangesStack.append({ JSValue(), WTF::Range<unsigned> { start }, JSONRanges::Array { } });
++                }
++                if (isObject)
++                    keys.append(makePendingKey(index++));
++                continue;
++            }
++        } else {
++            value = makePrimitive(index);
++            RETURN_IF_EXCEPTION(scope, { });
++            if (m_ranges)
++                valueRange = { m_ranges->record(value), WTF::Range<unsigned> { start, tokenEnd() }, { } };
++            ++index;
++        }
++
++        // The value goes to its container; finish each container it completes.
++        while (true) {
++            if (frames.isEmpty()) {
++                if (m_ranges)
++                    m_ranges->setRoot(WTF::move(valueRange));
++                return value;
++            }
++            Frame& frame = frames.last();
++            if (frame.isObject) {
++                JSObject* object = asObject(objects.last());
++                PendingKey pending = keys.takeLast();
++                Identifier& key = pending.identifier;
++                std::span<const Latin1Character> asciiName;
++                if (key.isNull()) {
++                    const JSONLibraryNode& keyNode = m_nodes[pending.node];
++                    asciiName = { m_pool + nodeField(keyNode), keyNode.data };
++                    if (putThroughCachedTransition(object, asciiName, value))
++                        goto stored;
++                    key = Identifier::fromString(vm, m_cache.makeIdentifier(vm, asciiName));
++                }
++                if (std::optional<uint32_t> propertyIndex = parseIndex(key)) {
++                    object->putDirectIndex(m_globalObject, propertyIndex.value(), value);
++                    RETURN_IF_EXCEPTION(scope, { });
++                } else if (!putThroughExistingTransition(object, key, asciiName, value))
++                    object->putDirect(vm, key, value);
++                if (m_ranges)
++                    std::get<JSONRanges::Object>(rangesStack.last().properties).set(key.impl(), WTF::move(valueRange));
++            stored:;
++            } else {
++                elements.appendWithCrashOnOverflow(value);
++                if (m_ranges)
++                    std::get<JSONRanges::Array>(rangesStack.last().properties).append(WTF::move(valueRange));
++            }
++            if (--frame.remaining) {
++                if (frame.isObject)
++                    keys.append(makePendingKey(index++));
++                break;
++            }
++            if (frame.isObject)
++                value = objects.takeLast();
++            else {
++                value = materializeArray(elements, frame.elementBase);
++                RETURN_IF_EXCEPTION(scope, { });
++                elements.shrink(frame.elementBase);
++            }
++            frames.removeLast();
++            if (m_ranges) {
++                valueRange = rangesStack.takeLast();
++                if (!valueRange.value)
++                    valueRange.value = m_ranges->record(value);
++                valueRange.range = { valueRange.range.begin(), closeContainer() };
++            }
++        }
++    }
++}
++
++template<typename CharType>
++JSValue parseWithLibrary(JSGlobalObject* globalObject, std::span<const CharType> source, JSONRanges* ranges, String& errorMessage, JSONLibraryParseMode mode)
++{
++    VM& vm = globalObject->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
++
++    static const uint8_t empty = 0;
++    JSONLibraryError error { };
++    const JSONLibraryDoc* doc;
++    if constexpr (sizeof(CharType) == 1)
++        doc = libraryParse(source.empty() ? &empty : source.data(), source.size(), parseLatin1, &error);
++    else {
++        Vector<uint8_t> utf8;
++        if (!sourceToUTF8(source, utf8)) {
++            throwOutOfMemoryError(globalObject, scope);
++            return { };
++        }
++        doc = libraryParse(utf8.isEmpty() ? &empty : utf8.span().data(), utf8.size(), 0, &error);
++    }
++
++    if (!doc) {
++        unsigned index = sourceIndex(source, error.offset);
++        switch (error.code) {
++        case ErrorDepth:
++            // Deeper than json.library's 1024 levels: the RangeError
++            // LiteralParser gives when a reviver's parse nests too deep.
++            throwStackOverflowError(globalObject, scope);
++            return { };
++        case ErrorNoMemory:
++        case ErrorTooBig:
++            throwOutOfMemoryError(globalObject, scope);
++            return { };
++        default:
++            errorMessage = syntaxErrorMessage(source, error, index);
++            return { };
++        }
++    }
++    DocHolder holder(doc);
++
++    if (mode == JSONLibraryParseMode::PrimitiveValue) {
++        uint32_t type = nodeType(*std::bit_cast<const JSONLibraryNode*>(std::bit_cast<const uint8_t*>(doc) + doc->nodeOffset));
++        if (type == NodeArray || type == NodeObject) {
++            JSONLibraryError unexpected { ErrorSyntax, 0, 1, 1 };
++            errorMessage = syntaxErrorMessage(source, unexpected, 0);
++            return { };
++        }
++    }
++
++    BlockBuilder<CharType> builder(globalObject, source, doc, ranges);
++    RELEASE_AND_RETURN(scope, builder.build());
++}
++
++} // namespace
++
++JSValue jsonLibraryParse(JSGlobalObject* globalObject, StringView json, JSONRanges* ranges, String& errorMessage, JSONLibraryParseMode mode)
++{
++    VM& vm = globalObject->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
++
++    if (!openJSONLibrary()) [[unlikely]] {
++        throwException(globalObject, scope, createError(globalObject, "JSON.parse needs json.library version 1 or newer in LIBS:"_s));
++        return { };
++    }
++
++    if (json.is8Bit())
++        RELEASE_AND_RETURN(scope, parseWithLibrary(globalObject, json.span8(), ranges, errorMessage, mode));
++    RELEASE_AND_RETURN(scope, parseWithLibrary(globalObject, json.span16(), ranges, errorMessage, mode));
++}
++
++} // namespace JSC
++
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
++
++#endif // USE(OB_JSON_LIBRARY)
+diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCore/runtime/JSONObject.cpp
+index a1d69a4f717..09ac35f76eb 100644
+--- a/Source/JavaScriptCore/runtime/JSONObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSONObject.cpp
+@@ -903,9 +903,15 @@ inline FastStringifier<CharType, bufferMode>::FastStringifier(JSGlobalObject& gl
+     : m_globalObject(globalObject)
+     , m_vm(globalObject.vm())
+ {
+-    if constexpr (bufferMode == BufferMode::StaticBuffer)
++    if constexpr (bufferMode == BufferMode::StaticBuffer) {
+         m_capacity = m_length + usableBufferSize(staticBufferSize);
+-    else {
++#if OS(AMIGA)
++        // There is no guard page below the stack, and usableBufferSize()'s
++        // 384-byte estimate of append()'s frame is not what GCC makes for the
++        // 68k (412 bytes once more is inlined): check the stack as well.
++        m_stackLimit = std::bit_cast<uint8_t*>(m_vm.softStackLimit());
++#endif
++    } else {
+         m_dynamicBuffer.grow(dynamicBufferInlineCapacity);
+         m_capacity = dynamicBufferInlineCapacity;
+         m_stackLimit = std::bit_cast<uint8_t*>(m_vm.softStackLimit());
+@@ -1345,7 +1351,12 @@ template<typename CharType, BufferMode bufferMode>
+ template<HasGap hasGap>
+ void FastStringifier<CharType, bufferMode>::append(JSValue value)
+ {
+-    if constexpr (bufferMode == BufferMode::DynamicBuffer) {
++#if OS(AMIGA)
++    constexpr bool checksStack = true;
++#else
++    constexpr bool checksStack = bufferMode == BufferMode::DynamicBuffer;
++#endif
++    if constexpr (checksStack) {
+         if (std::bit_cast<uint8_t*>(currentStackPointer()) < m_stackLimit) [[unlikely]] {
+             recordFailure(FailureReason::StackOverflow, "stack overflow"_s);
+             return;
+@@ -2169,6 +2180,15 @@ static NEVER_INLINE JSValue jsonParseSlow(JSGlobalObject* globalObject, JSString
+ 
+     JSONRanges ranges;
+     JSValue unfiltered;
++#if USE(OB_JSON_LIBRARY)
++    String errorMessage;
++    unfiltered = jsonLibraryParse(globalObject, view, Options::useJSONSourceTextAccess() ? &ranges : nullptr, errorMessage);
++    RETURN_IF_EXCEPTION(scope, { });
++    if (!unfiltered) {
++        throwSyntaxError(globalObject, scope, errorMessage);
++        return { };
++    }
++#else
+     if (view.is8Bit()) {
+         LiteralParser<Latin1Character, JSONReviverMode::Enabled> jsonParser(globalObject, view.span8(), StrictJSON);
+         unfiltered = jsonParser.tryLiteralParse(Options::useJSONSourceTextAccess() ? &ranges : nullptr);
+@@ -2188,6 +2208,7 @@ static NEVER_INLINE JSValue jsonParseSlow(JSGlobalObject* globalObject, JSString
+             return { };
+         }
+     }
++#endif
+ 
+     scope.release();
+     Walker walker(globalObject, string, function, callData, Options::useJSONSourceTextAccess() ? &ranges : nullptr);
+@@ -2211,6 +2232,14 @@ JSC_DEFINE_HOST_FUNCTION(jsonProtoFuncParse, (JSGlobalObject* globalObject, Call
+             RELEASE_AND_RETURN(scope, JSValue::encode(jsonParseSlow(globalObject, string, view, WTF::move(callData), asObject(function))));
+     }
+ 
++#if USE(OB_JSON_LIBRARY)
++    String errorMessage;
++    JSValue unfiltered = jsonLibraryParse(globalObject, view, nullptr, errorMessage);
++    RETURN_IF_EXCEPTION(scope, { });
++    if (!unfiltered)
++        return throwVMError(globalObject, scope, createSyntaxError(globalObject, errorMessage));
++    return JSValue::encode(unfiltered);
++#else
+     if (view->is8Bit()) {
+         LiteralParser<Latin1Character, JSONReviverMode::Disabled> jsonParser(globalObject, view->span8(), StrictJSON);
+         JSValue unfiltered = jsonParser.tryLiteralParse();
+@@ -2230,6 +2259,7 @@ JSC_DEFINE_HOST_FUNCTION(jsonProtoFuncParse, (JSGlobalObject* globalObject, Call
+         return throwVMError(globalObject, scope, createSyntaxError(globalObject, jsonParser.getErrorMessage()));
+     }
+     return JSValue::encode(unfiltered);
++#endif
+ }
+ 
+ // ECMA-262 v5 15.12.3
+@@ -2244,6 +2274,10 @@ JSValue JSONParse(JSGlobalObject* globalObject, StringView json)
+     if (json.isNull())
+         return JSValue();
+ 
++#if USE(OB_JSON_LIBRARY)
++    String errorMessage;
++    return jsonLibraryParse(globalObject, json, nullptr, errorMessage);
++#else
+     if (json.is8Bit()) {
+         LiteralParser<Latin1Character, JSONReviverMode::Disabled> jsonParser(globalObject, json.span8(), StrictJSON);
+         return jsonParser.tryLiteralParse();
+@@ -2251,6 +2285,7 @@ JSValue JSONParse(JSGlobalObject* globalObject, StringView json)
+ 
+     LiteralParser<char16_t, JSONReviverMode::Disabled> jsonParser(globalObject, json.span16(), StrictJSON);
+     return jsonParser.tryLiteralParse();
++#endif
+ }
+ 
+ JSValue JSONParseWithException(JSGlobalObject* globalObject, StringView json)
+@@ -2261,6 +2296,14 @@ JSValue JSONParseWithException(JSGlobalObject* globalObject, StringView json)
+     if (json.isNull())
+         return JSValue();
+ 
++#if USE(OB_JSON_LIBRARY)
++    String errorMessage;
++    JSValue result = jsonLibraryParse(globalObject, json, nullptr, errorMessage);
++    RETURN_IF_EXCEPTION(scope, { });
++    if (!result)
++        throwSyntaxError(globalObject, scope, errorMessage);
++    return result;
++#else
+     if (json.is8Bit()) {
+         LiteralParser<Latin1Character, JSONReviverMode::Disabled> jsonParser(globalObject, json.span8(), StrictJSON);
+         JSValue result = jsonParser.tryLiteralParse();
+@@ -2276,6 +2319,7 @@ JSValue JSONParseWithException(JSGlobalObject* globalObject, StringView json)
+     if (!result)
+         throwSyntaxError(globalObject, scope, jsonParser.getErrorMessage());
+     return result;
++#endif
+ }
+ 
+ String JSONStringify(JSGlobalObject* globalObject, JSValue value, JSValue space)
+@@ -2328,6 +2372,15 @@ JSC_DEFINE_HOST_FUNCTION(jsonProtoFuncRawJSON, (JSGlobalObject* globalObject, Ca
+     }
+ 
+     {
++#if USE(OB_JSON_LIBRARY)
++        String errorMessage;
++        JSValue result = jsonLibraryParse(globalObject, view, nullptr, errorMessage, JSONLibraryParseMode::PrimitiveValue);
++        RETURN_IF_EXCEPTION(scope, { });
++        if (!result) [[unlikely]] {
++            throwSyntaxError(globalObject, scope, errorMessage);
++            return { };
++        }
++#else
+         JSValue result;
+         if (view->is8Bit()) {
+             LiteralParser<Latin1Character, JSONReviverMode::Disabled> jsonParser(globalObject, view->span8(), StrictJSON);
+@@ -2346,6 +2399,7 @@ JSC_DEFINE_HOST_FUNCTION(jsonProtoFuncRawJSON, (JSGlobalObject* globalObject, Ca
+                 return { };
+             }
+         }
++#endif
+     }
+     auto* object = JSRawJSONObject::tryCreate(vm, globalObject->rawJSONObjectStructure(), jsString);
+     if (!object) [[unlikely]] {
+diff --git a/Source/JavaScriptCore/runtime/LiteralParser.cpp b/Source/JavaScriptCore/runtime/LiteralParser.cpp
+index d4648812bbe..d5df916c322 100644
+--- a/Source/JavaScriptCore/runtime/LiteralParser.cpp
++++ b/Source/JavaScriptCore/runtime/LiteralParser.cpp
+@@ -49,6 +49,8 @@ namespace JSC {
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(JSONCache);
+ 
++#if !USE(OB_JSON_LIBRARY)
++
+ template<typename CharType, JSONReviverMode reviverMode>
+ inline const CharType* LiteralParser<CharType, reviverMode>::Lexer::currentTokenStart() const
+ {
+@@ -2246,6 +2248,8 @@ template class LiteralParser<char16_t, JSONReviverMode::Enabled>;
+ template class LiteralParser<Latin1Character, JSONReviverMode::Disabled>;
+ template class LiteralParser<char16_t, JSONReviverMode::Disabled>;
+ 
++#endif // !USE(OB_JSON_LIBRARY)
++
+ }
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+diff --git a/Source/JavaScriptCore/runtime/LiteralParser.h b/Source/JavaScriptCore/runtime/LiteralParser.h
+index d5f691849b5..e2fe6419e81 100644
+--- a/Source/JavaScriptCore/runtime/LiteralParser.h
++++ b/Source/JavaScriptCore/runtime/LiteralParser.h
+@@ -36,11 +36,20 @@
+ #include <wtf/text/StringBuilder.h>
+ #include <wtf/text/WTFString.h>
+ 
++// The Team's 68k targets (PLATFORM(AMIGA), the browser, and OS(AMIGAOS3),
++// javascript.library's engine) parse JSON with json.library: jsonLibraryParse
++// in JSONLibraryParser.cpp. LiteralParser is not built there, nor the eval and
++// JSONP fast paths that use it. OB_JSON_LIBRARY_HOST is the host test build's.
++#if PLATFORM(AMIGA) || OS(AMIGAOS3) || defined(OB_JSON_LIBRARY_HOST)
++#define USE_OB_JSON_LIBRARY 1
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
+ namespace JSC {
+ 
+ class JSArray;
++class JSGlobalObject;
+ class JSONCache;
+ 
+ enum ParserMode : uint8_t { StrictJSON, SloppyJSON, JSONP };
+@@ -321,6 +330,18 @@ private:
+     Vector<JSONRanges::Entry, 8> m_rangesStack;
+ };
+ 
++#if USE(OB_JSON_LIBRARY)
++enum class JSONLibraryParseMode : uint8_t { Value, PrimitiveValue };
++
++// Strict JSON (JSON.parse's grammar) through json.library. The empty value
++// means failure: a syntax error, with errorMessage set and no exception, or an
++// exception (out of memory, nesting deeper than json.library's 1024 levels,
++// or no json.library). With sourceRanges, each value's source text is recorded
++// for a reviver, as LiteralParser's tryLiteralParse(JSONRanges*) does.
++// PrimitiveValue (JSON.rawJSON) refuses an object or an array.
++JSValue jsonLibraryParse(JSGlobalObject*, StringView json, JSONRanges* sourceRanges, String& errorMessage, JSONLibraryParseMode = JSONLibraryParseMode::Value);
++#endif
++
+ } // namespace JSC
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+-- 
+2.53.0
+
