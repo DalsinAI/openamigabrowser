@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 05:37:43 +0000
+Subject: [PATCH] JavaScriptCore: Array.prototype.push in line in the 68k
+ template JIT
+
+A call site whose link holds Array.prototype.push and passes one value
+pushes it in line, as JSArray::push does, onto an array (ArrayType, not
+a subclass's) of Int32 shape (an int32 value) or Contiguous shape, not
+copy-on-write, whose vector has room: the value goes at publicLength,
+which goes up by one, and the call's result is the new length. A cell
+stored into a black array, a full vector, any other shape or object,
+and a function other than push take the call. ArrayPushIntrinsic gets
+a trampoline of its own, so push keeps its intrinsic.
+
+Team 3
+---
+ .../JavaScriptCore/llint/M68KTemplateJIT.cpp  | 69 +++++++++++++++++--
+ Source/JavaScriptCore/runtime/VM.cpp          |  8 +++
+ 2 files changed, 73 insertions(+), 4 deletions(-)
+
+diff --git a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+index 1cf4095950a..d2735011330 100644
+--- a/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
++++ b/Source/JavaScriptCore/llint/M68KTemplateJIT.cpp
+@@ -2068,14 +2068,19 @@ private:
+ 
+     // Built-in functions done in line (item 3), at a call site whose call
+     // link holds one now: String.prototype.charCodeAt on a flat string and
+-    // an int32 index in range. The callee (in d0, kept) is checked by its
+-    // native function, so any function object for it will do; anything else
+-    // goes on to the call. Returns a branch to after the call, or SIZE_MAX.
++    // an int32 index in range; Array.prototype.push of one value onto an
++    // Int32 or Contiguous array with room in its vector. The callee (in d0,
++    // kept) is checked by its native function, so any function object for
++    // it will do; anything else goes on to the call. Returns a branch to
++    // after the call, or SIZE_MAX.
+     size_t intrinsicCall(CallLinkInfo& linkInfo, int frame, unsigned argc, const Operand& dst, const Operand& callee)
+     {
+         JSObject* cached = linkInfo.lastSeenCallee();
+         auto* function = cached && cached->type() == JSFunctionType ? static_cast<JSFunction*>(cached) : nullptr;
+-        if (!function || !function->isHostFunction() || function->intrinsic() != CharCodeAtIntrinsic || argc != 2)
++        if (!function || !function->isHostFunction() || argc != 2)
++            return SIZE_MAX;
++        Intrinsic intrinsic = function->intrinsic();
++        if (intrinsic != CharCodeAtIntrinsic && intrinsic != ArrayPushIntrinsic)
+             return SIZE_MAX;
+         uintptr_t native = reinterpret_cast<uintptr_t>(function->nativeFunction().taggedPtr());
+         constexpr int slot = sizeof(Register);
+@@ -2101,6 +2106,62 @@ private:
+         fail(Builder::NotEqual);
+         m_hot.word(0x0ca9); m_hot.longWord(native); m_hot.word(NativeExecutable::offsetOfNativeFunctionFor(CodeSpecializationKind::CodeForCall)); // cmpi.l #native,d16(a1)
+         fail(Builder::NotEqual);
++        if (intrinsic == ArrayPushIntrinsic) {
++            // this: an array (not a subclass's) of Int32 or Contiguous shape,
++            // not copy-on-write, whose vector has room; as JSArray::push.
++            int value = index;
++            m_hot.tstFrame(thisValue);
++            fail(Builder::NotEqual);
++            m_hot.loadFrame(thisValue + 4, 1);
++            m_hot.btstImm(1, 1);
++            fail(Builder::NotEqual);
++            m_hot.moveaFromData(1, 0);
++            m_hot.cmpByteImmDisp(ArrayType, 0, JSCell::typeInfoTypeOffset());
++            fail(Builder::NotEqual);
++            loadShape(true);
++            m_hot.cmpByteImm(Int32Shape, 0);
++            size_t notInt32Shape = m_hot.branchShort(Builder::NotEqual);
++            m_hot.cmpFrameImm(int32Tag, value);
++            fail(Builder::NotEqual);
++            size_t shapeOk = m_hot.branchShort(Builder::Always);
++            m_hot.bindShort(notInt32Shape);
++            m_hot.cmpByteImm(ContiguousShape, 0);
++            fail(Builder::NotEqual);
++            // Storing a cell into a black array needs the write barrier: the
++            // call does it.
++            static_assert(!blackThreshold);
++            m_hot.tstFrame(value);
++            size_t notCell1 = m_hot.branchShort(Builder::NotEqual);
++            m_hot.loadFrame(value + 4, 0);
++            m_hot.btst1(0);
++            size_t notCell2 = m_hot.branchShort(Builder::NotEqual);
++            m_hot.tst(0);
++            size_t notCell3 = m_hot.branchShort(Builder::Equal);
++            m_hot.tstByteDisp(0, JSCell::cellStateOffset());
++            fail(Builder::Equal);
++            m_hot.bindShort(notCell1);
++            m_hot.bindShort(notCell2);
++            m_hot.bindShort(notCell3);
++            m_hot.bindShort(shapeOk);
++            m_hot.moveaDisp(0, JSObject::butterflyOffset(), 0);
++            m_hot.loadDisp(0, Butterfly::offsetOfPublicLength(), 1);
++            m_hot.cmpDisp(0, Butterfly::offsetOfVectorLength(), 1);
++            fail(Builder::CarryClear); // publicLength >= vectorLength
++            m_hot.word(0x52a8); m_hot.word(static_cast<uint16_t>(Butterfly::offsetOfPublicLength())); // addq.l #1,d16(a0)
++            m_hot.lsl3(1);
++            m_hot.copyFrameToIndexed(value, 0, 1, 0);
++            m_hot.copyFrameToIndexed(value + 4, 0, 1, 4);
++            if (dst.valid) {
++                m_hot.loadDisp(0, Butterfly::offsetOfPublicLength(), 0);
++                m_hot.storeFrameImm(int32Tag, dst.hi);
++                m_hot.storeFrame(0, dst.lo);
++            }
++            size_t done = m_hot.branch(Builder::Always);
++            for (size_t i : notIntrinsic)
++                m_hot.bindBranch(i);
++            m_hot.loadFrame(callee.lo, 0);
++            return done;
++        }
+         // this: a flat string; the index: an int32.
+         m_hot.tstFrame(thisValue);
+         fail(Builder::NotEqual);
+diff --git a/Source/JavaScriptCore/runtime/VM.cpp b/Source/JavaScriptCore/runtime/VM.cpp
+index d19b8ecf125..8d0044ea25a 100644
+--- a/Source/JavaScriptCore/runtime/VM.cpp
++++ b/Source/JavaScriptCore/runtime/VM.cpp
+@@ -897,6 +897,14 @@ static Ref<NativeJITCode> jitCodeForCallTrampoline(Intrinsic intrinsic)
+         });
+         return result.get();
+     }
++    case ArrayPushIntrinsic: {
++        static LazyNeverDestroyed<Ref<NativeJITCode>> result;
++        static std::once_flag onceKey;
++        std::call_once(onceKey, [&] {
++            result.construct(adoptRef(*new NativeJITCode(LLInt::getCodeRef<JSEntryPtrTag>(llint_native_call_trampoline), JITType::HostCallThunk, intrinsic)));
++        });
++        return result.get();
++    }
+ #endif
+     default: {
+         static LazyNeverDestroyed<Ref<NativeJITCode>> result;
+-- 
+2.43.0
+

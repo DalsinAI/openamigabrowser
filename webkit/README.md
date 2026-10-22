@@ -261,6 +261,9 @@ The patches, in order:
   (the compiler emulated each 16-byte vector a byte at a time). JSON.parse,
   the JavaScript lexer, the URL parser and String find gain; page-json runs
   26% fewer instructions.
+- `0047-jsc-m68k-jit-array-push.patch`: `array.push(value)` is done in
+  line in the template JIT for Int32 and Contiguous arrays with room in
+  their vector, instead of a call into C++.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
