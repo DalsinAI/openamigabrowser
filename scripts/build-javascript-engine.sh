@@ -3,12 +3,13 @@
 # Copyright (c) 2026 AmigaChrome Team. MIT licence, see LICENSE.
 #
 # JavaScriptEngine, the program behind javascript.library (src/jslib): the
-# engine core (jsl_core.cpp, on JavaScriptCore's C interface), its AmigaOS
+# engine core (jsl_core.cpp, on JavaScriptCore's C interface; jsl_cache.cpp,
+# the saved translations, on its private one), its AmigaOS
 # layer and its main, linked the way the jsc shell is, with the same
 # JavaScriptCore build. Hard float, -O2 (the OpenBrowser stack's exception).
 #
 # Build JavaScriptCore first with scripts/build-jsc.sh (same WEBKIT_BUILD):
-# this compiles the three files with the flags CMake gave jsc.cpp, then
+# this compiles the four files with the flags CMake gave jsc.cpp, then
 # runs jsc's own link command with them in jsc.cpp's place.
 #
 #   WEBKIT_BUILD   the build-jsc.sh build folder        (required)
@@ -37,7 +38,9 @@ OBJ="$WEBKIT_BUILD/jslib-obj"
 mkdir -p "$OBJ" "$OUT"
 JSINC="-I$WEBKIT_BUILD/JavaScriptCore/Headers -I$WEBKIT_BUILD/JavaScriptCore/PrivateHeaders -I$LIB -I$LIB/sdk/Include_H"
 
-(cd "$SHELLDIR" && eval "\"$CXX\" $DEFINES $INCLUDES $CXXFLAGS $JSINC -c \"$LIB/jsl_core.cpp\" -o \"$OBJ/jsl_core.o\"")
+for f in jsl_core jsl_cache; do
+    (cd "$SHELLDIR" && eval "\"$CXX\" $DEFINES $INCLUDES $CXXFLAGS $JSINC -c \"$LIB/$f.cpp\" -o \"$OBJ/$f.o\"")
+done
 for f in jsl_os_exec jsl_engine; do
     "$CC" -m68040 -O2 -Wall -Wextra -Wno-unused-parameter -fno-common $JSINC -c "$LIB/$f.c" -o "$OBJ/$f.o"
 done
@@ -53,7 +56,7 @@ for i, w in enumerate(words):
         skip = False
         continue
     if w.endswith('jsc.cpp.o') or w.endswith('jsc.cpp.obj'):
-        cmd += [obj + '/jsl_core.o', obj + '/jsl_os_exec.o', obj + '/jsl_engine.o']
+        cmd += [obj + '/jsl_core.o', obj + '/jsl_cache.o', obj + '/jsl_os_exec.o', obj + '/jsl_engine.o']
     elif w == '-o':
         cmd += ['-o', out, '-Wl,-Map,' + out + '.map']
         skip = True

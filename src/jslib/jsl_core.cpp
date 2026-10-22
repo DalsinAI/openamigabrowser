@@ -32,6 +32,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "jsl_cache.h"
 #include "jsl_engine.h"
 #include "jsl_os.h"
 
@@ -81,6 +82,8 @@ struct Task {
     APTR user = nullptr;
     unsigned long stack = defaultStack;
     char name[32] = "JavaScript";
+    char cacheDir[256] = "";                // translations kept here (JSA_CacheDir)
+    JSLCacheList *cache = nullptr;          // scripts with translations to write
     JSValueRef pending = nullptr;           // protected: thrown when the slot function returns
     ClassRec *classes = nullptr;
     std::unordered_map<void *, Wrapper *> wrappers;     // the live wrapper of each program object
@@ -427,6 +430,7 @@ void setUp(Task *t)
 
 void tearDown(Task *t)
 {
+    jsl_cache_commit(&t->cache);
     if (t->pending)
         JSValueUnprotect(t->ctx, t->pending);
     JSValueUnprotect(t->ctx, t->defineAccessor);
@@ -510,6 +514,10 @@ static Task *newTask(struct TagItem *tags)
         case JSA_UserData:
             t->user = reinterpret_cast<APTR>(ti->ti_Data);
             break;
+        case JSA_CacheDir:
+            if (ti->ti_Data && strlen(reinterpret_cast<const char *>(ti->ti_Data)) < sizeof t->cacheDir)
+                strcpy(t->cacheDir, reinterpret_cast<const char *>(ti->ti_Data));
+            break;
         }
     }
     liveTasks++;
@@ -558,7 +566,7 @@ static LONG eEvaluate(JSTask jt, CONST_STRPTR source, LONG length, CONST_STRPTR 
             return;
         }
         JSValueRef exception = nullptr;
-        JSValueRef v = JSEvaluateScript(t->ctx, src, nullptr, url, 1, &exception);
+        JSValueRef v = jsl_cache_evaluate(t->ctx, src, url, t->cacheDir, &t->cache, &exception);
         JSStringRelease(src);
         if (url)
             JSStringRelease(url);
