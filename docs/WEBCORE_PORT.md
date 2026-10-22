@@ -167,6 +167,33 @@ header; the other PC compiles the headers in full. Jobs share one SSH
 connection per PC, since a burst of new logins trips the other PC's
 `MaxStartups` limit and distcc then leaves it alone for a minute.
 
+**Duplicate template copies (`OB_FOLD`, 22 October 2026).** With
+`OB_GC_SECTIONS=1` every template instance and inline function is a hunk of
+its own with one weak definition, and GCC writes the calls from its own
+object as hunk relocations against that hunk. Our ld (binutils 2.46, amiga
+backend) keeps one copy per object: `bfd/amigaos.c` makes a hunk link-once
+only when its `HUNK_EXT` holds weak definitions alone, and a hunk that calls
+anything else also holds references; and `amiga_collect()` in its section
+GC keeps every hunk that defines a referenced name, not only the copy the
+name resolved to. The full engine linked 7,221 `.text` names more than once,
+37,208 extra copies, about 6.2 MB. `scripts/hunkfold.py` folds them without
+touching ld: from the plain link's map it takes, for each name, the copy ld
+used (the winner); in copies of the archives it turns every relocation to
+such a hunk into a reference to its symbol and makes each losing copy's
+definition local; linked again, `--gc-sections` drops the losers. The same
+archive members are linked, and the same copies run, as before.
+`build-webcore.sh` does this after `build-browser` and `build-tests` link
+(`OB_FOLD`, on by default when the folder links with `--gc-sections`), for
+each program with the winners of its own map and its own folded archives
+in `BUILD/lib-folded/`, so ninja's archives and build state stay as they
+are; `build-webcore.sh fold` folds the programs ninja has linked since,
+`WebBrowserEngine` among them. Stripped sizes, `OB_OPTIMIZE=js`:
+OpenBrowser.engine 89,680,744 to 83,729,556 bytes (5.95 MB less),
+obcore-view 89,672,156 to 83,720,968, obcore-dump 89,448,836 to 83,525,236,
+WebBrowserEngine 89,683,216 to 83,732,028; about a minute per program on
+the build PC. The real fix belongs in ld (`amiga_collect()` keeping only the
+section a name resolved to); then no map would be needed.
+
 **AmigaDOS names in fontconfig.** fontconfig joins its configuration
 directory and file name with a slash, so an empty directory turned
 `PROGDIR:fontconfig/fonts.conf` into `/PROGDIR:...`, and AmigaDOS asked for
