@@ -6,6 +6,16 @@ are 68k instructions executed (`count.sh`), with jsc start-up (6.3 M) taken
 off. They are not cycles: a real 68040 also pays for memory and branches.
 Every test gives the same result with the JIT on and off.
 
+## 22 Oct 2026, Math.min and Math.max in line (patch 0048)
+
+page-vdom spent 2-3% in mathProtoFuncMin and its native call. Two
+int32s now take the JIT's own compare. `lab/correct18.js` (int32 pairs
+and limits, doubles, -0, NaN, strings, valueOf order, other argument
+counts, a replaced Math.min, the function as a value) prints what node
+prints with the JIT on and off; correct.js-correct17.js too (36/36).
+page-vdom: 38.47 M to 37.22 M instructions (3.8% fewer with start-up
+taken off); the other pages are unchanged.
+
 ## 22 Oct 2026, Array.prototype.push in line (patch 0047)
 
 The page profiles had arrayProtoFuncPush and the native call trampoline
