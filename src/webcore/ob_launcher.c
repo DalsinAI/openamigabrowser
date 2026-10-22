@@ -32,7 +32,7 @@
 #include "libraries/webbrowser.h"
 #include "proto/webbrowser.h"
 
-static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.7 (21.10.2026)";
+static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.8 (22.10.2026)";
 
 #define ENGINE "PROGDIR:OpenBrowser.engine"
 #define ENGINE_STACK 400000
