@@ -42,6 +42,7 @@ See [docs/PHASE_PLAN.md](docs/PHASE_PLAN.md) for what comes next.
 | `src/` | OpenBrowser Lite: the GadTools window (`ob_main.c`) and HTTP fetching (`ob_http.c`) |
 | `src/weblayout/` | weblayout, OpenBrowser Lite's page engine: HTML Lite, CSS Lite, painting, datatype pictures (`weblayout.h` is its whole interface) |
 | `src/jsonlib/` | json.library (OpenJSON): JSON parsed into one flat, relocatable block, a writer and a streaming reader, for native programs; here for now, its own repository later ([README](src/jsonlib/README.md)) |
+| `src/jslib/` | javascript.library: JavaScript (JavaScriptCore with the 68k JIT) for any program, which hands scripts its own objects as host classes; the JavaScriptEngine program behind it and the `JS` Shell command; here for now, its own repository later ([README](src/jslib/README.md)) |
 | `src/webcore/` | OpenBrowser on WebCore: the window (`ob_browser.c`), the page layer (WebCore's clients, `ob_webview.h`), cookies and the network loader, and the test programs `obcore-dump` and `obcore-view` |
 | `third_party/openmail/` | Network, HTML-to-text and stack code shared with OpenMail (MIT, AmigaChrome Team) |
 | `webkit/` | The pinned upstream revision and the AmigaOS/m68k patches for WebKit (JavaScriptCore and WebCore) |

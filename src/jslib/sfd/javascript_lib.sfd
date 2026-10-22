@@ -1,0 +1,46 @@
+==id $Id: javascript_lib.sfd 1.0 (22.10.2026) AmigaChrome Team $
+* javascript.library: JavaScript for any program. MIT, Copyright (c) 2026 AmigaChrome Team.
+* scripts/gen-jslib-sdk.sh makes sdk/ (clib, inline, pragmas, proto, FD, LVOs) from this with
+* OpenNDK's ndkgen.py; javascript_lib.c's vector table follows it line for line (check_vectors.py).
+==base _JavaScriptBase
+==basetype struct Library *
+==libname javascript.library
+==include <libraries/javascript.h>
+==bias 30
+==public
+* Script tasks
+JSTask JS_NewTask(struct TagItem * tags) (a0)
+VOID JS_EndTask(JSTask task) (a0)
+LONG JS_Evaluate(JSTask task, CONST_STRPTR source, LONG length, CONST_STRPTR name, JSValue * result) (a0,a1,d0,a2,a3)
+LONG JS_Post(JSTask task, JSJobFunc func, APTR data, ULONG wait) (a0,a1,a2,d0)
+APTR JS_UserData(JSTask task) (a0)
+JSValue JS_Global(JSTask task) (a0)
+* Values
+VOID JS_Free(JSTask task, JSValue value) (a0,a1)
+JSValue JS_Dup(JSTask task, JSValue value) (a0,a1)
+LONG JS_TypeOf(JSTask task, JSValue value) (a0,a1)
+JSValue JS_NewLong(JSTask task, LONG value) (a0,d0)
+JSValue JS_NewDouble(JSTask task, CONST DOUBLE * value) (a0,a1)
+JSValue JS_NewBool(JSTask task, LONG value) (a0,d0)
+JSValue JS_NewNull(JSTask task) (a0)
+JSValue JS_NewString(JSTask task, CONST_STRPTR utf8, LONG length) (a0,a1,d0)
+JSValue JS_NewObject(JSTask task) (a0)
+JSValue JS_NewFunction(JSTask task, CONST_STRPTR name, JSMethodFunc func, APTR data) (a0,a1,a2,a3)
+LONG JS_ToLong(JSTask task, JSValue value, LONG * result) (a0,a1,a2)
+LONG JS_ToDouble(JSTask task, JSValue value, DOUBLE * result) (a0,a1,a2)
+LONG JS_ToBool(JSTask task, JSValue value) (a0,a1)
+LONG JS_ToString(JSTask task, JSValue value, STRPTR buffer, LONG size) (a0,a1,a2,d0)
+* Objects
+JSValue JS_GetProp(JSTask task, JSValue object, CONST_STRPTR name) (a0,a1,a2)
+LONG JS_SetProp(JSTask task, JSValue object, CONST_STRPTR name, JSValue value) (a0,a1,a2,a3)
+JSValue JS_GetIndex(JSTask task, JSValue object, ULONG index) (a0,a1,d0)
+LONG JS_SetIndex(JSTask task, JSValue object, ULONG index, JSValue value) (a0,a1,d0,a2)
+LONG JS_Call(JSTask task, JSValue func, JSValue self, LONG argc, JSValue * argv, JSValue * result) (a0,a1,a2,d0,a3,d1)
+* Host classes
+JSClass JS_RegisterClass(JSTask task, CONST struct JSHostClass * hostClass) (a0,a1)
+JSValue JS_Wrap(JSTask task, JSClass cls, APTR object) (a0,a1,a2)
+APTR JS_Unwrap(JSTask task, JSValue value, JSClass cls) (a0,a1,a2)
+* Errors
+JSValue JS_Throw(JSTask task, CONST_STRPTR message) (a0,a1)
+LONG JS_ErrorText(JSTask task, STRPTR buffer, LONG size) (a0,a1,d0)
+==end
