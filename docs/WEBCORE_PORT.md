@@ -194,6 +194,29 @@ WebBrowserEngine 89,683,216 to 83,732,028; about a minute per program on
 the build PC. The real fix belongs in ld (`amiga_collect()` keeping only the
 section a name resolved to); then no map would be needed.
 
+**Pc-relative code (`OB_PCREL`, 23 October 2026).** `OB_PCREL=1` builds a
+new folder with `-mpcrel -fPIC` and links with
+`toolchain/amigaos3-onehunk.ld`. -mpcrel alone makes calls `bsr.l` but
+reaches data as `(d16,pc)`, which cannot span a 70 MB program; with -fPIC
+on the 68040 every reference is `(bd,pc)` with a 32-bit displacement. Our
+ld resolves pc-relative references only inside one hunk: to another hunk it
+prints "reloc ... is out of range" and still writes the program, with a
+wrong displacement and exit status 0. So the one-hunk script moves `.data`
+and `.bss` into the code hunk (the 170 KB of `.bss` becomes zeros in the
+file), and every pc-relative reference is resolved at link time, leaving
+no relocation. Absolute references stay: vtables and other pointer tables,
+and the libraries built outside WebKit (ICU, cairo, curl, libnix, libstdc++).
+`bsr.l` is as long as `jsr` to an absolute address; a data or constant
+address is 2 bytes longer as `(bd,pc)`, and an address that went into a
+register as an immediate now takes a `lea`. GCC 16.2.0b stops with an
+internal compiler error (`change_address_1`, emit-rtl.cc:2315) on
+JavaScriptCore's `bytecode/CodeBlock.cpp` at -O2 with -mpcrel; its unified
+bundle is built with `-mno-pcrel -fno-PIC` (`scripts/cmake/ob-pcrel.cmake`),
+the only file of the engine that is. Stripped and folded,
+OpenBrowser.engine goes from 78,371,520 to 75,787,212 bytes (82,757,480 to
+79,893,600 before folding): relocations 1,494,434 to 630,158, code
+72,220,512 to 72,922,500 bytes, and three hunks to one.
+
 **AmigaDOS names in fontconfig.** fontconfig joins its configuration
 directory and file name with a slash, so an empty directory turned
 `PROGDIR:fontconfig/fonts.conf` into `/PROGDIR:...`, and AmigaDOS asked for
