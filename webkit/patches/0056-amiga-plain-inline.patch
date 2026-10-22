@@ -1,0 +1,120 @@
+From 1778fe9bb1f0cfecd363093b65446e32b5a50bd5 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 23:26:38 +0100
+Subject: [PATCH] WTF and WebCore: plain inline for ALWAYS_INLINE outside the
+ hot code on the Amiga port
+
+ALWAYS_INLINE (wtf/Compiler.h, about 4,500 uses) forces inlining
+everywhere, so every WebCore file that touches a WTF or JavaScriptCore
+inline function gets its own copy, however big; the JavaScript bindings
+alone grew about 1.1 MB from it. Under PLATFORM(AMIGA) (tested as
+BUILDING_AMIGA__, which PLATFORM(AMIGA) comes from, because Compiler.h
+is read before PlatformLegacy.h) ALWAYS_INLINE and ALWAYS_INLINE_LAMBDA
+are a plain inline, so GCC inlines only where it pays at -Os, except
+where speed is spent:
+
+- JavaScriptCore's and WTF's own files (BUILDING_JavaScriptCore and
+  BUILDING_WTF, which WebKit's CMake defines for those targets), so the
+  interpreter, the runtime and the containers are built as before;
+- WebCore's style, layout and DOM code (css/, dom/, layout/, rendering/,
+  style/): PlatformAmiga.cmake reads WebCore's unified bundles at the
+  end of its folder and gives those WTF_AMIGA_FORCE_INLINE. A first try
+  with plain inline in all of WebCore ran the DOM bench about 5% slower
+  (layout-reads, style recalc and layout, is most of it).
+
+There are no flatten attributes in this tree, so nothing to turn off
+there. With openamigabrowser main at 0333542 (0002-0052, 0057, 0058;
+hunkfold on) the stripped engine is 1,163,792 bytes smaller (79,535,312
+to 78,371,520) and the DOM bench's JavaScript time is unchanged within
+the 20 ms timer step (1,571 against 1,587 ms, nine runs each).
+
+Team 3
+---
+ Source/WTF/wtf/Compiler.h          | 20 +++++++++++++++++
+ Source/WebCore/PlatformAmiga.cmake | 35 ++++++++++++++++++++++++++++++
+ 2 files changed, 55 insertions(+)
+
+diff --git a/Source/WTF/wtf/Compiler.h b/Source/WTF/wtf/Compiler.h
+index c9a86b0..3a16f0a 100644
+--- a/Source/WTF/wtf/Compiler.h
++++ b/Source/WTF/wtf/Compiler.h
+@@ -191,6 +191,20 @@
+ 
+ /* ALWAYS_INLINE */
+ 
++/* PLATFORM(AMIGA) (tested as BUILDING_AMIGA__, which PLATFORM(AMIGA) comes
++ * from: this file is read before PlatformLegacy.h): ALWAYS_INLINE is a plain
++ * inline, so the compiler inlines only where it pays at -Os and the engine is
++ * smaller, except where speed is spent: JavaScriptCore and WTF
++ * (BUILDING_JavaScriptCore and BUILDING_WTF, which WebKit's CMake defines for
++ * those targets' own files) and WebCore's style, layout and DOM code
++ * (WTF_AMIGA_FORCE_INLINE, which PlatformAmiga.cmake defines for the sources
++ * in css/, dom/, layout/, rendering/ and style/). Most of what plain inlining
++ * saves is in the JavaScript bindings, page, html, Modules and platform. */
++#if !defined(ALWAYS_INLINE) && defined(BUILDING_AMIGA__) && !defined(BUILDING_JavaScriptCore) \
++    && !defined(BUILDING_WTF) && !defined(WTF_AMIGA_FORCE_INLINE)
++#define ALWAYS_INLINE inline
++#endif
++
+ /* In GCC functions marked with no_sanitize_address cannot call functions that are marked with always_inline and not marked with no_sanitize_address.
+  * Therefore we need to give up on the enforcement of ALWAYS_INLINE when building with ASAN. https://gcc.gnu.org/bugzilla/show_bug.cgi?id=67368 */
+ #if !defined(ALWAYS_INLINE) && defined(NDEBUG) && !(COMPILER(GCC) && ASAN_ENABLED)
+@@ -203,6 +217,12 @@
+ 
+ /* ALWAYS_INLINE_LAMBDA */
+ 
++/* PLATFORM(AMIGA): as ALWAYS_INLINE above. */
++#if !defined(ALWAYS_INLINE_LAMBDA) && defined(BUILDING_AMIGA__) && !defined(BUILDING_JavaScriptCore) \
++    && !defined(BUILDING_WTF) && !defined(WTF_AMIGA_FORCE_INLINE)
++#define ALWAYS_INLINE_LAMBDA
++#endif
++
+ /* In GCC functions marked with no_sanitize_address cannot call functions that are marked with always_inline and not marked with no_sanitize_address.
+  * Therefore we need to give up on the enforcement of ALWAYS_INLINE_LAMBDA when building with ASAN. https://gcc.gnu.org/bugzilla/show_bug.cgi?id=67368 */
+ #if !defined(ALWAYS_INLINE_LAMBDA) && defined(NDEBUG) && !(COMPILER(GCC) && ASAN_ENABLED)
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index ee9a531..6e25d85 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -125,3 +125,38 @@ list(APPEND WebCore_LIBRARIES
+     PNG::PNG
+     amiga
+ )
++
++# Forced inlining (ALWAYS_INLINE, wtf/Compiler.h) only where speed is spent:
++# WebCore's style, layout and DOM code (css/, dom/, layout/, rendering/,
++# style/) keeps it through WTF_AMIGA_FORCE_INLINE; the rest of WebCore has a
++# plain inline. WebCore is built from unified sources (each bundle includes
++# several .cpp files of one folder), so the bundles are read to find their
++# folder; the WebCore target exists only at the end of this folder, hence
++# the deferred call.
++function(_amiga_force_inline_sources)
++    set(folders "(css|dom|layout|rendering|style)/")
++    get_target_property(sources WebCore SOURCES)
++    get_target_property(sourceDir WebCore SOURCE_DIR)
++    foreach (source IN LISTS sources)
++        if (IS_ABSOLUTE "${source}")
++            set(path "${source}")
++        else ()
++            set(path "${sourceDir}/${source}")
++        endif ()
++        set(force FALSE)
++        if (source MATCHES "UnifiedSource[^/]*\\.cpp$")
++            if (EXISTS "${path}")
++                file(STRINGS "${path}" includes REGEX "^#include \"${folders}")
++                if (includes)
++                    set(force TRUE)
++                endif ()
++            endif ()
++        elseif (source MATCHES "(^|/)${folders}[^/]*\\.cpp$")
++            set(force TRUE)
++        endif ()
++        if (force)
++            set_property(SOURCE "${path}" TARGET_DIRECTORY WebCore APPEND PROPERTY COMPILE_DEFINITIONS WTF_AMIGA_FORCE_INLINE=1)
++        endif ()
++    endforeach ()
++endfunction()
++cmake_language(DEFER CALL _amiga_force_inline_sources)
+-- 
+2.53.0
+

@@ -281,6 +281,12 @@ The patches, in order:
   also stores one past the end of an array with room, growing its length
   (as the interpreter does), and the array builtins' put_by_val_direct
   (the results of filter, map and friends) takes the same fast path.
+- `0056-amiga-plain-inline.patch`: `ALWAYS_INLINE` is a plain inline on
+  the Amiga port, so GCC inlines only where it pays at -Os, except in
+  JavaScriptCore, WTF and WebCore's style, layout and DOM code (css/,
+  dom/, layout/, rendering/, style/, marked `WTF_AMIGA_FORCE_INLINE` by
+  WebCore's `PlatformAmiga.cmake`), where speed is spent. The stripped
+  engine is 1.16 MB smaller; the DOM bench runs as fast.
 - `0057-amiga-no-inspector.patch`: no Web Inspector. The port has no
   inspector frontend, local or remote, but the inspector was compiled and
   linked all the same (2.8 MB). WebCore's `inspector/` folder and its
