@@ -6,7 +6,7 @@
 ;
 ; What it does:
 ;  - LIBS:opentls.library, LIBS:opencrypto.library and S:OpenTLS/ca-bundle.pem
-;    are copied only when missing (https needs them);
+;    are copied only when missing (https needs them), and LIBS:json.library;
 ;  - when webbrowser.library is installed (LIBS:WebBrowser), the browser runs
 ;    the engine in LIBS:WebBrowser rather than this drawer's. That engine is
 ;    renamed WebBrowserEngine.before-20261022 (nothing is copied, so System:
@@ -26,6 +26,12 @@ If NOT EXISTS LIBS:opencrypto.library
   Echo "Installed LIBS:opencrypto.library"
 Else
   Echo "LIBS:opencrypto.library is already there, kept"
+EndIf
+If NOT EXISTS LIBS:json.library
+  Copy Libs/json.library LIBS: QUIET
+  Echo "Installed LIBS:json.library"
+Else
+  Echo "LIBS:json.library is already there, kept"
 EndIf
 If NOT EXISTS S:OpenTLS/ca-bundle.pem
   MakeDir S:OpenTLS >NIL:
