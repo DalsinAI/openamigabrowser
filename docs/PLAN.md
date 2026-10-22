@@ -43,10 +43,10 @@ The design documents disagree with each other (inventory of 22 October
 - `Design-OpenBrowser.md` 0.2 and the migration design 0.1 are older. They
   keep curl on OpenTLS, a trimmed ICU 78.3, and link OpenBrowser with
   pixman. None of that holds.
-- **Still to decide:** who owns line and word breaking, NFC and IDNA. The
-  browser designs give them to OpenFont, but `Design-OpenFont.md` 0.1 §3
-  says OpenFont does not own line breaking. Step 7 puts them in
-  unicode.library until this is decided.
+- **Decided 22 October (Dale):** unicode.library owns line and word
+  breaking, NFC, IDNA, case mapping and the other Unicode properties.
+  OpenFont stays fonts and shaping only, as `Design-OpenFont.md` 0.1 §3
+  says. The browser designs that give breaking to OpenFont are overridden.
 
 ## Where each decision stands
 
@@ -59,7 +59,7 @@ The design documents disagree with each other (inventory of 22 October
 | Decoders are datatypes | picture datatypes (openamigaimage); stream.datatype, gzip.datatype, brotli.datatype | pictures: yes. The stream class and the gzip and Brotli datatypes are a design only (JIT-on-core 0.5 §5.1), with no code in any repo | partly | libpng (for cairo) and zlib are still linked; curl decodes compressed bodies |
 | JavaScript JIT | patches 0020-0052 | in the browser | **yes** | nothing |
 | javascript.library | #63, #64 | built and tested (22 Oct: EVAL, errors, .jsc cache 7.5 s to 0.14 s) | **no**: the browser still links its own JavaScriptCore | the browser's build |
-| ICU | the data file (#52); later unicode.library and OpenFont's stage 3 (breaking, NFC, IDNA, properties) | the data file works. **No unicode.library exists**: no repo, branch, PR or binary was found on 22 October; `src/webcore/ob_icudata.c` names it as the later way to share the data. OpenFont's stage 3 is not written | **no**: the 5.2 MB of data is still built in | the build options |
+| ICU | the data file (#52); later unicode.library (breaking, NFC, IDNA, properties) | the data file works. **No unicode.library exists**: no repo, branch, PR or binary was found on 22 October; `src/webcore/ob_icudata.c` names it as the later way to share the data. | **no**: the 5.2 MB of data is still built in | the build options |
 
 What the old libraries cost in today's engine, from its link map (MiB):
 
@@ -119,8 +119,7 @@ is done when its "done when" holds on the lab instance.
    yet): one shared copy of ICU's data and its calls for every program,
    starting with the browser engine and JavaScriptEngine. Then replace
    ICU's code with our own (line and word breaking, NFC, IDNA, Unicode
-   properties), in unicode.library or in OpenFont's stage 3, as decided
-   above, so that ICU leaves both engines. Done when the only
+   properties), in unicode.library, so that ICU leaves both engines. Done when the only
    third-party code in the engine's map is SQLite.
 
 Not in the order above, still open:
