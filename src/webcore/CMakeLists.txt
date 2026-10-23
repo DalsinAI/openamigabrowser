@@ -34,14 +34,33 @@ set(OB_PROGRAM_SOURCES
 # at start from LOCALE:Unicode/ or PROGDIR:Unicode/ (ob_icudata.c), and each
 # program carries an empty data block (ob_icustub.c), which keeps
 # libicudata.a's 5 MB of tables out of it; "linked" links the tables in as
-# before.
-set(OB_ICU_DATA "file" CACHE STRING "ICU data: file (read at start) or linked")
+# before; "library" takes ICU's code and data from unicode.library: the
+# toolchain's OB_ICU_DIR names scripts/build-unicode-library.sh's folder,
+# whose libicuuc.a sends each ICU call to the library, and ob_icudata.c
+# opens it at start in place of reading the file.
+set(OB_ICU_DATA "file" CACHE STRING "ICU data: file (read at start), linked, or library (unicode.library)")
 if (OB_ICU_DATA STREQUAL "file")
     list(APPEND OB_CORE_SOURCES ob_icudata.c)
     list(APPEND OB_PROGRAM_SOURCES ob_icustub.c)
     add_compile_definitions(OB_ICU_DATA_FILE=1)
+elseif (OB_ICU_DATA STREQUAL "library")
+    # OB_UNICODE_DIR: that folder, for ul_client.h. A folder configured
+    # before keeps its ICU headers (the same 78.3 ones) and is pointed at
+    # the folder's libraries through FindICU's cache entries instead
+    # (src/unicodelib/README.md), so the switch only relinks.
+    if (DEFINED ENV{OB_ICU_DIR})
+        set(OB_UNICODE_DIR_DEFAULT "$ENV{OB_ICU_DIR}")
+    else ()
+        set(OB_UNICODE_DIR_DEFAULT "${AC_WEBKIT_DEPS}")
+    endif ()
+    set(OB_UNICODE_DIR "${OB_UNICODE_DIR_DEFAULT}" CACHE PATH "scripts/build-unicode-library.sh's ICU folder")
+    if (NOT EXISTS "${OB_UNICODE_DIR}/include/ul_client.h")
+        message(FATAL_ERROR "OB_ICU_DATA=library needs OB_UNICODE_DIR (or OB_ICU_DIR) set to scripts/build-unicode-library.sh's ICU folder")
+    endif ()
+    list(APPEND OB_CORE_SOURCES ob_icudata.c)
+    add_compile_definitions(OB_ICU_DATA_FILE=1 OB_ICU_LIBRARY=1)
 elseif (NOT OB_ICU_DATA STREQUAL "linked")
-    message(FATAL_ERROR "OB_ICU_DATA must be file or linked")
+    message(FATAL_ERROR "OB_ICU_DATA must be file, linked or library")
 endif ()
 
 # openservice.device (DalsinAI/openamigaservice, checked out beside this
@@ -74,6 +93,9 @@ set(OB_PRIVATE_INCLUDE_DIRECTORIES
 if (OB_OPENSERVICE)
     list(APPEND OB_PRIVATE_INCLUDE_DIRECTORIES ${OB_OPENSERVICE_DIR}/include)
 endif ()
+if (OB_ICU_DATA STREQUAL "library")
+    list(APPEND OB_PRIVATE_INCLUDE_DIRECTORIES ${OB_UNICODE_DIR}/include)
+endif ()
 set(OB_SYSTEM_INCLUDE_DIRECTORIES
     ${AC_WEBCORE_DEPS}/include
     ${AC_WEBCORE_DEPS}/include/cairo
@@ -97,6 +119,10 @@ else ()
     set(OB_NGHTTP2 "" CACHE INTERNAL "nghttp2 linked after curl")
 endif ()
 macro(OB_LINK _target)
+    # OB_ICU_DATA=library: icui18n, icuuc and icudata are the library's stubs
+    if (OB_ICU_DATA STREQUAL "library")
+        target_link_directories(${_target} PRIVATE ${OB_UNICODE_DIR}/lib)
+    endif ()
     target_link_directories(${_target} PRIVATE ${AC_WEBCORE_DEPS}/lib ${AC_WEBKIT_DEPS}/lib)
     # A link map beside each program (bin/NAME.map): which object every
     # address belongs to, static functions included, which the program's

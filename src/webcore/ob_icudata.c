@@ -11,6 +11,25 @@
 #include "ob_icudata.h"
 
 #include <stdio.h>
+
+#if OB_ICU_LIBRARY
+/* OB_ICU_DATA=library: ICU, code and data, is unicode.library's. Opening
+ * it here, at start, gives a clear message when it or its data is missing;
+ * otherwise the first ICU call would open it. */
+#include <ul_client.h>
+
+int ob_icu_data_load(void)
+{
+    int code = ul_client_open();
+
+    if (code == UL_OPEN_OK)
+        return 1;
+    fprintf(stderr, "OpenBrowser: %s\n", ul_client_error(code));
+    return 0;
+}
+
+#else
+
 #include <stdlib.h>
 #include <unicode/udata.h>
 #include <unicode/utypes.h>
@@ -74,3 +93,5 @@ int ob_icu_data_load(void)
     fprintf(stderr, "OpenBrowser: no Unicode data, put " OB_ICU_DATA_FILE_NAME " in LOCALE:Unicode/ or PROGDIR:Unicode/\n");
     return 0;
 }
+
+#endif

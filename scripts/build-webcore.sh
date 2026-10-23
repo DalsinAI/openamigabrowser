@@ -89,6 +89,14 @@
 #                   tables are linked in. A CMake option of src/webcore, so
 #                   an existing folder takes "file" at its next configure.
 #                   test-browser stages the file in Unicode/.  (default file)
+#                   "library": ICU's code and data are unicode.library's
+#                   (PLAN step 7); needs OB_ICU_DIR. Given here, it is
+#                   passed to CMake at the next configure-engine with the
+#                   matching ICU libraries, so an existing folder switches
+#                   either way with a relink.
+#   OB_ICU_DIR      with OB_ICU_DATA=library: the ICU folder
+#                   scripts/build-unicode-library.sh makes (ICU's headers,
+#                   and libraries that send each call to unicode.library).
 #   OB_CCACHE       the ccache program, or "none"  (default: ccache on PATH)
 #   OB_CCACHE_DIR   ccache's folder for this build
 #                   (default ~/.cache/ccache-openbrowser)
@@ -227,7 +235,7 @@ engine_inputs() {
     echo "compiler $("$gcc" --version | head -n 1) $(sha256 < "$("$gcc" -print-prog-name=cc1plus)")"
     echo "binutils $("$GCC16/prefix/bin/m68k-amigaos-as" --version | head -n 1)"
     echo "toolchain-file $(sha256 < "$ROOT/toolchain/amigaos3-gcc16.cmake")"
-    echo "icu-headers $(tree_hash "$OAB_DEPS/icu78-m68k-amigaos/include")"
+    echo "icu-headers $(tree_hash "${OB_ICU_DIR:-$OAB_DEPS/icu78-m68k-amigaos}/include")"
     echo "openamiga-headers $(tree_hash "$OAB_DEPS/m68k-amigaos/include")"
     # opentls.library's API, as curl's OpenTLS backend was built against it
     # (curl's own headers are in openamiga-headers).
@@ -358,6 +366,23 @@ configure_engine() {
            set -- "$@" -DCMAKE_PROJECT_WebKit_INCLUDE="$ROOT/scripts/cmake/ob-pcrel.cmake" ;;
         *) echo "OB_PCREL must be 0 or 1" >&2; exit 2 ;;
     esac
+    # OB_ICU_DATA given: which ICU libraries the programs link, set in the
+    # cache too, so an existing folder switches with a relink (the headers
+    # are the same ICU 78.3 in both folders).
+    if [ -n "${OB_ICU_DATA:-}" ]; then
+        icu_dir="$OAB_DEPS/icu78-m68k-amigaos"
+        if [ "$OB_ICU_DATA" = library ]; then
+            [ -f "${OB_ICU_DIR:-}/include/ul_client.h" ] || die "OB_ICU_DATA=library needs OB_ICU_DIR (scripts/build-unicode-library.sh)"
+            export OB_ICU_DIR
+            icu_dir=$OB_ICU_DIR
+            set -- "$@" -DOB_UNICODE_DIR="$OB_ICU_DIR"
+        fi
+        set -- "$@" -DOB_ICU_DATA="$OB_ICU_DATA" \
+            -DICU_UC_LIBRARY_RELEASE="$icu_dir/lib/libicuuc.a" \
+            -DICU_I18N_LIBRARY_RELEASE="$icu_dir/lib/libicui18n.a" \
+            -DICU_DATA_LIBRARY_RELEASE="$icu_dir/lib/libicudata.a" \
+            -DCMAKE_CXX_STANDARD_LIBRARIES="$icu_dir/lib/libicudata.a -lpthread -latomic -lstdc++ -L$GCC16/compat -los32compat"
+    fi
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "$(generator)" "$@" \
       -DPORT=Amiga \
       -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain/amigaos3-gcc16.cmake" \
