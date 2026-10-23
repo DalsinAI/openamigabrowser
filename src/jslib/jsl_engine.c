@@ -25,6 +25,9 @@
 
 #include "jsl_os.h"
 #include "jsl_engine_amiga.h"
+#if OB_ICU_DATA_FILE
+#include "ob_icudata.h"
+#endif
 
 static const char version[] __attribute__((used)) = "$VER: JavaScriptEngine 1.0 (22.10.2026) AmigaChrome Team";
 
@@ -77,6 +80,14 @@ int main(void)
     }
     Permit();
 
+#if OB_ICU_DATA_FILE
+    /* Built with the browser (src/webcore/CMakeLists.txt): ICU's data is
+     * the file in LOCALE:Unicode/ or LIBS:JavaScript/Unicode/, read before
+     * the first script task starts JavaScriptCore */
+    if (!ob_icu_data_load())
+        return 20;
+#endif
+
     enginePort = AllocVec(sizeof *enginePort, MEMF_PUBLIC | MEMF_CLEAR);
     timerPort = CreateMsgPort();
     timer = timerPort ? (struct timerequest *)CreateIORequest(timerPort, sizeof *timer) : NULL;
@@ -102,7 +113,20 @@ int main(void)
     }
     enginePort->ep_Version = JSL_TABLE_VERSION;
     enginePort->ep_Table = jsl_engine_table();
+    /* Check again as the port goes public: another engine may have started
+     * while this one read ICU's data */
+    Forbid();
+    if (FindPort((CONST_STRPTR)JAVASCRIPT_ENGINE_PORT)) {
+        Permit();
+        FreeSignal(enginePort->ep_Port.mp_SigBit);
+        CloseDevice(&timer->tr_node);
+        DeleteIORequest(&timer->tr_node);
+        DeleteMsgPort(timerPort);
+        FreeVec(enginePort);
+        return 0;   /* already running */
+    }
     AddPort(&enginePort->ep_Port);
+    Permit();
 
     timer->tr_node.io_Command = TR_ADDREQUEST;
     timer->tr_time.tv_secs = 1;

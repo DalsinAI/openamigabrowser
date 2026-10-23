@@ -137,11 +137,15 @@
 #                        tests that run it directly; the package does not
 #                        carry it)
 #   build-tests          build obcore-view and obcore-dump only
+#   build-javascript     build JavaScriptEngine, the program behind
+#                        javascript.library (src/jslib), on this folder's
+#                        JavaScriptCore, and fold it like the browser
 #   fold [PROGRAM...]    fold and link again the programs ninja has linked
 #                        since they were last folded (OpenBrowser.engine,
-#                        obcore-view, obcore-dump, WebBrowserEngine; or the
-#                        ones named). build-browser, build-window-engine
-#                        and build-tests fold their programs when OB_FOLD
+#                        obcore-view, obcore-dump, WebBrowserEngine,
+#                        JavaScriptEngine; or the ones named). build-browser,
+#                        build-window-engine, build-tests and
+#                        build-javascript fold their programs when OB_FOLD
 #                        is 1
 #   test-browser         stage the programs, test pages and settings in
 #                        OB_TEST_DIR, with an AmigaDOS script that runs them
@@ -529,7 +533,7 @@ browser_build() {
 # only the one the name resolved to. hunkfold rewrites copies of the
 # archives so that only the copy the plain link used still defines each
 # name; linked again, --gc-sections drops the others.
-FOLD_PROGRAMS="OpenBrowser.engine obcore-view obcore-dump WebBrowserEngine"
+FOLD_PROGRAMS="OpenBrowser.engine obcore-view obcore-dump WebBrowserEngine JavaScriptEngine"
 
 links_with_gc() {
     sed -n 's/^CMAKE_EXE_LINKER_FLAGS:[A-Z]*=//p' "$BUILD/CMakeCache.txt" 2>/dev/null | grep -q -- --gc-sections
@@ -659,6 +663,16 @@ build_window_engine() {
     ls -l "$BUILD/bin/OpenBrowser.engine"
 }
 
+# JavaScriptEngine on the browser's JavaScriptCore; javascript.library and
+# JS themselves are scripts/build-javascript-library.sh.
+build_javascript() {
+    browser_build javascript JavaScriptEngine
+    if fold_wanted; then fold_programs JavaScriptEngine; fi
+    strip="$GCC16/prefix/bin/m68k-amigaos-strip"
+    "$strip" -o "$BUILD/bin/JavaScriptEngine.stripped" "$BUILD/bin/JavaScriptEngine"
+    ls -l "$BUILD/bin/JavaScriptEngine" "$BUILD/bin/JavaScriptEngine.stripped"
+}
+
 build_tests() {
     browser_build tests OBCore obcore-view obcore-dump
     if fold_wanted; then fold_programs obcore-view obcore-dump; fi
@@ -734,9 +748,11 @@ test_browser() {
 clean_browser() {
     rm -rf "$BUILD"/OpenBrowser/CMakeFiles/OBCore.dir "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowser.dir \
         "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowserLauncher.dir "$BUILD"/OpenBrowser/CMakeFiles/WebBrowserEngine.dir \
-        "$BUILD"/OpenBrowser/CMakeFiles/obcore-view.dir "$BUILD"/OpenBrowser/CMakeFiles/obcore-dump.dir
+        "$BUILD"/OpenBrowser/CMakeFiles/obcore-view.dir "$BUILD"/OpenBrowser/CMakeFiles/obcore-dump.dir \
+        "$BUILD"/OpenBrowser/CMakeFiles/JavaScriptEngine.dir
     rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/OpenBrowser.engine "$BUILD"/bin/WebBrowserEngine \
-        "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump "$BUILD"/bin/*.plain.map
+        "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump "$BUILD"/bin/*.plain.map \
+        "$BUILD"/bin/JavaScriptEngine "$BUILD"/bin/JavaScriptEngine.stripped
     rm -rf "$BUILD"/lib-folded
     echo "Removed the browser's objects and programs from $BUILD"
 }
@@ -761,6 +777,7 @@ case "$MODE" in
     build-browser) build_browser ;;
     build-window-engine) build_window_engine ;;
     build-tests) build_tests ;;
+    build-javascript) build_javascript ;;
     fold) shift; [ $# -gt 0 ] || set -- $FOLD_PROGRAMS; fold_programs "$@" ;;
     test-browser) test_browser ;;
     clean-browser) clean_browser ;;
