@@ -60,7 +60,7 @@ on:
 
 env:
   OPENLAYOUT_REF: ce9f92de37463c9333bf5793b35a6b37ea27614e   # openamigalayout master: openlayout.library 2.0
-  OPENSDK_REF: 5bfeaea0d004e86afb990fddb591bf0039f09233      # openamigasdk main, as openamigacurl
+  OPENSDK_REF: e75b5ffae42b6c446ec11cb195b919151e56529c      # openamigasdk main, as openamigacurl
   TC_URL: https://github.com/DalsinAI/openamigagcc/releases/download/v16.2.0-open3/openamigagcc-16.2.0-open3-x86_64-linux.tar.xz
   TC_SHA256: 9fcc136ab59e3bb5b91d2764d0bf290b709d72d7380be4ce0cdf005edf8eff21
 
