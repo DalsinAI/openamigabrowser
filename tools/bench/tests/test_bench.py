@@ -176,8 +176,10 @@ class Stage(unittest.TestCase):
         write(os.path.join(lite, "obfetch"), "fetch")
         write(os.path.join(lite, "OpenBrowserLite"), "lite")
         write(os.path.join(self.tmp, "obstamp"), "stamp")
+        write(os.path.join(self.tmp, "openfont.library"), "openfont")
         self.assertEqual(self.stage("--bin", bin_dir, "--fonts", fonts, "--lite", lite, "--obstamp",
-                                    os.path.join(self.tmp, "obstamp"), "--sets", "live", "--pages", "example,hn",
+                                    os.path.join(self.tmp, "obstamp"), "--openfont", os.path.join(self.tmp, "openfont.library"),
+                                    "--sets", "live", "--pages", "example,hn",
                                     "--repeat", "2", "--lite-gui", "15"), 0)
         job = self.read("jobs", "example")
         self.assertEqual(job.count("obcore-view -wait"), 2)
@@ -187,7 +189,8 @@ class Stage(unittest.TestCase):
         info = self.read("stage-info.txt")
         self.assertIn("engine-fingerprint 231d9aeeb64ac959", info)
         self.assertIn("obfetch " + hashlib.sha256(b"fetch").hexdigest(), info)
-        for name in ("obcore-view", "obstamp", "obfetch", "Fonts/LiberationSans-Regular.ttf", "fontconfig/fonts.conf", "blocklist"):
+        self.assertIn("openfont.library " + hashlib.sha256(b"openfont").hexdigest(), info)
+        for name in ("obcore-view", "obstamp", "obfetch", "Fonts/LiberationSans-Regular.ttf", "Libs/openfont.library", "blocklist"):
             self.assertTrue(os.path.isfile(os.path.join(self.tmp, "Bench", name)), name)
         self.assertEqual(self.read("OBBench").count("Execute jobs/"), 2)
 

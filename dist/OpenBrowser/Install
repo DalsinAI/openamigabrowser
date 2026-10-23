@@ -12,12 +12,15 @@
 ;    .before-20261023b and the drawer's goes in; one whose version cannot be
 ;    read (not loaded, no $VER in the file) is kept: the Installer reads
 ;    the RomTag and checks it;
+;  - LIBS:openfont.library 1.4 or newer (the engine draws its text with
+;    it): missing, it goes in; older, it is renamed .before-20261023 and
+;    the drawer's goes in; unreadable, it is kept, as above;
 ;  - LIBS:json.library (the engine's JSON.parse needs it) and
 ;    S:OpenTLS/ca-bundle.pem when missing;
 ;  - LOCALE:Unicode/icudt78b.dat, as the Installer does: when missing, or
 ;    one of another size, which is renamed icudt78b.dat.before-20261023b;
 ;  - the engine stays in this drawer (Libs/WebBrowser/WebBrowserEngine,
-;    with its fonts, fontconfig, blocklist and Unicode data); the 76 MB
+;    with its fonts, blocklist and Unicode data); the 76 MB
 ;    engine is not copied to System:. webbrowser.library (LIBS:, or this
 ;    drawer's Libs) runs LIBS:WebBrowser/WebBrowserEngine when there is
 ;    one, otherwise this drawer's: an older LIBS:WebBrowser/WebBrowserEngine
@@ -86,6 +89,33 @@ If WARN
 EndIf
 Echo "Installed LIBS:opencrypto.library"
 Lab cryptodone
+
+Version openfont.library 1 4 >NIL:
+Set vrc $RC
+If $vrc EQ 0 VAL
+  Echo "LIBS:openfont.library is new enough, kept"
+  Skip fontdone
+EndIf
+If $vrc GE 10 VAL
+  ; no version to read: not loaded, and the file has no $VER
+  If EXISTS LIBS:openfont.library
+    Echo "LIBS:openfont.library is there; its version cannot be read from the Shell, so it is kept (Install-OpenBrowser checks it)"
+    Skip fontdone
+  EndIf
+Else
+  Rename LIBS:openfont.library LIBS:openfont.library.before-20261023
+  If WARN
+    Echo "Could not rename the old LIBS:openfont.library; nothing changed."
+    Quit 20
+  EndIf
+EndIf
+Copy Libs/openfont.library LIBS: QUIET
+If WARN
+  Echo "Could not copy openfont.library to LIBS: (is LIBS: full or write-protected?)"
+  Quit 20
+EndIf
+Echo "Installed LIBS:openfont.library"
+Lab fontdone
 
 If NOT EXISTS LIBS:json.library
   Copy Libs/json.library LIBS: QUIET

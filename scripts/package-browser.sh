@@ -26,16 +26,20 @@
 #   JSON_LIB       json.library (default build/json-library/, scripts/build-json-library.sh);
 #                  the Installer puts it in LIBS:. Required: the engine's
 #                  JSON.parse parses through it (WebKit patch 0058)
+#   OPENFONT_LIB   openfont.library 1.4 or newer (openamigafont's
+#                  build/amiga/openfont.library); the Installer puts it in
+#                  LIBS:. Required: the engine draws and shapes all its text
+#                  with it (WebKit patch 0090)
 #   EXTRAS         optional: a folder with Libs/javascript.library,
 #                  Libs/JavaScript/JavaScriptEngine, C/JS and
 #                  Libs/json.library, which the Installer offers
 #
 # OUT_DIR/OpenBrowser/            the drawer: OpenBrowser (the launcher),
 #                                 Libs/ (webbrowser.library, OpenTLS,
-#                                 json.library and WebBrowser/: the engine
-#                                 with Fonts/, fontconfig/, blocklist,
-#                                 Unicode/ and Network/), S/OpenTLS/,
-#                                 Install, icons and readme
+#                                 json.library, openfont.library and
+#                                 WebBrowser/: the engine with Fonts/,
+#                                 blocklist, Unicode/ and Network/),
+#                                 S/OpenTLS/, Install, icons and readme
 # OUT_DIR/OpenBrowser.info        the drawer's icon
 # OUT_DIR/Install-OpenBrowser     the Installer script (SYS:System/Installer),
 # OUT_DIR/Install-OpenBrowser.info  and its icon: double-click to install
@@ -48,8 +52,7 @@
 # (PROGDIR: of the launcher); Install keeps the engine in the drawer and
 # renames an older LIBS:WebBrowser/WebBrowserEngine. The engine reads its
 # files from its own drawer (PROGDIR: of the engine, Libs/WebBrowser):
-# Fonts/ and fontconfig/fonts.conf (fontconfig's FONTCONFIG_PATH is
-# PROGDIR:fontconfig), blocklist, the Public Suffix List (Network/
+# Fonts/ (drawn by openfont.library), blocklist, the Public Suffix List (Network/
 # public-suffixes, WebKit patch 0070) and ICU's data (OB_ICU_DATA=file) from
 # LOCALE:Unicode/ or else Unicode/, so the drawer carries one copy of each
 # there; the Installer also puts the ICU data in LOCALE:Unicode/.
@@ -68,12 +71,11 @@ for f in "$BIN/OpenBrowser" "$BIN/WebBrowserEngine" "$ICU_DATA" "$WBLIB" \
 done
 rm -rf "$OUT"; mkdir -p "$OUT"
 D="$OUT/OpenBrowser"; E="$D/Libs/WebBrowser"
-mkdir -p "$D/S/OpenTLS" "$E/Fonts" "$E/fontconfig" "$E/Unicode"
+mkdir -p "$D/S/OpenTLS" "$E/Fonts" "$E/Unicode"
 "$STRIP" -o "$D/OpenBrowser" "$BIN/OpenBrowser"
 "$STRIP" -o "$E/WebBrowserEngine" "$BIN/WebBrowserEngine"
 cp "$WBLIB" "$D/Libs/"
 cp "$OB_FONTS"/*.ttf "$E/Fonts/"
-cp "$HERE/src/webcore/fontconfig/fonts.conf" "$E/fontconfig/"
 cp "$HERE/src/webcore/blocklist" "$E/"
 cp "$ICU_DATA" "$E/Unicode/icudt78b.dat"
 # the Public Suffix List for cookies and sites (WebKit patch 0070), read from
@@ -84,6 +86,9 @@ cp "$OPENTLS_LIBS/opentls.library" "$OPENTLS_LIBS/opencrypto.library" "$D/Libs/"
 JSONLIB=${JSON_LIB:-"$HERE/build/json-library/json.library"}
 [ -f "$JSONLIB" ] || { echo "package-browser.sh: no $JSONLIB (scripts/build-json-library.sh); the engine's JSON.parse needs it" >&2; exit 2; }
 cp "$JSONLIB" "$D/Libs/"
+OPENFONTLIB=${OPENFONT_LIB:?set OPENFONT_LIB to openfont.library 1.4 (openamigafont); the engine draws its text with it}
+[ -f "$OPENFONTLIB" ] || { echo "package-browser.sh: no $OPENFONTLIB" >&2; exit 2; }
+cp "$OPENFONTLIB" "$D/Libs/openfont.library"
 cp "$CA_BUNDLE/ca-bundle.pem" "$D/S/OpenTLS/"
 [ -f "$CA_BUNDLE/ca-bundle.LICENSE" ] && cp "$CA_BUNDLE/ca-bundle.LICENSE" "$D/S/OpenTLS/"
 cp "$HERE/dist/OpenBrowser/Install" "$D/Install"

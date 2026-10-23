@@ -120,13 +120,11 @@ endif ()
 set(OB_SYSTEM_INCLUDE_DIRECTORIES
     ${AC_WEBCORE_DEPS}/include
     ${AC_WEBCORE_DEPS}/include/cairo
-    ${AC_WEBCORE_DEPS}/include/freetype2
-    ${AC_WEBCORE_DEPS}/include/harfbuzz
     ${AC_WEBCORE_DEPS}/include/pixman-1
 )
 
 # Static archives that depend on each other (WebCore, JavaScriptCore, WTF,
-# cairo, fontconfig...) are linked as one group, so their order does not
+# cairo, pixman...) are linked as one group, so their order does not
 # matter, followed by what libnix programs need. curl (openamigacurl, on
 # OpenTLS) opens opentls.library itself: there is no TLS library to link.
 # openamigacurl builds curl's HTTP/2 with nghttp2 (libnghttp2.a beside
@@ -152,7 +150,7 @@ macro(OB_LINK _target)
     target_link_libraries(${_target} PRIVATE
         -Wl,--start-group
         OBCore WebCore PAL JavaScriptCore WTF bmalloc
-        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z oxp sqlite3 curl ${OB_NGHTTP2}
+        cairo pixman-1 png z oxp sqlite3 curl ${OB_NGHTTP2}
         icui18n icuuc icudata
         amiga pthread atomic stdc++ m
         -Wl,--end-group

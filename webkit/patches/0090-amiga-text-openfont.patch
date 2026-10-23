@@ -1,0 +1,2556 @@
+From cbd5bb4a4f9642984433a0606827c873e94d0053 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 04:59:39 +0000
+Subject: [PATCH] WebCore: text on openfont.library on the Amiga
+
+PORT=Amiga draws and shapes text with openfont.library 1.3 (USE_OPENFONT)
+in place of FreeType, fontconfig and HarfBuzz, which are no longer found
+or linked.
+
+- FontCache: CSS families are matched with OpenFont's OFA_Exact (a family
+  or its aliases and nothing else), so CSS fallback goes on when a family
+  is not installed. The aliases the browser's fonts.conf gave (generic
+  families to Liberation, Arial, Helvetica, Times, Courier, Segoe UI,
+  Roboto, Verdana, Tahoma, Georgia, Consolas and others) are kept here.
+  Fallback for a character asks OpenFont for a face that has it. Answers
+  are remembered and equal faces are opened once.
+- FontPlatformData: one OFFace per face at a pixel size of its unitsPerEm.
+  Glyphs are drawn through a cairo user font face whose callbacks fill
+  OpenFont's outlines; the cairo face owns the OFFace and closes it.
+  Synthetic oblique and vertical text as the FreeType port did.
+- Font metrics follow FreeType's rules from the raw tables (hhea, then
+  OS/2 typo or win values, USE_TYPO_METRICS, sxHeight and sCapHeight from
+  OS/2 version 2, else measured), so pages lay out as before.
+- Glyph pages, web fonts (TrueType, OpenType, WOFF) and the complex path:
+  runs are itemised by script with ICU and shaped with OF_ShapeUTF16,
+  with the CSS font features.
+- Emoji in fonts that keep them as PNG images (CBDT, sbix) are drawn
+  through cairo's colour glyph callback: openfont.library 1.4 decodes the
+  strike nearest the size through the PNG datatype (OF_GlyphColorBitmap),
+  so neither FreeType nor libpng is needed for them. With 1.3 those glyphs
+  are blank.
+- Calls on faces take OpenFontFace::lock(), as FreeType ports take
+  cairoFontLock().
+- LIBS:openfont.library (version 1, revision 3 or newer) is opened once,
+  or the one in the program's drawer (PROGDIR:Libs/) when LIBS: has none
+  or an older one; PROGDIR:Fonts is added to its font folders.
+
+cairo is built without its FreeType font backend (openamigacairo
+CAIRO_FONTS=user).
+---
+ Source/WebCore/PlatformAmiga.cmake            |   2 +-
+ Source/WebCore/platform/OpenFont.cmake        |  35 ++
+ Source/WebCore/platform/graphics/Font.cpp     |   2 +-
+ .../WebCore/platform/graphics/FontCascade.cpp |   6 +-
+ .../graphics/FontCustomPlatformData.h         |   8 +
+ .../platform/graphics/FontPlatformData.cpp    |   4 +-
+ .../platform/graphics/FontPlatformData.h      |  21 +-
+ .../platform/graphics/WidthIterator.cpp       |   2 +-
+ .../ComplexTextControllerOpenFont.cpp         | 272 +++++++++++
+ .../graphics/openfont/FontCacheOpenFont.cpp   | 227 +++++++++
+ .../FontCustomPlatformDataOpenFont.cpp        | 122 +++++
+ .../openfont/FontPlatformDataOpenFont.cpp     | 183 ++++++++
+ .../openfont/GlyphPageTreeNodeOpenFont.cpp    |  79 ++++
+ .../graphics/openfont/OpenFontFace.cpp        | 440 ++++++++++++++++++
+ .../platform/graphics/openfont/OpenFontFace.h | 115 +++++
+ .../graphics/openfont/OpenFontLibrary.c       | 251 ++++++++++
+ .../graphics/openfont/OpenFontLibrary.h       | 158 +++++++
+ .../openfont/SimpleFontDataOpenFont.cpp       | 194 ++++++++
+ .../rendering/style/RenderStyleConstants.h    |   2 +-
+ Source/cmake/FindOpenFont.cmake               |  88 ++++
+ Source/cmake/OptionsAmiga.cmake               |  15 +-
+ 21 files changed, 2209 insertions(+), 17 deletions(-)
+ create mode 100644 Source/WebCore/platform/OpenFont.cmake
+ create mode 100644 Source/WebCore/platform/graphics/openfont/ComplexTextControllerOpenFont.cpp
+ create mode 100644 Source/WebCore/platform/graphics/openfont/FontCacheOpenFont.cpp
+ create mode 100644 Source/WebCore/platform/graphics/openfont/FontCustomPlatformDataOpenFont.cpp
+ create mode 100644 Source/WebCore/platform/graphics/openfont/FontPlatformDataOpenFont.cpp
+ create mode 100644 Source/WebCore/platform/graphics/openfont/GlyphPageTreeNodeOpenFont.cpp
+ create mode 100644 Source/WebCore/platform/graphics/openfont/OpenFontFace.cpp
+ create mode 100644 Source/WebCore/platform/graphics/openfont/OpenFontFace.h
+ create mode 100644 Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
+ create mode 100644 Source/WebCore/platform/graphics/openfont/OpenFontLibrary.h
+ create mode 100644 Source/WebCore/platform/graphics/openfont/SimpleFontDataOpenFont.cpp
+ create mode 100644 Source/cmake/FindOpenFont.cmake
+
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index 7a8b83a94ea..ff84b13586f 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -1,6 +1,6 @@
+ include(platform/Cairo.cmake)
+ include(platform/Curl.cmake)
+-include(platform/FreeType.cmake)
++include(platform/OpenFont.cmake)
+ 
+ # TLS is curl's own business: curl is built on OpenTLS (opentls.library,
+ # openamigacurl), and WebCore links no OpenSSL. The curl files that hand
+diff --git a/Source/WebCore/platform/OpenFont.cmake b/Source/WebCore/platform/OpenFont.cmake
+new file mode 100644
+index 00000000000..98076aff201
+--- /dev/null
++++ b/Source/WebCore/platform/OpenFont.cmake
+@@ -0,0 +1,35 @@
++# Text on openfont.library (USE_OPENFONT): faces, metrics, glyph pages,
++# web fonts and shaping, in place of FreeType, fontconfig and HarfBuzz.
++# Glyphs are drawn through cairo user fonts that fill OpenFont's outlines.
++list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
++    "${WEBCORE_DIR}/platform/graphics/openfont"
++)
++
++list(APPEND WebCore_SOURCES
++    platform/graphics/openfont/ComplexTextControllerOpenFont.cpp
++    platform/graphics/openfont/FontCacheOpenFont.cpp
++    platform/graphics/openfont/FontCustomPlatformDataOpenFont.cpp
++    platform/graphics/openfont/FontPlatformDataOpenFont.cpp
++    platform/graphics/openfont/GlyphPageTreeNodeOpenFont.cpp
++    platform/graphics/openfont/OpenFontFace.cpp
++    platform/graphics/openfont/OpenFontLibrary.c
++    platform/graphics/openfont/SimpleFontDataOpenFont.cpp
++
++    # Shared with the FreeType ports; neither file uses FreeType or HarfBuzz.
++    platform/graphics/harfbuzz/FontDescriptionHarfBuzz.cpp
++)
++
++list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
++    platform/graphics/openfont/OpenFontFace.h
++    platform/graphics/openfont/OpenFontLibrary.h
++)
++
++if (USE_CAIRO)
++    list(APPEND WebCore_SOURCES
++        platform/graphics/cairo/FontCairoHarfbuzzNG.cpp
++    )
++endif ()
++
++list(APPEND WebCore_LIBRARIES
++    OpenFont::OpenFont
++)
+diff --git a/Source/WebCore/platform/graphics/Font.cpp b/Source/WebCore/platform/graphics/Font.cpp
+index 52e392b6566..a0b2a94b8b2 100644
+--- a/Source/WebCore/platform/graphics/Font.cpp
++++ b/Source/WebCore/platform/graphics/Font.cpp
+@@ -129,7 +129,7 @@ void Font::initCharWidths()
+ 
+ void Font::platformGlyphInit()
+ {
+-#if USE(FREETYPE)
++#if USE(FREETYPE) || USE(OPENFONT)
+     RefPtr glyphPageZeroWidthSpace = glyphPage(GlyphPage::pageNumberForCodePoint(zeroWidthSpace));
+     char32_t zeroWidthSpaceCharacter = zeroWidthSpace;
+ #else
+diff --git a/Source/WebCore/platform/graphics/FontCascade.cpp b/Source/WebCore/platform/graphics/FontCascade.cpp
+index 080515dc32d..39557b765b7 100644
+--- a/Source/WebCore/platform/graphics/FontCascade.cpp
++++ b/Source/WebCore/platform/graphics/FontCascade.cpp
+@@ -671,7 +671,7 @@ bool FontCascade::shouldDisableFontSubpixelAntialiasingForTesting()
+ 
+ bool FontCascade::canHandleRunAsSimpleText(const TextRun& run, unsigned from, unsigned to) const
+ {
+-#if !PLATFORM(GTK) && !PLATFORM(WPE) && !USE(FREETYPE)
++#if !PLATFORM(GTK) && !PLATFORM(WPE) && !USE(FREETYPE) && !USE(OPENFONT)
+     // FIXME: Use the fast code path once it handles partial runs with kerning and ligatures. See http://webkit.org/b/100050
+     return !((enableKerning() || requiresShaping()) && (from || to != run.length()));
+ #else
+@@ -714,7 +714,7 @@ FontCascade::CodePath FontCascade::codePath(const TextRun& run, std::optional<un
+ 
+     // FIXME: https://bugs.webkit.org/show_bug.cgi?id=150791: @font-face features should also cause this to be complex.
+ 
+-#if !USE(FONT_VARIANT_VIA_FEATURES) && !USE(FREETYPE)
++#if !USE(FONT_VARIANT_VIA_FEATURES) && !USE(FREETYPE) && !USE(OPENFONT)
+     if (run.length() > 1 && (enableKerning() || requiresShaping()))
+         return CodePath::Complex;
+ #endif
+@@ -1753,7 +1753,7 @@ int FontCascade::offsetForPositionForComplexText(const TextRun& run, float x, bo
+     return controller.offsetForPosition(x, includePartialGlyphs);
+ }
+ 
+-#if !PLATFORM(COCOA) && !USE(HARFBUZZ)
++#if !PLATFORM(COCOA) && !USE(HARFBUZZ) && !USE(OPENFONT)
+ // FIXME: Unify this with the macOS and iOS implementation.
+ RefPtr<const Font> FontCascade::fontForCombiningCharacterSequence(StringView stringView) const
+ {
+diff --git a/Source/WebCore/platform/graphics/FontCustomPlatformData.h b/Source/WebCore/platform/graphics/FontCustomPlatformData.h
+index 57de5441202..dd031778438 100644
+--- a/Source/WebCore/platform/graphics/FontCustomPlatformData.h
++++ b/Source/WebCore/platform/graphics/FontCustomPlatformData.h
+@@ -44,6 +44,9 @@
+ 
+ typedef struct CGFont* CGFontRef;
+ typedef const struct __CTFontDescriptor* CTFontDescriptorRef;
++#elif USE(CAIRO) && USE(OPENFONT)
++#include "OpenFontFace.h"
++#include "RefPtrCairo.h"
+ #elif USE(CAIRO)
+ #include "RefPtrCairo.h"
+ 
+@@ -84,6 +87,8 @@ public:
+         , m_renderingResourceIdentifier(RenderingResourceIdentifier::generate())
+     {
+     }
++#elif USE(CAIRO) && USE(OPENFONT)
++    FontCustomPlatformData(Ref<OpenFontFace>&&, FontPlatformData::CreationData&&);
+ #elif USE(CAIRO)
+     FontCustomPlatformData(FT_Face, FontPlatformData::CreationData&&);
+ #elif USE(SKIA)
+@@ -111,6 +116,9 @@ public:
+     RetainPtr<CTFontDescriptorRef> fontDescriptor;
+ #elif USE(CAIRO)
+     const RefPtr<cairo_font_face_t> m_fontFace;
++#if USE(OPENFONT)
++    const Ref<OpenFontFace> m_openFontFace;
++#endif
+ #elif USE(SKIA)
+     sk_sp<SkTypeface> m_typeface;
+     mutable HashMap<unsigned, sk_sp<SkTypeface>> m_variationTypefacesCache;
+diff --git a/Source/WebCore/platform/graphics/FontPlatformData.cpp b/Source/WebCore/platform/graphics/FontPlatformData.cpp
+index 9ff17f4c581..ff0f1dc4724 100644
+--- a/Source/WebCore/platform/graphics/FontPlatformData.cpp
++++ b/Source/WebCore/platform/graphics/FontPlatformData.cpp
+@@ -62,7 +62,7 @@ FontPlatformData::~FontPlatformData() = default;
+ FontPlatformData::FontPlatformData(const FontPlatformData&) = default;
+ FontPlatformData& FontPlatformData::operator=(const FontPlatformData&) = default;
+ 
+-#if !USE(FREETYPE)
++#if !USE(FREETYPE) && !USE(OPENFONT)
+ FontPlatformData FontPlatformData::cloneWithOrientation(const FontPlatformData& source, FontOrientation orientation)
+ {
+     FontPlatformData copy(source);
+@@ -71,7 +71,7 @@ FontPlatformData FontPlatformData::cloneWithOrientation(const FontPlatformData&
+ }
+ #endif
+ 
+-#if !USE(FREETYPE) && !PLATFORM(COCOA)
++#if !USE(FREETYPE) && !USE(OPENFONT) && !PLATFORM(COCOA)
+ // FIXME: Don't other platforms also need to reinstantiate their copy.m_font for scaled size?
+ FontPlatformData FontPlatformData::cloneWithSize(const FontPlatformData& source, float size)
+ {
+diff --git a/Source/WebCore/platform/graphics/FontPlatformData.h b/Source/WebCore/platform/graphics/FontPlatformData.h
+index ae44f9f9c7f..bc319935a3e 100644
+--- a/Source/WebCore/platform/graphics/FontPlatformData.h
++++ b/Source/WebCore/platform/graphics/FontPlatformData.h
+@@ -59,6 +59,10 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
+ #include <memory>
+ #endif
+ 
++#if USE(OPENFONT)
++#include "OpenFontFace.h"
++#endif
++
+ #if USE(APPKIT)
+ OBJC_CLASS NSFont;
+ #endif
+@@ -323,6 +327,10 @@ public:
+ 
+ #if USE(FREETYPE) && USE(CAIRO)
+     FontPlatformData(cairo_font_face_t*, RefPtr<FcPattern>&&, float size, bool fixedWidth, bool syntheticBold, bool syntheticOblique, FontOrientation, const FontMetricsOverrides& = { }, const FontCustomPlatformData* = nullptr);
++#elif USE(OPENFONT) && USE(CAIRO)
++    // fontFaceFeatures: the OpenType features an @font-face rule's
++    // font-feature-settings turns on, as tags.
++    FontPlatformData(Ref<OpenFontFace>&&, float size, bool syntheticBold, bool syntheticOblique, FontOrientation, const FontMetricsOverrides& = { }, const FontCustomPlatformData* = nullptr, Vector<uint32_t>&& fontFaceFeatures = { });
+ #elif USE(SKIA)
+     WEBCORE_EXPORT FontPlatformData(sk_sp<SkTypeface>&&, float size, bool syntheticBold, bool syntheticOblique, FontOrientation, FontWidthVariant, TextRenderingMode, Vector<hb_feature_t>&&, const FontMetricsOverrides& = { }, const FontCustomPlatformData* = nullptr);
+     WEBCORE_EXPORT FontPlatformData(sk_sp<SkTypeface>&&, const FontMetadata&, Vector<hb_feature_t>&&, const FontCustomPlatformData* = nullptr);
+@@ -403,6 +411,10 @@ public:
+     FcPattern* fcPattern() const;
+     bool isFixedWidth() const { return m_fixedWidth; }
+ #endif
++#if USE(OPENFONT)
++    OpenFontFace* openFontFace() const { return m_openFontFace.get(); }
++    const Vector<uint32_t>& fontFaceFeatures() const LIFETIME_BOUND { return m_fontFaceFeatures; }
++#endif
+ 
+     unsigned hash() const;
+ 
+@@ -461,6 +473,8 @@ private:
+ 
+ #if USE(FREETYPE) && USE(CAIRO)
+     void buildScaledFont(cairo_font_face_t*);
++#elif USE(OPENFONT) && USE(CAIRO)
++    void buildScaledFont();
+ #endif
+ 
+ #if PLATFORM(WIN)
+@@ -481,6 +495,11 @@ private:
+     RefPtr<FcPattern> m_pattern;
+ #endif
+ 
++#if USE(OPENFONT)
++    RefPtr<OpenFontFace> m_openFontFace;
++    Vector<uint32_t> m_fontFaceFeatures;
++#endif
++
+     FontMetadata m_metadata;
+ 
+     // This is conceptually const, but we can't make it actually const,
+@@ -495,7 +514,7 @@ private:
+     // The values above are common to all ports
+ 
+ 
+-#if USE(FREETYPE)
++#if USE(FREETYPE) || USE(OPENFONT)
+     bool m_fixedWidth { false };
+ #endif
+ 
+diff --git a/Source/WebCore/platform/graphics/WidthIterator.cpp b/Source/WebCore/platform/graphics/WidthIterator.cpp
+index f289ee62297..e8f3dbe4a36 100644
+--- a/Source/WebCore/platform/graphics/WidthIterator.cpp
++++ b/Source/WebCore/platform/graphics/WidthIterator.cpp
+@@ -432,7 +432,7 @@ inline void WidthIterator::advanceInternal(TextIterator& textIterator, GlyphBuff
+             advanceInternalState.currentCharacterIndex = textIterator.currentIndex();
+         };
+ 
+-#if USE(FREETYPE)
++#if USE(FREETYPE) || USE(OPENFONT)
+         // Freetype based ports only override the characters with Default_Ignorable unicode property when the font
+         // doesn't support the code point. We should ignore them at this point to ensure they are not displayed.
+         if (isDefaultIgnorable) {
+diff --git a/Source/WebCore/platform/graphics/openfont/ComplexTextControllerOpenFont.cpp b/Source/WebCore/platform/graphics/openfont/ComplexTextControllerOpenFont.cpp
+new file mode 100644
+index 00000000000..55b22f9db66
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/ComplexTextControllerOpenFont.cpp
+@@ -0,0 +1,272 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "ComplexTextController.h"
++
++#if USE(OPENFONT) && USE(CAIRO)
++
++#include "FontCascadeInlines.h"
++#include "FontFeatureValues.h"
++#include "FontTaggedSettings.h"
++#include "OpenFontFace.h"
++#include "OpenFontLibrary.h"
++#include "SurrogatePairAwareTextIterator.h"
++#include "TextFlags.h"
++#include <cairo.h>
++#include <unicode/uscript.h>
++
++namespace WebCore {
++
++static Vector<OBOFFeature, 8> fontFeatures(const FontCascade& font, const FontPlatformData& fontPlatformData)
++{
++    FeaturesMap featuresToBeApplied;
++
++    // 7.2. Feature precedence
++    // https://www.w3.org/TR/css-fonts-3/#feature-precedence
++
++    // 1. Font features enabled by default, including features required for a given script.
++
++    // 2. If the font is defined via an @font-face rule, the font features implied by the
++    //    font-feature-settings descriptor in the @font-face rule.
++    for (auto tag : fontPlatformData.fontFaceFeatures()) {
++        FontTag fontTag = { { static_cast<char>(tag >> 24), static_cast<char>(tag >> 16), static_cast<char>(tag >> 8), static_cast<char>(tag) } };
++        featuresToBeApplied.set(fontTag, 1);
++    }
++
++    // 3. Font features implied by the value of the ‘font-variant’ property, the related ‘font-variant’
++    //    subproperties and any other CSS property that uses OpenType features.
++
++    // FIXME: pass a proper FontFeatureValues object.
++    // https://bugs.webkit.org/show_bug.cgi?id=246121
++    for (auto& feature : computeFeatureSettingsFromVariants(font.fontDescription().variantSettings(), { }))
++        featuresToBeApplied.set(feature.key, feature.value);
++
++    featuresToBeApplied.set(fontFeatureTag("kern"), font.enableKerning() ? 1 : 0);
++
++    // 4. Feature settings determined by properties other than ‘font-variant’ or ‘font-feature-settings’.
++    if (fontPlatformData.orientation() == FontOrientation::Vertical) {
++        featuresToBeApplied.set(fontFeatureTag("vert"), 1);
++        featuresToBeApplied.set(fontFeatureTag("vrt2"), 1);
++    }
++
++    // 5. Font features implied by the value of ‘font-feature-settings’ property.
++    for (auto& feature : font.fontDescription().featureSettings())
++        featuresToBeApplied.set(feature.tag(), feature.value());
++
++    Vector<OBOFFeature, 8> features;
++    features.reserveInitialCapacity(std::min<size_t>(featuresToBeApplied.size(), OBOF_MAX_FEATURES));
++    for (auto& iter : featuresToBeApplied) {
++        if (features.size() == OBOF_MAX_FEATURES)
++            break;
++        auto& tag = iter.key;
++        features.append({ OpenFontFace::tag(tag[0], tag[1], tag[2], tag[3]), static_cast<uint32_t>(iter.value), 0, OBOF_FEATURE_END });
++    }
++
++    return features;
++}
++
++static std::optional<UScriptCode> characterScript(char32_t character)
++{
++    UErrorCode errorCode = U_ZERO_ERROR;
++    UScriptCode script = uscript_getScript(character, &errorCode);
++    if (U_FAILURE(errorCode))
++        return std::nullopt;
++    return script;
++}
++
++struct ScriptRun {
++    unsigned startIndex;
++    unsigned endIndex;
++    UScriptCode script;
++};
++
++static std::optional<ScriptRun> findNextRun(std::span<const char16_t> characters, unsigned offset)
++{
++    SurrogatePairAwareTextIterator textIterator(characters.subspan(offset), offset, characters.size());
++    char32_t character;
++    unsigned clusterLength = 0;
++    if (!textIterator.consume(character, clusterLength))
++        return std::nullopt;
++
++    auto currentScript = characterScript(character);
++    if (!currentScript)
++        return std::nullopt;
++
++    unsigned startIndex = offset;
++    for (textIterator.advance(clusterLength); textIterator.consume(character, clusterLength); textIterator.advance(clusterLength)) {
++        if (FontCascade::treatAsZeroWidthSpace(character))
++            continue;
++
++        auto nextScript = characterScript(character);
++        if (!nextScript)
++            return std::nullopt;
++
++        // §5.1 Handling Characters with the Common Script Property.
++        // Programs must resolve any of the special Script property values, such as Common,
++        // based on the context of the surrounding characters. A simple heuristic uses the
++        // script of the preceding character, which works well in many cases.
++        // http://www.unicode.org/reports/tr24/#Common.
++        //
++        // FIXME: cover all other cases mentioned in the spec (ie. brackets or quotation marks).
++        // https://bugs.webkit.org/show_bug.cgi?id=177003.
++        //
++        // If next script is inherited or common, keep using the current script.
++        if (nextScript == USCRIPT_INHERITED || nextScript == USCRIPT_COMMON)
++            continue;
++        // If current script is inherited or common, set the next script as current.
++        if (currentScript == USCRIPT_INHERITED || currentScript == USCRIPT_COMMON) {
++            currentScript = nextScript;
++            continue;
++        }
++
++        if (currentScript != nextScript && !uscript_hasScript(character, currentScript.value()))
++            return std::optional<ScriptRun>({ startIndex, textIterator.currentIndex(), currentScript.value() });
++    }
++
++    return std::optional<ScriptRun>({ startIndex, textIterator.currentIndex(), currentScript.value() });
++}
++
++// The run's ISO 15924 code as OpenFont takes it ('Arab'); 0 for Common and
++// Inherited, which leaves the script to the text.
++static uint32_t scriptTag(UScriptCode script)
++{
++    if (script == USCRIPT_COMMON || script == USCRIPT_INHERITED)
++        return 0;
++    const char* name = uscript_getShortName(script);
++    if (!name || strlen(name) != 4)
++        return 0;
++    return OpenFontFace::tag(name[0], name[1], name[2], name[3]);
++}
++
++void ComplexTextController::collectComplexTextRunsForCharacters(std::span<const char16_t> characters, unsigned stringLocation, const Font* font)
++{
++    if (!font) {
++        // Create a run of missing glyphs from the primary font.
++        m_complexTextRuns.append(ComplexTextRun::create(m_fontCascade->primaryFont(), characters, stringLocation, 0, characters.size(), m_run->ltr()));
++        return;
++    }
++
++    Vector<ScriptRun> runList;
++    unsigned offset = 0;
++    while (offset < characters.size()) {
++        auto run = findNextRun(characters, offset);
++        if (!run)
++            break;
++        runList.append(run.value());
++        offset = run->endIndex;
++    }
++
++    size_t runCount = runList.size();
++    if (!runCount)
++        return;
++
++    const auto& fontPlatformData = font->platformData();
++    RefPtr face = fontPlatformData.openFontFace();
++    if (!face)
++        return;
++
++    // The glyphs WebCore's glyph pages give these: spaces as the space
++    // glyph, which the shaper then sees too.
++    Vector<char16_t> text(characters);
++    for (auto& character : text) {
++        if (FontCascade::treatAsSpace(character))
++            character = space;
++    }
++
++    auto features = fontFeatures(m_fontCascade, fontPlatformData);
++    const float size = fontPlatformData.size();
++    const float unitsPerEm = face->unitsPerEm();
++    // The face is at a pixel size of its units per em: 26.6 font units.
++    const float scale = size / (64 * unitsPerEm);
++    const bool vertical = fontPlatformData.orientation() == FontOrientation::Vertical;
++    auto* scaledFont = fontPlatformData.scaledFont();
++
++    Vector<OBOFGlyph, 64> shaped;
++    for (unsigned i = 0; i < runCount; ++i) {
++        auto& run = runList[m_run->rtl() ? runCount - i - 1 : i];
++
++        bool rtl;
++        if (!m_mayUseNaturalWritingDirection || m_run->directionalOverride())
++            rtl = m_run->rtl();
++        else
++            rtl = uscript_isRightToLeft(run.script);
++        // Vertical text shapes with the vertical forms, left to right.
++        uint32_t script = vertical ? 0 : scriptTag(run.script);
++
++        unsigned runLength = run.endIndex - run.startIndex;
++        shaped.resize(runLength + 8);
++        uint32_t glyphCount = 0;
++        Locker locker { OpenFontFace::lock() };
++        for (unsigned attempt = 0; attempt < 2; ++attempt) {
++            glyphCount = obof_shape_utf16(face->face(), reinterpret_cast<const uint16_t*>(text.span().data()), text.size(), run.startIndex, runLength,
++                script, 0, rtl ? OBOF_DIR_RTL : OBOF_DIR_LTR, features.span().data(), features.size(), shaped.mutableSpan().data(), shaped.size());
++            if (glyphCount <= shaped.size())
++                break;
++            shaped.resize(glyphCount);
++        }
++        glyphCount = std::min<uint32_t>(glyphCount, shaped.size());
++        if (!glyphCount)
++            continue;
++
++        Vector<FloatSize> advances(glyphCount);
++        Vector<FloatPoint> origins(glyphCount);
++        Vector<Glyph> glyphs(glyphCount);
++        Vector<unsigned> stringIndices(glyphCount);
++        for (unsigned j = 0; j < glyphCount; ++j) {
++            auto& glyphInfo = shaped[j];
++            Glyph glyph = glyphInfo.glyph <= std::numeric_limits<Glyph>::max() ? glyphInfo.glyph : 0;
++            glyphs[j] = glyph;
++            stringIndices[j] = glyphInfo.cluster;
++
++            // Glyphs WebCore hides take no room.
++            if (font->isZeroWidthSpaceGlyph(glyph) || !size)
++                continue;
++
++            // The advance as the HarfBuzz path made it: the glyph's advance
++            // as cairo gives it (whole pixels with metrics hinting), with
++            // the shaper's changes to it (kerning) added; none when the
++            // shaper took it away (a mark).
++            float advanceX = 0;
++            if (glyphInfo.xAdvance) {
++                cairo_text_extents_t glyphExtents;
++                cairo_glyph_t cairoGlyph = { glyph, 0, 0 };
++                cairo_scaled_font_glyph_extents(scaledFont, &cairoGlyph, 1, &glyphExtents);
++                float cairoAdvance = vertical ? -glyphExtents.y_advance : glyphExtents.x_advance;
++                float unshapedAdvance = face->advance(glyph) * size / unitsPerEm;
++                advanceX = cairoAdvance + (glyphInfo.xAdvance * scale - unshapedAdvance);
++            }
++            advances[j] = { advanceX, glyphInfo.yAdvance * scale };
++            origins[j] = { glyphInfo.xOffset * scale, glyphInfo.yOffset * scale };
++        }
++
++        FloatSize initialAdvance = toFloatSize(origins[0]);
++        m_complexTextRuns.append(ComplexTextRun::create(advances, origins, glyphs, stringIndices, initialAdvance, *font, characters, stringLocation, run.startIndex, run.endIndex, !rtl));
++    }
++}
++
++} // namespace WebCore
++
++#endif // USE(OPENFONT) && USE(CAIRO)
+diff --git a/Source/WebCore/platform/graphics/openfont/FontCacheOpenFont.cpp b/Source/WebCore/platform/graphics/openfont/FontCacheOpenFont.cpp
+new file mode 100644
+index 00000000000..4514306a3d1
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/FontCacheOpenFont.cpp
+@@ -0,0 +1,227 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "FontCache.h"
++
++#if USE(OPENFONT) && USE(CAIRO)
++
++#include "Font.h"
++#include "FontCreationContext.h"
++#include "FontDescription.h"
++#include "OpenFontFace.h"
++#include "StyleFontSizeFunctions.h"
++#include "WebKitFontFamilyNames.h"
++#include <array>
++#include <wtf/text/StringView.h>
++
++namespace WebCore {
++
++using namespace WebKitFontFamilyNames;
++
++void FontCache::platformInit()
++{
++}
++
++static unsigned openFontWeight(FontSelectionValue weight)
++{
++    return std::clamp(static_cast<int>(static_cast<float>(weight)), 100, 900);
++}
++
++// Synthetic bold and oblique as the fontconfig ports decide them: bold when
++// bold was asked for and the face is lighter than semibold, oblique when
++// italic was asked for and the face is upright.
++static void syntheticStyleForFace(const OpenFontFace& face, const FontDescription& fontDescription, OptionSet<FontLookupOptions> options, bool& syntheticBold, bool& syntheticOblique)
++{
++    bool allowSyntheticBold = fontDescription.hasAutoFontSynthesisWeight()
++        && !options.contains(FontLookupOptions::DisallowBoldSynthesis);
++    syntheticBold = allowSyntheticBold && isFontWeightBold(fontDescription.weight()) && face.weight() < 600;
++
++    bool allowSyntheticOblique = fontDescription.allowsItalicOrObliqueFontSynthesisStyle()
++        && !options.contains(FontLookupOptions::DisallowObliqueSynthesis);
++    syntheticOblique = allowSyntheticOblique && fontDescription.fontStyleSlope() && !face.isItalic();
++}
++
++RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription& description, const Font&, IsForPlatformFont, PreferColoredFont, StringView stringView)
++{
++    auto codePoints = stringView.codePoints();
++    auto it = codePoints.begin();
++    if (it == codePoints.end())
++        return nullptr;
++
++    RefPtr face = OpenFontFace::forCharacter(*it, openFontWeight(description.weight()), !!description.fontStyleSlope());
++    if (!face)
++        return nullptr;
++
++    bool syntheticBold, syntheticOblique;
++    syntheticStyleForFace(*face, description, { }, syntheticBold, syntheticOblique);
++    FontPlatformData alternateFontData(face.releaseNonNull(), description.usedSize(), syntheticBold, syntheticOblique, description.orientation());
++    return fontForPlatformData(alternateFontData);
++}
++
++Vector<String> FontCache::systemFontFamilies()
++{
++    // The font index lists no families to programs.
++    return { };
++}
++
++bool FontCache::isSystemFontForbiddenForEditing(const String&)
++{
++    return false;
++}
++
++Ref<Font> FontCache::lastResortFallbackFont(const FontDescription& fontDescription)
++{
++    if (RefPtr<Font> font = fontForFamily(fontDescription, "serif"_s))
++        return font.releaseNonNull();
++
++    // No serif face and no alias of it: any face at all.
++    RefPtr face = OpenFontFace::defaultFace(openFontWeight(fontDescription.weight()), !!fontDescription.fontStyleSlope());
++    // This could be reached due to no fonts installed, or no openfont.library.
++    RELEASE_ASSERT(face);
++    return fontForPlatformData(FontPlatformData(face.releaseNonNull(), fontDescription.usedSize(), false, false, fontDescription.orientation()));
++}
++
++Vector<FontSelectionCapabilities> FontCache::getFontSelectionCapabilitiesInFamily(const AtomString&, AllowUserInstalledFonts)
++{
++    return { };
++}
++
++static String familyNameStringFromFamily(const String& family)
++{
++    // A generic family of WebKit's settings ("-webkit-standard") as the
++    // generic family (serif) OpenFont's aliases know.
++    if (family.length() && !family.startsWith("-webkit-"_s))
++        return family;
++
++    if (family == *familyNamesData->at(FamilyNamesIndex::StandardFamily) || family == *familyNamesData->at(FamilyNamesIndex::SerifFamily))
++        return "serif"_s;
++    if (family == *familyNamesData->at(FamilyNamesIndex::SansSerifFamily))
++        return "sans-serif"_s;
++    if (family == *familyNamesData->at(FamilyNamesIndex::MonospaceFamily))
++        return "monospace"_s;
++    if (family == *familyNamesData->at(FamilyNamesIndex::CursiveFamily))
++        return "cursive"_s;
++    if (family == *familyNamesData->at(FamilyNamesIndex::FantasyFamily))
++        return "fantasy"_s;
++    if (family == *familyNamesData->at(FamilyNamesIndex::MathFamily))
++        return "math"_s;
++
++    return emptyString();
++}
++
++// OpenBrowser's families, which its fontconfig settings (fonts.conf) gave
++// before: the generic families to the Liberation faces first, and faces
++// pages ask for by name to the faces that share their metrics, so text
++// lays out at the size the page expects. Tried before OpenFont's own
++// aliases and the user's (ENVARC:OpenFont/Aliases).
++struct FamilyAlias {
++    ASCIILiteral name;
++    std::array<ASCIILiteral, 2> families;
++};
++
++static constexpr std::array familyAliases {
++    FamilyAlias { "sans-serif"_s, { "Liberation Sans"_s, "DejaVu Sans"_s } },
++    FamilyAlias { "serif"_s, { "Liberation Serif"_s, "DejaVu Serif"_s } },
++    FamilyAlias { "monospace"_s, { "Liberation Mono"_s, "DejaVu Sans Mono"_s } },
++    FamilyAlias { "system-ui"_s, { "Liberation Sans"_s, "DejaVu Sans"_s } },
++    FamilyAlias { "cursive"_s, { "Liberation Serif"_s, { } } },
++    FamilyAlias { "fantasy"_s, { "Liberation Sans"_s, { } } },
++    FamilyAlias { "Arial"_s, { "Liberation Sans"_s, { } } },
++    FamilyAlias { "Helvetica"_s, { "Liberation Sans"_s, { } } },
++    FamilyAlias { "Helvetica Neue"_s, { "Liberation Sans"_s, { } } },
++    FamilyAlias { "Segoe UI"_s, { "Liberation Sans"_s, { } } },
++    FamilyAlias { "Roboto"_s, { "Liberation Sans"_s, { } } },
++    FamilyAlias { "Verdana"_s, { "DejaVu Sans"_s, { } } },
++    FamilyAlias { "Tahoma"_s, { "DejaVu Sans"_s, { } } },
++    FamilyAlias { "Times New Roman"_s, { "Liberation Serif"_s, { } } },
++    FamilyAlias { "Times"_s, { "Liberation Serif"_s, { } } },
++    FamilyAlias { "Georgia"_s, { "Liberation Serif"_s, { } } },
++    FamilyAlias { "Courier New"_s, { "Liberation Mono"_s, { } } },
++    FamilyAlias { "Courier"_s, { "Liberation Mono"_s, { } } },
++    FamilyAlias { "Consolas"_s, { "Liberation Mono"_s, { } } },
++};
++
++static RefPtr<OpenFontFace> faceForFamily(const String& family, unsigned weight, bool italic)
++{
++    for (auto& alias : familyAliases) {
++        if (!equalIgnoringASCIICase(family, alias.name))
++            continue;
++        for (auto& aliasFamily : alias.families) {
++            if (aliasFamily.isNull())
++                break;
++            if (RefPtr face = OpenFontFace::forFamily(aliasFamily, weight, italic))
++                return face;
++        }
++        break;
++    }
++    return OpenFontFace::forFamily(family, weight, italic);
++}
++
++std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDescription& fontDescription, const AtomString& family, const FontCreationContext& fontCreationContext, OptionSet<FontLookupOptions> options)
++{
++    // The CSS font matching algorithm wants the family itself (or a generic
++    // family, or an alias the user or OpenFont set up), never a stand-in:
++    // the page's font-family list decides what comes next.
++    String familyNameString = familyNameStringFromFamily(family);
++    if (familyNameString.isEmpty())
++        return nullptr;
++
++    RefPtr face = faceForFamily(familyNameString, openFontWeight(fontDescription.weight()), !!fontDescription.fontStyleSlope());
++    if (!face)
++        return nullptr;
++
++    bool syntheticBold, syntheticOblique;
++    syntheticStyleForFace(*face, fontDescription, options, syntheticBold, syntheticOblique);
++
++    Vector<uint32_t> features;
++    if (fontCreationContext.fontFaceFeatures()) {
++        for (auto& fontFaceFeature : *fontCreationContext.fontFaceFeatures()) {
++            if (fontFaceFeature.enabled()) {
++                const auto& tag = fontFaceFeature.tag();
++                features.append(OpenFontFace::tag(tag[0], tag[1], tag[2], tag[3]));
++            }
++        }
++    }
++
++    auto size = fontDescription.adjustedSizeForFontFace(fontCreationContext.sizeAdjust());
++    FontPlatformData platformData(face.releaseNonNull(), size, syntheticBold, syntheticOblique, fontDescription.orientation(), fontCreationContext.metricsOverrides(), nullptr, WTF::move(features));
++
++    platformData.updateSizeWithFontSizeAdjust(fontDescription.fontSizeAdjust(), fontDescription.usedSize());
++    return makeUnique<FontPlatformData>(platformData);
++}
++
++ASCIILiteral FontCache::platformAlternateFamilyName(const String&)
++{
++    return { };
++}
++
++void FontCache::platformInvalidate()
++{
++}
++
++} // namespace WebCore
++
++#endif // USE(OPENFONT) && USE(CAIRO)
+diff --git a/Source/WebCore/platform/graphics/openfont/FontCustomPlatformDataOpenFont.cpp b/Source/WebCore/platform/graphics/openfont/FontCustomPlatformDataOpenFont.cpp
+new file mode 100644
+index 00000000000..3d9451f8253
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/FontCustomPlatformDataOpenFont.cpp
+@@ -0,0 +1,122 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "FontCustomPlatformData.h"
++
++#if USE(OPENFONT) && USE(CAIRO)
++
++#include "CSSFontFaceSrcValue.h"
++#include "Font.h"
++#include "FontCreationContext.h"
++#include "FontDescription.h"
++#include "FontPlatformData.h"
++#include "SharedBuffer.h"
++#include "StyleFontSizeFunctions.h"
++
++namespace WebCore {
++
++FontCustomPlatformData::FontCustomPlatformData(Ref<OpenFontFace>&& face, FontPlatformData::CreationData&& data)
++    : m_fontFace(face->cairoFontFace())
++    , m_openFontFace(WTF::move(face))
++    , creationData(WTF::move(data))
++    , m_renderingResourceIdentifier(RenderingResourceIdentifier::generate())
++{
++}
++
++FontCustomPlatformData::~FontCustomPlatformData() = default;
++
++FontPlatformData FontCustomPlatformData::fontPlatformData(const FontDescription& description, const FontCreationContext& fontCreationContext)
++{
++    Vector<uint32_t> features;
++    if (fontCreationContext.fontFaceFeatures()) {
++        for (auto& fontFaceFeature : *fontCreationContext.fontFaceFeatures()) {
++            if (fontFaceFeature.enabled()) {
++                const auto& tag = fontFaceFeature.tag();
++                features.append(OpenFontFace::tag(tag[0], tag[1], tag[2], tag[3]));
++            }
++        }
++    }
++
++    // OpenFont has no variable fonts: no weight or slope axis to use.
++    bool syntheticBold = computeSyntheticBold(false, description, fontCreationContext);
++    bool syntheticItalic = computeSyntheticItalic(false, description, fontCreationContext);
++
++    auto size = description.adjustedSizeForFontFace(fontCreationContext.sizeAdjust());
++    FontPlatformData platformData(m_openFontFace.copyRef(), size, syntheticBold, syntheticItalic, description.orientation(), fontCreationContext.metricsOverrides(), nullptr, WTF::move(features));
++
++    platformData.updateSizeWithFontSizeAdjust(description.fontSizeAdjust(), description.usedSize());
++    return platformData;
++}
++
++RefPtr<FontCustomPlatformData> FontCustomPlatformData::create(SharedBuffer& buffer, const String& itemInCollection)
++{
++    RefPtr face = OpenFontFace::createFromMemory(buffer.span());
++    if (!face)
++        return nullptr;
++    FontPlatformData::CreationData creationData = { buffer, itemInCollection };
++    return adoptRef(new FontCustomPlatformData(face.releaseNonNull(), WTF::move(creationData)));
++}
++
++RefPtr<FontCustomPlatformData> FontCustomPlatformData::createMemorySafe(SharedBuffer&, const String&)
++{
++    return nullptr;
++}
++
++bool FontCustomPlatformData::supportsFormat(const String& format)
++{
++    // WOFF is unpacked to an sfnt by WebCore itself (WOFFFileFormat.cpp).
++    return equalLettersIgnoringASCIICase(format, "truetype"_s)
++        || equalLettersIgnoringASCIICase(format, "opentype"_s)
++        || equalLettersIgnoringASCIICase(format, "woff"_s);
++}
++
++bool FontCustomPlatformData::supportsTechnology(const FontTechnology& technology)
++{
++    // OpenFont shapes with OpenType's GSUB and GPOS: no colour, AAT,
++    // Graphite, palettes or variations.
++    switch (technology) {
++    case FontTechnology::FeaturesOpentype:
++        return true;
++    default:
++        return false;
++    }
++}
++
++std::optional<Ref<FontCustomPlatformData>> FontCustomPlatformData::tryMakeFromSerializationData(FontCustomPlatformSerializedData&&, bool)
++{
++    ASSERT_NOT_REACHED();
++    return std::nullopt;
++}
++
++FontCustomPlatformSerializedData FontCustomPlatformData::serializedData() const
++{
++    ASSERT_NOT_REACHED();
++    return FontCustomPlatformSerializedData { creationData.fontFaceData, creationData.itemInCollection, m_renderingResourceIdentifier };
++}
++
++} // namespace WebCore
++
++#endif // USE(OPENFONT) && USE(CAIRO)
+diff --git a/Source/WebCore/platform/graphics/openfont/FontPlatformDataOpenFont.cpp b/Source/WebCore/platform/graphics/openfont/FontPlatformDataOpenFont.cpp
+new file mode 100644
+index 00000000000..0e183d6a39d
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/FontPlatformDataOpenFont.cpp
+@@ -0,0 +1,183 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "FontPlatformData.h"
++
++#if USE(OPENFONT) && USE(CAIRO)
++
++#include "CairoUniquePtr.h"
++#include "CairoUtilities.h"
++#include "FontCustomPlatformData.h"
++#include "SharedBuffer.h"
++#include <cairo.h>
++#include <wtf/MathExtras.h>
++#include <wtf/text/WTFString.h>
++
++namespace WebCore {
++
++FontPlatformData::FontPlatformData(Ref<OpenFontFace>&& face, float size, bool syntheticBold, bool syntheticOblique, FontOrientation orientation, const FontMetricsOverrides& metricsOverrides, const FontCustomPlatformData* customPlatformData, Vector<uint32_t>&& fontFaceFeatures)
++    : FontPlatformData(size, syntheticBold, syntheticOblique, orientation, FontWidthVariant::RegularWidth, TextRenderingMode::Auto, metricsOverrides, customPlatformData)
++{
++    m_openFontFace = WTF::move(face);
++    m_fontFaceFeatures = WTF::move(fontFaceFeatures);
++    m_fixedWidth = m_openFontFace->isFixedPitch();
++    m_isColorBitmapFont = m_openFontFace->hasColor();
++    buildScaledFont();
++}
++
++FontPlatformData FontPlatformData::cloneWithOrientation(const FontPlatformData& source, FontOrientation orientation)
++{
++    FontPlatformData copy(source);
++    if (copy.m_scaledFont && copy.m_metadata.orientation != orientation) {
++        copy.m_metadata.orientation = orientation;
++        copy.buildScaledFont();
++    }
++    return copy;
++}
++
++FontPlatformData FontPlatformData::cloneWithSize(const FontPlatformData& source, float size)
++{
++    FontPlatformData copy(source);
++    copy.updateSize(size);
++    return copy;
++}
++
++void FontPlatformData::updateSize(float size)
++{
++    m_metadata.pointSize = size;
++    // A new size needs a new scaled font.
++    ASSERT(m_openFontFace);
++    buildScaledFont();
++}
++
++bool FontPlatformData::isFixedPitch() const
++{
++    return m_fixedWidth;
++}
++
++unsigned FontPlatformData::hash() const
++{
++    return PtrHash<cairo_scaled_font_t*>::hash(m_scaledFont.get());
++}
++
++bool FontPlatformData::platformIsEqual(const FontPlatformData& other) const
++{
++    return m_openFontFace == other.m_openFontFace
++        && m_scaledFont == other.m_scaledFont
++        && m_fontFaceFeatures == other.m_fontFaceFeatures;
++}
++
++#if !LOG_DISABLED
++String FontPlatformData::description() const
++{
++    return String();
++}
++#endif
++
++String FontPlatformData::familyName() const
++{
++    return m_openFontFace ? m_openFontFace->familyName() : String();
++}
++
++void FontPlatformData::buildScaledFont()
++{
++    ASSERT(m_openFontFace);
++    CairoUniquePtr<cairo_font_options_t> options(cairo_font_options_copy(getDefaultCairoFontOptions()));
++    // Grey-scale anti-aliasing without hinting, as OpenBrowser's fontconfig
++    // settings asked of FreeType: OpenFont's outlines are not hinted.
++    cairo_font_options_set_antialias(options.get(), CAIRO_ANTIALIAS_GRAY);
++    cairo_font_options_set_subpixel_order(options.get(), CAIRO_SUBPIXEL_ORDER_DEFAULT);
++    cairo_font_options_set_hint_style(options.get(), CAIRO_HINT_STYLE_NONE);
++
++    cairo_matrix_t ctm;
++    cairo_matrix_init_identity(&ctm);
++
++    // A zero size fails to make a scaled font: scale to a tiny size and
++    // leave the drawing to stop later on, as the FreeType ports do.
++    cairo_matrix_t fontMatrix;
++    float realSize = m_metadata.pointSize ? m_metadata.pointSize : 1;
++    cairo_matrix_init_scale(&fontMatrix, realSize, realSize);
++
++    if (syntheticOblique()) {
++        static const float syntheticObliqueSkew = -tanf(14 * acosf(0) / 90);
++        static const cairo_matrix_t skew = { 1, 0, syntheticObliqueSkew, 1, 0, 0 };
++        static const cairo_matrix_t verticalSkew = { 1, -syntheticObliqueSkew, 0, 1, 0, 0 };
++        cairo_matrix_multiply(&fontMatrix, m_metadata.orientation == FontOrientation::Vertical ? &verticalSkew : &skew, &fontMatrix);
++    }
++
++    if (m_metadata.orientation == FontOrientation::Vertical) {
++        // V = H . R . T: R rotates by -90 degrees and T moves the glyph down
++        // by the font size.
++        cairo_matrix_rotate(&fontMatrix, -piOverTwoDouble);
++        cairo_matrix_translate(&fontMatrix, 0.0, 1.0);
++    }
++
++    m_scaledFont = adoptRef(cairo_scaled_font_create(m_openFontFace->cairoFontFace(), &fontMatrix, &ctm, options.get()));
++}
++
++RefPtr<SharedBuffer> FontPlatformData::openTypeTable(uint32_t table) const
++{
++    if (!m_openFontFace)
++        return nullptr;
++    // OpenTypeTypes' tags are little-endian; the library's are as written.
++    uint32_t tag = OpenFontFace::tag(table & 0xff, (table >> 8) & 0xff, (table >> 16) & 0xff, table >> 24);
++    auto data = m_openFontFace->table(tag);
++    if (data.empty())
++        return nullptr;
++    return SharedBuffer::create(data);
++}
++
++FontPlatformData FontPlatformData::create(const Attributes& data, const FontCustomPlatformData* custom)
++{
++    RefPtr<OpenFontFace> face;
++    if (custom)
++        face = custom->m_openFontFace.ptr();
++    else
++        face = OpenFontFace::defaultFace(400, false);
++    RELEASE_ASSERT(face);
++    return FontPlatformData(face.releaseNonNull(), data.m_metadata.pointSize, data.m_metadata.isSyntheticBold, data.m_metadata.isSyntheticOblique, data.m_metadata.orientation, data.m_metadata.metricsOverrides, custom);
++}
++
++FontPlatformData::Attributes FontPlatformData::attributes() const
++{
++    return Attributes(m_metadata);
++}
++
++std::optional<FontPlatformData> FontPlatformData::fromIPCData(const FontMetadata&, IPCData&&)
++{
++    ASSERT_NOT_REACHED();
++    return std::nullopt;
++}
++
++FontPlatformData::IPCData FontPlatformData::toIPCData() const
++{
++    ASSERT_NOT_REACHED();
++    return FontPlatformSerializedData { };
++}
++
++} // namespace WebCore
++
++#endif // USE(OPENFONT) && USE(CAIRO)
+diff --git a/Source/WebCore/platform/graphics/openfont/GlyphPageTreeNodeOpenFont.cpp b/Source/WebCore/platform/graphics/openfont/GlyphPageTreeNodeOpenFont.cpp
+new file mode 100644
+index 00000000000..b24c0bb4d4f
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/GlyphPageTreeNodeOpenFont.cpp
+@@ -0,0 +1,79 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "GlyphPage.h"
++
++#if USE(OPENFONT)
++
++#include "Font.h"
++#include "FontCascadeInlines.h"
++#include "OpenFontFace.h"
++#include <wtf/text/CharacterProperties.h>
++#include <wtf/unicode/CharacterNames.h>
++
++namespace WebCore {
++
++bool GlyphPage::fill(std::span<const char16_t> buffer)
++{
++    const Font& font = this->font();
++    RefPtr face = font.platformData().openFontFace();
++    if (!face)
++        return false;
++
++    std::optional<Glyph> zeroWidthSpaceGlyphValue;
++    auto zeroWidthSpaceGlyph = [&] {
++        if (!zeroWidthSpaceGlyphValue)
++            zeroWidthSpaceGlyphValue = face->glyphForCharacter(zeroWidthSpace);
++        return *zeroWidthSpaceGlyphValue;
++    };
++
++    bool haveGlyphs = false;
++    unsigned bufferOffset = 0;
++    for (unsigned i = 0; i < GlyphPage::size; i++) {
++        if (bufferOffset == buffer.size())
++            break;
++        char32_t character;
++        U16_NEXT(buffer, bufferOffset, buffer.size(), character);
++
++        Glyph glyph = face->glyphForCharacter(FontCascade::treatAsSpace(character) ? space : character);
++        // If the font doesn't support a Default_Ignorable character, replace it with zero with space.
++        if (!glyph && (isDefaultIgnorableCodePoint(character) || isControlCharacter(character)))
++            glyph = zeroWidthSpaceGlyph();
++
++        if (!glyph)
++            setGlyphForIndex(i, 0, ColorGlyphType::Outline);
++        else {
++            setGlyphForIndex(i, glyph, font.colorGlyphType(glyph));
++            haveGlyphs = true;
++        }
++    }
++
++    return haveGlyphs;
++}
++
++} // namespace WebCore
++
++#endif // USE(OPENFONT)
+diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontFace.cpp b/Source/WebCore/platform/graphics/openfont/OpenFontFace.cpp
+new file mode 100644
+index 00000000000..6dc2eeac758
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/OpenFontFace.cpp
+@@ -0,0 +1,440 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "OpenFontFace.h"
++
++#if USE(OPENFONT)
++
++#include "FloatRect.h"
++#include "OpenFontLibrary.h"
++#include <array>
++#include <cmath>
++#include <cairo.h>
++#include <wtf/HashMap.h>
++#include <wtf/Lock.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/StdLibExtras.h>
++#include <wtf/Vector.h>
++#include <wtf/text/CString.h>
++#include <wtf/text/MakeString.h>
++#include <wtf/text/StringHash.h>
++
++namespace WebCore {
++
++// What the cairo user font face's callbacks need. It belongs to the cairo
++// face and closes the OFFace when cairo destroys the face, which can be
++// after the OpenFontFace has gone (scaled fonts in cairo's own cache).
++struct OpenFontCairoFace {
++    WTF_DEPRECATED_MAKE_STRUCT_FAST_ALLOCATED(OpenFontCairoFace);
++
++    OFFace* face { nullptr };
++    unsigned unitsPerEm { 1000 };
++    std::span<const uint8_t> horizontalMetrics;
++    unsigned horizontalMetricCount { 0 };
++    bool hasColorBitmaps { false };
++    cairo_font_extents_t extents { };
++};
++
++static cairo_user_data_key_t openFontCairoFaceKey;
++
++static inline unsigned readUInt16(std::span<const uint8_t> data, size_t offset)
++{
++    return offset + 2 <= data.size() ? (data[offset] << 8) | data[offset + 1] : 0;
++}
++
++static inline int readInt16(std::span<const uint8_t> data, size_t offset)
++{
++    return static_cast<int16_t>(readUInt16(data, offset));
++}
++
++static unsigned advanceFromHorizontalMetrics(std::span<const uint8_t> metrics, unsigned count, Glyph glyph)
++{
++    if (!count)
++        return 0;
++    // Glyphs past the last longHorMetric share its advance.
++    return readUInt16(metrics, std::min<unsigned>(glyph, count - 1) * 4);
++}
++
++static OpenFontCairoFace* cairoFaceData(cairo_scaled_font_t* scaledFont)
++{
++    return static_cast<OpenFontCairoFace*>(cairo_font_face_get_user_data(cairo_scaled_font_get_font_face(scaledFont), &openFontCairoFaceKey));
++}
++
++static cairo_status_t initScaledFont(cairo_scaled_font_t* scaledFont, cairo_t*, cairo_font_extents_t* extents)
++{
++    auto* data = cairoFaceData(scaledFont);
++    if (!data)
++        return CAIRO_STATUS_USER_FONT_ERROR;
++    *extents = data->extents;
++    return CAIRO_STATUS_SUCCESS;
++}
++
++// Fills the glyph's outline in font space, where the em is 1.0 and y runs
++// down; cairo scales it to the size and caches the coverage it draws.
++static cairo_status_t renderGlyph(cairo_scaled_font_t* scaledFont, unsigned long glyph, cairo_t* cr, cairo_text_extents_t* extents)
++{
++    auto* data = cairoFaceData(scaledFont);
++    if (!data)
++        return CAIRO_STATUS_USER_FONT_ERROR;
++
++    Locker locker { OpenFontFace::lock() };
++    double unitsPerEm = data->unitsPerEm;
++    double scale = 1 / (64 * unitsPerEm);
++    extents->x_advance = advanceFromHorizontalMetrics(data->horizontalMetrics, data->horizontalMetricCount, glyph) / unitsPerEm;
++    extents->y_advance = 0;
++
++    int32_t box[4];
++    if (!obof_glyph_extents(data->face, glyph, box) || box[2] <= 0 || box[3] <= 0)
++        return CAIRO_STATUS_SUCCESS; // Nothing to draw: a space.
++    extents->x_bearing = box[0] * scale;
++    extents->y_bearing = -box[1] * scale;
++    extents->width = box[2] * scale;
++    extents->height = box[3] * scale;
++
++    std::array<uint8_t, 256> verbBuffer;
++    std::array<int32_t, 1024> pointBuffer;
++    std::span<uint8_t> verbs { verbBuffer };
++    std::span<int32_t> points { pointBuffer };
++    Vector<uint8_t> largeVerbs;
++    Vector<int32_t> largePoints;
++    uint32_t verbCount = 0;
++    uint32_t pointCount = 0;
++    if (!obof_glyph_outline(data->face, glyph, verbs.data(), verbs.size(), points.data(), points.size() / 2, &verbCount, &pointCount)) {
++        if (verbCount <= verbs.size() && pointCount <= points.size() / 2)
++            return CAIRO_STATUS_SUCCESS; // No outline (a bitmap glyph): cairo keeps the box.
++        largeVerbs.grow(verbCount);
++        largePoints.grow(pointCount * 2);
++        verbs = largeVerbs.mutableSpan();
++        points = largePoints.mutableSpan();
++        if (!obof_glyph_outline(data->face, glyph, verbs.data(), verbCount, points.data(), pointCount, &verbCount, &pointCount))
++            return CAIRO_STATUS_SUCCESS;
++    }
++
++    double currentX = 0;
++    double currentY = 0;
++    size_t point = 0;
++    auto nextPoint = [&](double& x, double& y) -> bool {
++        if (point >= pointCount)
++            return false;
++        x = points[point * 2] * scale;
++        y = -points[point * 2 + 1] * scale;
++        ++point;
++        return true;
++    };
++    for (uint32_t i = 0; i < verbCount; ++i) {
++        double x1, y1, x2, y2, x3, y3;
++        switch (verbs[i]) {
++        case OBOF_PATH_MOVE:
++            if (!nextPoint(x1, y1))
++                return CAIRO_STATUS_SUCCESS;
++            cairo_move_to(cr, x1, y1);
++            currentX = x1;
++            currentY = y1;
++            break;
++        case OBOF_PATH_LINE:
++            if (!nextPoint(x1, y1))
++                return CAIRO_STATUS_SUCCESS;
++            cairo_line_to(cr, x1, y1);
++            currentX = x1;
++            currentY = y1;
++            break;
++        case OBOF_PATH_QUAD:
++            if (!nextPoint(x1, y1) || !nextPoint(x2, y2))
++                return CAIRO_STATUS_SUCCESS;
++            // The quadratic as the cubic with the same curve.
++            cairo_curve_to(cr, currentX + 2 * (x1 - currentX) / 3, currentY + 2 * (y1 - currentY) / 3,
++                x2 + 2 * (x1 - x2) / 3, y2 + 2 * (y1 - y2) / 3, x2, y2);
++            currentX = x2;
++            currentY = y2;
++            break;
++        case OBOF_PATH_CUBIC:
++            if (!nextPoint(x1, y1) || !nextPoint(x2, y2) || !nextPoint(x3, y3))
++                return CAIRO_STATUS_SUCCESS;
++            cairo_curve_to(cr, x1, y1, x2, y2, x3, y3);
++            currentX = x3;
++            currentY = y3;
++            break;
++        case OBOF_PATH_CLOSE:
++            cairo_close_path(cr);
++            break;
++        }
++    }
++    cairo_fill(cr);
++    return CAIRO_STATUS_SUCCESS;
++}
++
++// Emoji in fonts that keep them as PNG images (CBDT, sbix): openfont.library
++// decodes the strike nearest the scaled font's size through the PNG
++// datatype, and the image is painted in em units, as the outline would be.
++// Other glyphs (and every glyph of other fonts) go to renderGlyph.
++static cairo_status_t renderColorGlyph(cairo_scaled_font_t* scaledFont, unsigned long glyph, cairo_t* cr, cairo_text_extents_t* extents)
++{
++    auto* data = cairoFaceData(scaledFont);
++    if (!data || !data->hasColorBitmaps)
++        return CAIRO_STATUS_USER_FONT_NOT_IMPLEMENTED;
++
++    cairo_matrix_t scale;
++    cairo_scaled_font_get_scale_matrix(scaledFont, &scale);
++    unsigned pixelSize = std::lround(std::hypot(scale.xy, scale.yy));
++
++    OBOFColorBitmap bitmap;
++    {
++        Locker locker { OpenFontFace::lock() };
++        if (!obof_glyph_color_bitmap(data->face, glyph, pixelSize, &bitmap))
++            return CAIRO_STATUS_USER_FONT_NOT_IMPLEMENTED;
++    }
++
++    // cairo's ARGB32 is premultiplied, in native byte order.
++    RefPtr<cairo_surface_t> image = adoptRef(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bitmap.width, bitmap.height));
++    if (cairo_surface_status(image.get()) != CAIRO_STATUS_SUCCESS) {
++        obof_free_color_bitmap(&bitmap);
++        return CAIRO_STATUS_SUCCESS;
++    }
++    cairo_surface_flush(image.get());
++    auto* rows = cairo_image_surface_get_data(image.get());
++    int stride = cairo_image_surface_get_stride(image.get());
++    for (uint32_t y = 0; y < bitmap.height; ++y) {
++        auto* row = reinterpret_cast<uint32_t*>(rows + y * stride);
++        for (uint32_t x = 0; x < bitmap.width; ++x) {
++            uint32_t pixel = bitmap.pixels[y * bitmap.width + x];
++            uint32_t alpha = pixel >> 24;
++            if (alpha == 255) {
++                row[x] = pixel;
++                continue;
++            }
++            auto premultiply = [alpha](uint32_t channel) { return (channel * alpha + 127) / 255; };
++            row[x] = (alpha << 24) | (premultiply((pixel >> 16) & 0xFF) << 16) | (premultiply((pixel >> 8) & 0xFF) << 8) | premultiply(pixel & 0xFF);
++        }
++    }
++    cairo_surface_mark_dirty(image.get());
++
++    double em = bitmap.ppem ? bitmap.ppem : 1;
++    extents->x_advance = advanceFromHorizontalMetrics(data->horizontalMetrics, data->horizontalMetricCount, glyph) / static_cast<double>(data->unitsPerEm);
++    extents->y_advance = 0;
++    extents->x_bearing = bitmap.left / em;
++    extents->y_bearing = -bitmap.top / em;
++    extents->width = bitmap.width / em;
++    extents->height = bitmap.height / em;
++    obof_free_color_bitmap(&bitmap);
++
++    cairo_save(cr);
++    cairo_translate(cr, extents->x_bearing, extents->y_bearing);
++    cairo_scale(cr, 1 / em, 1 / em);
++    cairo_set_source_surface(cr, image.get(), 0, 0);
++    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
++    cairo_paint(cr);
++    cairo_restore(cr);
++    return CAIRO_STATUS_SUCCESS;
++}
++
++static void destroyCairoFaceData(void* pointer)
++{
++    auto* data = static_cast<OpenFontCairoFace*>(pointer);
++    {
++        Locker locker { OpenFontFace::lock() };
++        obof_close_face(data->face);
++    }
++    delete data;
++}
++
++OpenFontFace::OpenFontFace(OFFace* face, const String& familyName, unsigned unitsPerEm, unsigned weight, unsigned flags, unsigned glyphCount)
++    : m_face(face)
++    , m_familyName(familyName)
++    , m_unitsPerEm(unitsPerEm)
++    , m_weight(weight)
++    , m_glyphCount(glyphCount)
++    , m_isItalic(flags & OBOF_FACE_ITALIC)
++    , m_isFixedPitch(flags & OBOF_FACE_FIXED)
++    , m_hasColor(flags & OBOF_FACE_COLOR)
++{
++    auto horizontalHeader = table(tag('h', 'h', 'e', 'a'));
++    m_horizontalMetrics = table(tag('h', 'm', 't', 'x'));
++    m_horizontalMetricCount = std::min<unsigned>(readUInt16(horizontalHeader, 34), m_horizontalMetrics.size() / 4);
++
++    auto* data = new OpenFontCairoFace;
++    data->face = face;
++    data->unitsPerEm = unitsPerEm;
++    data->horizontalMetrics = m_horizontalMetrics;
++    data->horizontalMetricCount = m_horizontalMetricCount;
++    data->hasColorBitmaps = !table(tag('C', 'B', 'D', 'T')).empty() || !table(tag('s', 'b', 'i', 'x')).empty();
++    double em = unitsPerEm;
++    int ascender = readInt16(horizontalHeader, 4);
++    int descender = readInt16(horizontalHeader, 6);
++    data->extents.ascent = ascender / em;
++    data->extents.descent = -descender / em;
++    data->extents.height = (ascender - descender + readInt16(horizontalHeader, 8)) / em;
++    data->extents.max_x_advance = readUInt16(horizontalHeader, 10) / em;
++    data->extents.max_y_advance = 0;
++
++    m_cairoFontFace = adoptRef(cairo_user_font_face_create());
++    cairo_user_font_face_set_init_func(m_cairoFontFace.get(), initScaledFont);
++    cairo_user_font_face_set_render_glyph_func(m_cairoFontFace.get(), renderGlyph);
++    if (data->hasColorBitmaps)
++        cairo_user_font_face_set_render_color_glyph_func(m_cairoFontFace.get(), renderColorGlyph);
++    if (cairo_font_face_set_user_data(m_cairoFontFace.get(), &openFontCairoFaceKey, data, destroyCairoFaceData) != CAIRO_STATUS_SUCCESS)
++        destroyCairoFaceData(data);
++}
++
++// The cairo face closes the OFFace when it goes.
++OpenFontFace::~OpenFontFace() = default;
++
++RefPtr<OpenFontFace> OpenFontFace::adopt(OFFace* face, bool shareInstalled)
++{
++    if (!face)
++        return nullptr;
++
++    OBOFFaceInfo info;
++    if (!obof_face_info(face, &info) || !info.unitsPerEm || !obof_set_size(face, info.unitsPerEm)) {
++        obof_close_face(face);
++        return nullptr;
++    }
++    String familyName = String::fromUTF8(info.family);
++
++    // Two lookups (an alias and its family, two weights that come to one
++    // face) give one OpenFontFace, so the font's data is in memory once
++    // and FontPlatformData compares equal.
++    static Lock lock;
++    static NeverDestroyed<HashMap<String, RefPtr<OpenFontFace>>> installedFaces;
++    String key;
++    if (shareInstalled) {
++        key = makeString(familyName, '|', String::fromUTF8(info.style), '|', info.weight, '|', info.flags, '|', info.numGlyphs);
++        Locker locker { lock };
++        if (auto existing = installedFaces->get(key)) {
++            obof_close_face(face);
++            return existing;
++        }
++    }
++
++    RefPtr openFontFace = adoptRef(*new OpenFontFace(face, familyName, info.unitsPerEm, info.weight, info.flags, info.numGlyphs));
++    if (shareInstalled) {
++        Locker locker { lock };
++        installedFaces->add(key, openFontFace);
++    }
++    return openFontFace;
++}
++
++static Lock lookupLock;
++
++RefPtr<OpenFontFace> OpenFontFace::forFamily(const String& family, unsigned weight, bool italic)
++{
++    // Finding a face reads the font index and opens a file, slow on a 68k,
++    // and pages ask for the same few families in many sizes: remember each
++    // answer, found or not.
++    static NeverDestroyed<HashMap<String, RefPtr<OpenFontFace>>> answers;
++    String key = makeString(family.convertToASCIILowercase(), '|', weight, '|', italic ? 1 : 0);
++    {
++        Locker locker { lookupLock };
++        auto it = answers->find(key);
++        if (it != answers->end())
++            return it->value;
++    }
++
++    RefPtr face = adopt(obof_find_face(family.utf8().legacyCStringPointer(), weight, italic), true);
++    Locker locker { lookupLock };
++    answers->set(key, face);
++    return face;
++}
++
++RefPtr<OpenFontFace> OpenFontFace::defaultFace(unsigned weight, bool italic)
++{
++    static NeverDestroyed<HashMap<unsigned, RefPtr<OpenFontFace>>> answers;
++    unsigned key = weight * 2 + (italic ? 1 : 0);
++    {
++        Locker locker { lookupLock };
++        auto it = answers->find(key);
++        if (it != answers->end())
++            return it->value;
++    }
++
++    RefPtr face = adopt(obof_find_face(nullptr, weight, italic), true);
++    Locker locker { lookupLock };
++    answers->set(key, face);
++    return face;
++}
++
++RefPtr<OpenFontFace> OpenFontFace::forCharacter(char32_t character, unsigned weight, bool italic)
++{
++    static NeverDestroyed<HashMap<String, RefPtr<OpenFontFace>>> answers;
++    String key = makeString(static_cast<unsigned>(character), '|', weight, '|', italic ? 1 : 0);
++    {
++        Locker locker { lookupLock };
++        auto it = answers->find(key);
++        if (it != answers->end())
++            return it->value;
++    }
++
++    RefPtr face = adopt(obof_find_face_for_char(character, weight, italic), true);
++    Locker locker { lookupLock };
++    answers->set(key, face);
++    return face;
++}
++
++RefPtr<OpenFontFace> OpenFontFace::createFromMemory(std::span<const uint8_t> data)
++{
++    return adopt(obof_open_face_memory(data.data(), data.size()), false);
++}
++
++RecursiveLock& OpenFontFace::lock()
++{
++    static RecursiveLock s_lock;
++    return s_lock;
++}
++
++Glyph OpenFontFace::glyphForCharacter(char32_t character) const
++{
++    Locker locker { lock() };
++    uint32_t glyph = obof_char_index(m_face, character);
++    return glyph <= std::numeric_limits<Glyph>::max() ? glyph : 0;
++}
++
++unsigned OpenFontFace::advance(Glyph glyph) const
++{
++    return advanceFromHorizontalMetrics(m_horizontalMetrics, m_horizontalMetricCount, glyph);
++}
++
++std::span<const uint8_t> OpenFontFace::table(uint32_t tableTag) const
++{
++    Locker locker { lock() };
++    uint32_t length = 0;
++    const uint8_t* data = obof_table(m_face, tableTag, &length);
++    if (!data)
++        return { };
++    return unsafeMakeSpan(data, length);
++}
++
++bool OpenFontFace::glyphBounds(Glyph glyph, FloatRect& bounds) const
++{
++    Locker locker { lock() };
++    int32_t box[4];
++    if (!obof_glyph_extents(m_face, glyph, box) || box[2] <= 0 || box[3] <= 0)
++        return false;
++    bounds = FloatRect(box[0] / 64.f, -box[1] / 64.f, box[2] / 64.f, box[3] / 64.f);
++    return true;
++}
++
++} // namespace WebCore
++
++#endif // USE(OPENFONT)
+diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontFace.h b/Source/WebCore/platform/graphics/openfont/OpenFontFace.h
+new file mode 100644
+index 00000000000..a0ccb78433c
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/OpenFontFace.h
+@@ -0,0 +1,115 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#if USE(OPENFONT)
++
++#include "Glyph.h"
++#include "RefPtrCairo.h"
++#include <span>
++#include <wtf/Forward.h>
++#include <wtf/RecursiveLockAdapter.h>
++#include <wtf/ThreadSafeRefCounted.h>
++#include <wtf/text/WTFString.h>
++
++struct OFFace;
++
++namespace WebCore {
++
++class FloatRect;
++
++// One face of openfont.library, as WebCore's fonts use it: opened once and
++// kept at a pixel size equal to its units per em, so the library's 26.6
++// values are font units times 64 and every CSS size is a scale of them.
++// Glyphs are drawn through a cairo user font face whose callbacks fill the
++// face's outlines; that cairo face owns the OFFace and closes it when the
++// last scaled font made from it goes.
++class OpenFontFace : public ThreadSafeRefCounted<OpenFontFace> {
++public:
++    // The face for an installed family (or an alias of it, such as Arial
++    // for Liberation Sans), weight and slant, or null when the family is
++    // not installed. The answers, found or not, are remembered.
++    static RefPtr<OpenFontFace> forFamily(const String& family, unsigned weight, bool italic);
++    // The default face (sans-serif), null only with no fonts at all.
++    static RefPtr<OpenFontFace> defaultFace(unsigned weight, bool italic);
++    // An installed face that has a glyph for character, or null.
++    static RefPtr<OpenFontFace> forCharacter(char32_t, unsigned weight, bool italic);
++    // A web font's face, from its file in memory.
++    static RefPtr<OpenFontFace> createFromMemory(std::span<const uint8_t>);
++
++    ~OpenFontFace();
++
++    // An OFFace keeps glyph and shaping state, so calls on faces are made
++    // one at a time, as the FreeType ports do with cairoFontLock(); painting
++    // and OffscreenCanvas text can run on other threads.
++    static RecursiveLock& lock();
++
++    OFFace* face() const { return m_face; }
++    cairo_font_face_t* cairoFontFace() const { return m_cairoFontFace.get(); }
++
++    const String& familyName() const LIFETIME_BOUND { return m_familyName; }
++    unsigned unitsPerEm() const { return m_unitsPerEm; }
++    unsigned weight() const { return m_weight; }
++    bool isItalic() const { return m_isItalic; }
++    bool isFixedPitch() const { return m_isFixedPitch; }
++    bool hasColor() const { return m_hasColor; }
++    unsigned glyphCount() const { return m_glyphCount; }
++
++    Glyph glyphForCharacter(char32_t) const;
++    // Font units, from hmtx: the advance before shaping.
++    unsigned advance(Glyph) const;
++    // A table of the font as it is in the file, or an empty span.
++    std::span<const uint8_t> table(uint32_t tag) const;
++    // The glyph's ink box in font units, y down; false when it has none.
++    bool glyphBounds(Glyph, FloatRect&) const;
++
++    static constexpr uint32_t tag(char a, char b, char c, char d)
++    {
++        return (static_cast<uint32_t>(static_cast<uint8_t>(a)) << 24) | (static_cast<uint32_t>(static_cast<uint8_t>(b)) << 16)
++            | (static_cast<uint32_t>(static_cast<uint8_t>(c)) << 8) | static_cast<uint32_t>(static_cast<uint8_t>(d));
++    }
++
++private:
++    static RefPtr<OpenFontFace> adopt(OFFace*, bool shareInstalled);
++    OpenFontFace(OFFace*, const String& familyName, unsigned unitsPerEm, unsigned weight, unsigned flags, unsigned glyphCount);
++
++    OFFace* m_face { nullptr };
++    RefPtr<cairo_font_face_t> m_cairoFontFace;
++    String m_familyName;
++    unsigned m_unitsPerEm { 1000 };
++    unsigned m_weight { 400 };
++    unsigned m_glyphCount { 0 };
++    bool m_isItalic { false };
++    bool m_isFixedPitch { false };
++    bool m_hasColor { false };
++    // hmtx's longHorMetric array, and how many entries it has (hhea).
++    std::span<const uint8_t> m_horizontalMetrics;
++    unsigned m_horizontalMetricCount { 0 };
++};
++
++} // namespace WebCore
++
++#endif // USE(OPENFONT)
+diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
+new file mode 100644
+index 00000000000..6a748803917
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
+@@ -0,0 +1,251 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "OpenFontLibrary.h"
++
++#include <exec/types.h>
++#include <exec/libraries.h>
++#include <utility/tagitem.h>
++#include <libraries/openfont.h>
++#include <dos/dos.h>
++#include <proto/dos.h>
++#include <proto/exec.h>
++#include <proto/openfont.h>
++
++#include <pthread.h>
++#include <stdlib.h>
++#include <string.h>
++
++/* One base for every thread: the library takes its calls one at a time. */
++struct Library* OpenFontBase;
++static pthread_once_t s_openOnce = PTHREAD_ONCE_INIT;
++static int s_available;
++static int s_hasColorBitmaps;
++
++/* The structures below are the library's own, passed straight through. */
++typedef char obofGlyphMatchesLibrary[sizeof(OBOFGlyph) == sizeof(struct OFGlyph) ? 1 : -1];
++typedef char obofFeatureMatchesLibrary[sizeof(OBOFFeature) == sizeof(struct OFFeature) ? 1 : -1];
++typedef char obofColorMatchesLibrary[sizeof(OBOFColorBitmap) == sizeof(struct OFColorBitmap) ? 1 : -1];
++
++static void closeOpenFont(void)
++{
++    if (OpenFontBase) {
++        CloseLibrary(OpenFontBase);
++        OpenFontBase = NULL;
++    }
++}
++
++static void openOpenFont(void)
++{
++    /* Version 1 is a preview whose structures may change in version 2, so
++     * version 1 exactly, with revision 3's layout calls: LIBS:'s, or the
++     * one in the program's drawer when LIBS: has none or an older one. */
++    static const char* const names[] = { OPENFONTNAME, "PROGDIR:Libs/" OPENFONTNAME };
++    unsigned i;
++    for (i = 0; i < sizeof names / sizeof names[0] && !OpenFontBase; ++i) {
++        OpenFontBase = OpenLibrary((CONST_STRPTR)names[i], OPENFONT_VERSION);
++        if (OpenFontBase && (OpenFontBase->lib_Version != OPENFONT_VERSION || OpenFontBase->lib_Revision < OPENFONT_REVISION_LAYOUT))
++            closeOpenFont();
++    }
++    if (!OpenFontBase)
++        return;
++    atexit(closeOpenFont);
++    s_available = 1;
++    s_hasColorBitmaps = OpenFontBase->lib_Revision >= OPENFONT_REVISION_COLOR;
++
++    /* The fonts in the program's drawer (Fonts/), by their full path, as
++     * the font index keeps every folder's; the installed browser's
++     * (LIBS:WebBrowser/Fonts) and FONTS: are in the index already. */
++    {
++        BPTR lock = Lock((CONST_STRPTR)"PROGDIR:Fonts", SHARED_LOCK);
++        if (lock) {
++            char path[256];
++            if (NameFromLock(lock, (STRPTR)path, sizeof path))
++                OF_AddFontDir((CONST_STRPTR)path);
++            UnLock(lock);
++        }
++    }
++}
++
++int obof_available(void)
++{
++    pthread_once(&s_openOnce, openOpenFont);
++    return s_available;
++}
++
++struct OFFace* obof_find_face(const char* family, unsigned weight, int italic)
++{
++    struct TagItem tags[] = {
++        { OFA_Weight, weight },
++        { OFA_Italic, italic ? TRUE : FALSE },
++        { OFA_Fallbacks, FALSE },
++        { OFA_Exact, family ? TRUE : FALSE },
++        { OFA_Size, 0 },
++        { TAG_END, 0 }
++    };
++    if (!obof_available())
++        return NULL;
++    return OF_FindFaceA((CONST_STRPTR)family, tags);
++}
++
++struct OFFace* obof_find_face_for_char(uint32_t codepoint, unsigned weight, int italic)
++{
++    struct TagItem tags[] = {
++        { OFA_Weight, weight },
++        { OFA_Italic, italic ? TRUE : FALSE },
++        { TAG_END, 0 }
++    };
++    if (!obof_available())
++        return NULL;
++    return OF_FindFaceForCharA(codepoint, tags);
++}
++
++struct OFFace* obof_open_face_memory(const void* data, size_t size)
++{
++    if (!obof_available() || !data || !size)
++        return NULL;
++    return OF_OpenFaceMemoryA((CONST_APTR)data, (ULONG)size, NULL);
++}
++
++void obof_close_face(struct OFFace* face)
++{
++    if (face && OpenFontBase)
++        OF_CloseFace(face);
++}
++
++int obof_set_size(struct OFFace* face, unsigned pixels)
++{
++    return OF_SetSize(face, pixels) == OFERR_OK;
++}
++
++int obof_face_info(struct OFFace* face, OBOFFaceInfo* out)
++{
++    struct OFFaceInfo info;
++    unsigned i;
++    if (OF_GetFaceInfo(face, &info) != OFERR_OK)
++        return 0;
++    for (i = 0; i < sizeof out->family; ++i)
++        out->family[i] = info.fi_Family[i];
++    out->family[sizeof out->family - 1] = 0;
++    for (i = 0; i < sizeof out->style; ++i)
++        out->style[i] = info.fi_Style[i];
++    out->style[sizeof out->style - 1] = 0;
++    out->weight = info.fi_Weight;
++    out->flags = info.fi_Flags;
++    out->unitsPerEm = info.fi_UnitsPerEm;
++    out->numGlyphs = info.fi_NumGlyphs;
++    return 1;
++}
++
++uint32_t obof_char_index(struct OFFace* face, uint32_t codepoint)
++{
++    return OF_CharIndex(face, codepoint);
++}
++
++const uint8_t* obof_table(struct OFFace* face, uint32_t tag, uint32_t* length)
++{
++    ULONG size = 0;
++    const uint8_t* table = (const uint8_t*)OF_GetFontTable(face, tag, &size);
++    if (length)
++        *length = table ? size : 0;
++    return table;
++}
++
++int obof_glyph_extents(struct OFFace* face, uint32_t glyph, int32_t box[4])
++{
++    struct OFGlyphExtents extents;
++    if (OF_GlyphExtents(face, glyph, &extents) != OFERR_OK)
++        return 0;
++    box[0] = extents.ge_XBearing;
++    box[1] = extents.ge_YBearing;
++    box[2] = extents.ge_Width;
++    box[3] = extents.ge_Height;
++    return 1;
++}
++
++int obof_glyph_color_bitmap(struct OFFace* face, uint32_t glyph, unsigned ppem, OBOFColorBitmap* bitmap)
++{
++    struct OFColorBitmap color;
++    memset(bitmap, 0, sizeof *bitmap);
++    if (!s_hasColorBitmaps || OF_GlyphColorBitmap(face, glyph, ppem, &color) != OFERR_OK)
++        return 0;
++    bitmap->pixels = (uint32_t*)color.cb_Pixels;
++    bitmap->width = color.cb_Width;
++    bitmap->height = color.cb_Height;
++    bitmap->left = color.cb_Left;
++    bitmap->top = color.cb_Top;
++    bitmap->ppem = color.cb_PPEM;
++    return 1;
++}
++
++void obof_free_color_bitmap(OBOFColorBitmap* bitmap)
++{
++    struct OFColorBitmap color;
++    if (!bitmap->pixels)
++        return;
++    color.cb_Pixels = (ULONG*)bitmap->pixels;
++    color.cb_Width = bitmap->width;
++    color.cb_Height = bitmap->height;
++    color.cb_Left = bitmap->left;
++    color.cb_Top = bitmap->top;
++    color.cb_PPEM = bitmap->ppem;
++    OF_FreeColorBitmap(&color);
++    memset(bitmap, 0, sizeof *bitmap);
++}
++
++int obof_glyph_outline(struct OFFace* face, uint32_t glyph, uint8_t* verbs, uint32_t maxVerbs,
++    int32_t* points, uint32_t maxPoints, uint32_t* verbCount, uint32_t* pointCount)
++{
++    struct OFOutline outline;
++    LONG error;
++    outline.ol_Verbs = verbs;
++    outline.ol_Points = (LONG*)points;
++    outline.ol_MaxVerbs = maxVerbs;
++    outline.ol_MaxPoints = maxPoints;
++    outline.ol_NumVerbs = 0;
++    outline.ol_NumPoints = 0;
++    error = OF_GlyphOutline(face, glyph, &outline);
++    *verbCount = outline.ol_NumVerbs;
++    *pointCount = outline.ol_NumPoints;
++    return error == OFERR_OK;
++}
++
++uint32_t obof_shape_utf16(struct OFFace* face, const uint16_t* text, uint32_t length, uint32_t offset,
++    uint32_t runLength, uint32_t script, uint32_t language, unsigned direction,
++    const OBOFFeature* features, unsigned featureCount, OBOFGlyph* glyphs, uint32_t capacity)
++{
++    struct TagItem tags[] = {
++        { OFA_UTF16, TRUE },
++        { OFA_Offset, offset },
++        { OFA_Length, runLength },
++        { OFA_Script, script },
++        { OFA_Language, language },
++        { OFA_Direction, direction },
++        { OFA_Features, (ULONG)features },
++        { OFA_NumFeatures, featureCount > OBOF_MAX_FEATURES ? OBOF_MAX_FEATURES : featureCount },
++        { TAG_END, 0 }
++    };
++    return OF_ShapeA(face, (CONST_APTR)text, length, (struct OFGlyph*)glyphs, capacity, tags);
++}
+diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.h b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.h
+new file mode 100644
+index 00000000000..7bc9039e341
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.h
+@@ -0,0 +1,158 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/* openfont.library for WebCore's fonts (USE(OPENFONT)): finding faces,
++ * their tables and outlines, and shaping. Plain C, so that AmigaOS headers
++ * and their macros stay out of WebCore's C++. Each call takes the library's
++ * lock; calls that read files (finding a face) need a process. */
++
++#ifndef OpenFontLibrary_h
++#define OpenFontLibrary_h
++
++#include <stddef.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* A face of openfont.library: opaque. */
++struct OFFace;
++
++/* 1 when openfont.library 1.3 (revision 3, the layout calls) or newer is
++ * open; the first call opens it. */
++int obof_available(void);
++
++/* A face for a family (or one of its aliases) at a weight (100-900) and
++ * slant, with no fallbacks of its own, or NULL when the family is not
++ * installed. NULL family: the default face (sans-serif), never NULL while
++ * any font is installed. */
++struct OFFace* obof_find_face(const char* family, unsigned weight, int italic);
++/* A face with a glyph for codepoint, or NULL. */
++struct OFFace* obof_find_face_for_char(uint32_t codepoint, unsigned weight, int italic);
++/* A face from a font file in memory; the face keeps its own copy. */
++struct OFFace* obof_open_face_memory(const void* data, size_t size);
++void obof_close_face(struct OFFace*);
++
++/* Sets the size every later value of the face is measured at. */
++int obof_set_size(struct OFFace*, unsigned pixels);
++
++#define OBOF_FACE_ITALIC   0x0001
++#define OBOF_FACE_FIXED    0x0002
++#define OBOF_FACE_SCALABLE 0x0004
++#define OBOF_FACE_COLOR    0x0008
++
++typedef struct {
++    char family[64];
++    char style[64];
++    unsigned weight;        /* 100-900 */
++    unsigned flags;         /* OBOF_FACE_ above */
++    unsigned unitsPerEm;
++    unsigned numGlyphs;
++} OBOFFaceInfo;
++
++int obof_face_info(struct OFFace*, OBOFFaceInfo*);
++
++/* The glyph for a character, 0 when the face has none. */
++uint32_t obof_char_index(struct OFFace*, uint32_t codepoint);
++
++/* A table of the font ('hhea', 'OS/2'), as long as the face lives, or NULL. */
++const uint8_t* obof_table(struct OFFace*, uint32_t tag, uint32_t* length);
++
++/* A glyph's ink box at the face's size, 26.6 and y up: x bearing, y
++ * bearing (the top), width, height. 0 when the glyph has none. */
++int obof_glyph_extents(struct OFFace*, uint32_t glyph, int32_t box[4]);
++
++/* A colour glyph (an emoji) from a font with PNG images (CBDT or sbix),
++ * decoded by openfont.library 1.4 through the PNG datatype: pixels are
++ * 0xAARRGGBB, not premultiplied; left and top place the image's top-left
++ * corner from the pen, y up, in the strike's pixels (ppem). 0 when the
++ * glyph has none, or the library is older than 1.4. */
++typedef struct {
++    uint32_t* pixels;
++    uint32_t width;
++    uint32_t height;
++    int32_t left;
++    int32_t top;
++    uint32_t ppem;
++} OBOFColorBitmap;
++
++int obof_glyph_color_bitmap(struct OFFace*, uint32_t glyph, unsigned ppem, OBOFColorBitmap*);
++void obof_free_color_bitmap(OBOFColorBitmap*);
++
++#define OBOF_PATH_MOVE  0
++#define OBOF_PATH_LINE  1
++#define OBOF_PATH_QUAD  2
++#define OBOF_PATH_CUBIC 3
++#define OBOF_PATH_CLOSE 4
++
++/* A glyph's outline at the face's size: verbs (OBOF_PATH_ above) and
++ * points (x, y pairs, 26.6, y up). Fills what fits, sets *verbCount and
++ * *pointCount to the whole outline's, and returns 0 when it did not fit. */
++int obof_glyph_outline(struct OFFace*, uint32_t glyph, uint8_t* verbs, uint32_t maxVerbs,
++    int32_t* points, uint32_t maxPoints, uint32_t* verbCount, uint32_t* pointCount);
++
++#define OBOF_DIR_AUTO 0
++#define OBOF_DIR_LTR  1
++#define OBOF_DIR_RTL  2
++
++#define OBOF_FEATURE_END 0xFFFFFFFFu
++#define OBOF_MAX_FEATURES 32
++
++typedef struct {
++    uint32_t tag;
++    uint32_t value;
++    uint32_t start;
++    uint32_t end;
++} OBOFFeature;
++
++#define OBOF_GLYPH_MISSING 0x0001
++
++/* One shaped glyph: 26.6 at the face's size, in visual order. */
++typedef struct {
++    uint32_t glyph;
++    uint32_t cluster;       /* in UTF-16 units from the start of the text */
++    int32_t xAdvance;
++    int32_t yAdvance;
++    int32_t xOffset;
++    int32_t yOffset;
++    uint16_t face;
++    uint16_t flags;         /* OBOF_GLYPH_ above */
++} OBOFGlyph;
++
++/* Shapes [offset, offset + runLength) of UTF-16 text with all of it as
++ * context. script is the ISO 15924 code as a tag ('Arab'), 0 from the
++ * text; language an OpenType language system tag, 0 the default. Returns
++ * the run's glyph count, writing up to capacity of them (none with glyphs
++ * NULL), or 0 on failure. */
++uint32_t obof_shape_utf16(struct OFFace*, const uint16_t* text, uint32_t length, uint32_t offset,
++    uint32_t runLength, uint32_t script, uint32_t language, unsigned direction,
++    const OBOFFeature* features, unsigned featureCount, OBOFGlyph* glyphs, uint32_t capacity);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* OpenFontLibrary_h */
+diff --git a/Source/WebCore/platform/graphics/openfont/SimpleFontDataOpenFont.cpp b/Source/WebCore/platform/graphics/openfont/SimpleFontDataOpenFont.cpp
+new file mode 100644
+index 00000000000..ef8e363613f
+--- /dev/null
++++ b/Source/WebCore/platform/graphics/openfont/SimpleFontDataOpenFont.cpp
+@@ -0,0 +1,194 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "Font.h"
++
++#if USE(OPENFONT) && USE(CAIRO)
++
++#include "FloatRect.h"
++#include "FontDescription.h"
++#include "NotImplemented.h"
++#include "OpenFontFace.h"
++#include <cairo.h>
++#include <wtf/MathExtras.h>
++
++namespace WebCore {
++
++static inline unsigned readUInt16(std::span<const uint8_t> data, size_t offset)
++{
++    return offset + 2 <= data.size() ? (data[offset] << 8) | data[offset + 1] : 0;
++}
++
++static inline int readInt16(std::span<const uint8_t> data, size_t offset)
++{
++    return static_cast<int16_t>(readUInt16(data, offset));
++}
++
++// The glyph's ink height (width for vertical text) at the font's size.
++static std::optional<float> heightOfCharacter(const OpenFontFace& face, char32_t character, float scale, FontOrientation orientation)
++{
++    FloatRect bounds;
++    if (!face.glyphBounds(face.glyphForCharacter(character), bounds))
++        return std::nullopt;
++    return (orientation == FontOrientation::Horizontal ? bounds.height() : bounds.width()) * scale;
++}
++
++void FontBase::platformInit()
++{
++    if (!m_platformData.size())
++        return;
++
++    RefPtr face = m_platformData.openFontFace();
++    ASSERT(face);
++    float size = m_platformData.size();
++    unsigned unitsPerEm = face->unitsPerEm();
++    float scale = size / unitsPerEm;
++
++    // The line metrics as FreeType gives them to cairo, unhinted: hhea's,
++    // or OS/2's when hhea has none (FreeType's sfobjs.c).
++    auto horizontalHeader = face->table(OpenFontFace::tag('h', 'h', 'e', 'a'));
++    auto os2 = face->table(OpenFontFace::tag('O', 'S', '/', '2'));
++    auto postScript = face->table(OpenFontFace::tag('p', 'o', 's', 't'));
++    int ascender = readInt16(horizontalHeader, 4);
++    int descender = readInt16(horizontalHeader, 6);
++    int height = ascender - descender + readInt16(horizontalHeader, 8);
++    if (!ascender && !descender && os2.size() >= 78) {
++        int typoAscender = readInt16(os2, 68);
++        int typoDescender = readInt16(os2, 70);
++        if (typoAscender || typoDescender) {
++            ascender = typoAscender;
++            descender = typoDescender;
++            height = ascender - descender + readInt16(os2, 72);
++        } else {
++            ascender = readUInt16(os2, 74);
++            descender = -static_cast<int>(readUInt16(os2, 76));
++            height = ascender - descender;
++        }
++    }
++    float ascent = ascender * scale;
++    float descent = -descender * scale;
++    float lineGap = (height - ascender + descender) * scale;
++    std::optional<float> capHeight;
++    std::optional<float> xHeight;
++
++    if (os2.size() >= 78) {
++        // With OS/2's USE_TYPO_METRICS flag, its typographic metrics.
++        const unsigned useTypoMetricsMask = 1 << 7;
++        if (readUInt16(os2, 62) & useTypoMetricsMask) {
++            ascent = readInt16(os2, 68) * scale;
++            descent = -readInt16(os2, 70) * scale;
++            lineGap = readInt16(os2, 72) * scale;
++        }
++        // sxHeight and sCapHeight are in version 2 and later.
++        if (readUInt16(os2, 0) >= 2 && os2.size() >= 90) {
++            xHeight = readInt16(os2, 86) * scale;
++            capHeight = readInt16(os2, 88) * scale;
++        }
++    }
++
++    // Otherwise, measured from the glyphs.
++    if (!capHeight.value_or(0))
++        capHeight = heightOfCharacter(*face, 'T', scale, platformData().orientation());
++    if (!xHeight.value_or(0))
++        xHeight = heightOfCharacter(*face, 'x', scale, platformData().orientation());
++
++    m_fontMetrics.setAscent(ascent);
++    m_fontMetrics.setDescent(descent);
++    m_fontMetrics.setCapHeight(capHeight.value_or(0));
++    m_fontMetrics.setLineSpacing(lroundf(ascent) + lroundf(descent) + lroundf(lineGap));
++    m_fontMetrics.setLineGap(lineGap);
++    m_fontMetrics.setXHeight(xHeight.value_or(0));
++    m_fontMetrics.setUnitsPerEm(unitsPerEm);
++
++    if (postScript.size() >= 12) {
++        // FreeType keeps the top of the underline: post's position less half
++        // its thickness, in whole font units.
++        int thickness = readInt16(postScript, 10);
++        int position = static_cast<int16_t>(readInt16(postScript, 8) - thickness / 2);
++        m_fontMetrics.setUnderlinePosition(-((position + thickness / 2.) / unitsPerEm) * size);
++        m_fontMetrics.setUnderlineThickness((thickness / static_cast<float>(unitsPerEm)) * size);
++    }
++
++    cairo_glyph_t spaceGlyph = { face->glyphForCharacter(' '), 0, 0 };
++    cairo_text_extents_t textExtents;
++    cairo_scaled_font_glyph_extents(m_platformData.scaledFont(), &spaceGlyph, 1, &textExtents);
++    m_spaceWidth = narrowPrecisionToFloat((platformData().orientation() == FontOrientation::Horizontal) ? textExtents.x_advance : -textExtents.y_advance);
++    m_syntheticBoldOffset = m_platformData.syntheticBold() ? 1.0f : 0.f;
++
++    // Disable antialiasing for the Ahem font because many tests require this.
++    if (equalLettersIgnoringASCIICase(face->familyName(), "ahem"_s))
++        m_allowsAntialiasing = false;
++}
++
++void Font::platformCharWidthInit()
++{
++    m_avgCharWidth = 0.f;
++    m_maxCharWidth = 0.f;
++    initCharWidths();
++}
++
++RefPtr<Font> Font::platformCreateScaledFont(const FontDescription& fontDescription, float scaleFactor) const
++{
++    RefPtr face = m_platformData.openFontFace();
++    ASSERT(face);
++    auto features = m_platformData.fontFaceFeatures();
++    return Font::create(FontPlatformData(face.releaseNonNull(),
++        scaleFactor * m_platformData.size(),
++        m_platformData.syntheticBold(),
++        m_platformData.syntheticOblique(),
++        fontDescription.orientation(),
++        m_platformData.metricsOverrides(),
++        m_platformData.customPlatformData(),
++        WTF::move(features)),
++        origin(), IsInterstitial::No);
++}
++
++RefPtr<Font> Font::platformCreateHalfWidthFont() const
++{
++    // FIXME: https://bugs.webkit.org/show_bug.cgi?id=281333 : implement half width font for this platform.
++    notImplemented();
++    return nullptr;
++}
++
++void Font::determinePitch()
++{
++    m_treatAsFixedPitch = m_platformData.isFixedPitch();
++}
++
++bool Font::platformSupportsCodePoint(char32_t character, std::optional<char32_t> variation) const
++{
++    RefPtr face = m_platformData.openFontFace();
++    if (!face)
++        return false;
++    // OpenFont reads no variation sequences (cmap format 14).
++    if (variation)
++        return false;
++    return !!face->glyphForCharacter(character);
++}
++
++} // namespace WebCore
++
++#endif // USE(OPENFONT) && USE(CAIRO)
+diff --git a/Source/WebCore/rendering/style/RenderStyleConstants.h b/Source/WebCore/rendering/style/RenderStyleConstants.h
+index ed65dc87fc4..b18b081eca2 100644
+--- a/Source/WebCore/rendering/style/RenderStyleConstants.h
++++ b/Source/WebCore/rendering/style/RenderStyleConstants.h
+@@ -909,7 +909,7 @@ enum class AutoRepeatType : uint8_t {
+     Fit
+ };
+ 
+-#if USE(FREETYPE)
++#if USE(FREETYPE) || USE(OPENFONT)
+ // The maximum allowed font size is 32767 because `hb_position_t` is `int32_t`,
+ // where the first 16 bits are used to represent the integer part which effectively makes it `signed short`
+ constexpr float maximumAllowedFontSize = std::numeric_limits<short>::max();
+diff --git a/Source/cmake/FindOpenFont.cmake b/Source/cmake/FindOpenFont.cmake
+new file mode 100644
+index 00000000000..5d981ac944d
+--- /dev/null
++++ b/Source/cmake/FindOpenFont.cmake
+@@ -0,0 +1,88 @@
++# Copyright (C) 2026 AmigaChrome Team.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++# 1.  Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++# 2.  Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in the
++#     documentation and/or other materials provided with the distribution.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER AND ITS CONTRIBUTORS ``AS
++# IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR ITS
++# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++# OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++# WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++# OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++# ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++#[=======================================================================[.rst:
++FindOpenFont
++------------
++
++Find the SDK of openfont.library (DalsinAI/openamigafont, ``sdk/Include_H``):
++``libraries/openfont.h``, ``proto/openfont.h`` and the inline calls. The
++library itself is opened at run time, so there is nothing to link.
++
++Imported Targets
++^^^^^^^^^^^^^^^^
++
++``OpenFont::OpenFont``
++  The SDK's headers, if found.
++
++Result Variables
++^^^^^^^^^^^^^^^^
++
++``OpenFont_FOUND``
++  true if (the requested version of) the SDK is available.
++``OpenFont_VERSION``
++  the version and revision its headers describe (1.3 for the layout calls).
++``OpenFont_INCLUDE_DIRS``
++  where to find ``libraries/openfont.h``.
++
++#]=======================================================================]
++
++find_path(OpenFont_INCLUDE_DIR NAMES libraries/openfont.h proto/openfont.h)
++
++if (OpenFont_INCLUDE_DIR AND EXISTS "${OpenFont_INCLUDE_DIR}/libraries/openfont.h")
++    file(READ "${OpenFont_INCLUDE_DIR}/libraries/openfont.h" _OpenFont_HEADER)
++    string(REGEX MATCH "#define +OPENFONT_VERSION +([0-9]+)" _dummy "${_OpenFont_HEADER}")
++    set(_OpenFont_MAJOR "${CMAKE_MATCH_1}")
++    # The newest revision the header names a define for.
++    set(_OpenFont_MINOR 0)
++    string(REGEX MATCHALL "#define +OPENFONT_REVISION_[A-Z]+ +([0-9]+)" _OpenFont_REVISIONS "${_OpenFont_HEADER}")
++    foreach (_OpenFont_REVISION IN LISTS _OpenFont_REVISIONS)
++        string(REGEX REPLACE ".* ([0-9]+)$" "\\1" _OpenFont_NUMBER "${_OpenFont_REVISION}")
++        if (_OpenFont_NUMBER GREATER _OpenFont_MINOR)
++            set(_OpenFont_MINOR "${_OpenFont_NUMBER}")
++        endif ()
++    endforeach ()
++    set(OpenFont_VERSION "${_OpenFont_MAJOR}.${_OpenFont_MINOR}")
++    unset(_OpenFont_HEADER)
++    unset(_OpenFont_REVISIONS)
++endif ()
++
++include(FindPackageHandleStandardArgs)
++find_package_handle_standard_args(OpenFont
++    FOUND_VAR OpenFont_FOUND
++    REQUIRED_VARS OpenFont_INCLUDE_DIR
++    VERSION_VAR OpenFont_VERSION
++)
++
++if (OpenFont_INCLUDE_DIR AND NOT TARGET OpenFont::OpenFont)
++    add_library(OpenFont::OpenFont INTERFACE IMPORTED GLOBAL)
++    set_target_properties(OpenFont::OpenFont PROPERTIES
++        INTERFACE_INCLUDE_DIRECTORIES "${OpenFont_INCLUDE_DIR}"
++    )
++endif ()
++
++if (OpenFont_FOUND)
++    set(OpenFont_INCLUDE_DIRS ${OpenFont_INCLUDE_DIR})
++endif ()
++
++mark_as_advanced(OpenFont_INCLUDE_DIR)
+diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
+index 66562bed729..60a0bd3e1ea 100644
+--- a/Source/cmake/OptionsAmiga.cmake
++++ b/Source/cmake/OptionsAmiga.cmake
+@@ -1,6 +1,6 @@
+ # The Amiga port: WebCore in one process, for AmigaOS 3.2 (68020 + FPU).
+-# Drawing is Cairo's image surface, text is FreeType + HarfBuzz + fontconfig,
+-# the network is curl on OpenTLS. There is no WebKit (multi-process) layer:
++# Drawing is Cairo's image surface, text is OpenFont (openfont.library: fonts,
++# shaping and the font index), the network is curl on OpenTLS. There is no WebKit (multi-process) layer:
+ # the embedding layer (page clients, loader strategy) belongs to the browser.
+ 
+ if (CMAKE_SYSTEM_NAME MATCHES "^(AROS|AmigaOS)$")
+@@ -31,9 +31,7 @@ find_package(ICU 70.1 REQUIRED COMPONENTS data i18n uc)
+ if (ENABLE_WEBCORE)
+     find_package(Cairo 1.16.0 REQUIRED)
+     find_package(CURL 7.85.0 REQUIRED)
+-    find_package(Fontconfig 2.13.0 REQUIRED)
+-    find_package(Freetype 2.9.0 REQUIRED)
+-    find_package(HarfBuzz 2.7.4 REQUIRED COMPONENTS ICU)
++    find_package(OpenFont 1.3 REQUIRED)
+     find_package(OXP 0.1 REQUIRED)
+     find_package(SQLite3 3.23.1 REQUIRED)
+     if (NOT TARGET SQLite3::SQLite3) # CMake < 4.3
+@@ -107,8 +105,11 @@ SET_AND_EXPOSE_TO_BUILD(WTF_DEFAULT_EVENT_LOOP 0)
+ # Set even when only JavaScriptCore is built, so cmakeconfig.h stays the same.
+ SET_AND_EXPOSE_TO_BUILD(USE_CAIRO ON)
+ SET_AND_EXPOSE_TO_BUILD(USE_CURL ON)
+-SET_AND_EXPOSE_TO_BUILD(USE_FREETYPE ON)
+-SET_AND_EXPOSE_TO_BUILD(USE_HARFBUZZ ON)
++# Text on openfont.library (DalsinAI/openamigafont) in place of FreeType,
++# HarfBuzz and fontconfig: platform/OpenFont.cmake.
++SET_AND_EXPOSE_TO_BUILD(USE_FREETYPE OFF)
++SET_AND_EXPOSE_TO_BUILD(USE_HARFBUZZ OFF)
++SET_AND_EXPOSE_TO_BUILD(USE_OPENFONT ON)
+ # No OpenSSL: curl does TLS through OpenTLS (opentls.library), which WebCore
+ # does not see. WebCrypto has no backend (crypto/amiga/CryptoAmiga.cpp).
+ SET_AND_EXPOSE_TO_BUILD(USE_OPENSSL OFF)
+-- 
+2.43.0
+
