@@ -22,6 +22,10 @@ Programs (left out with --no-programs, for restaging only the pages):
                 $OBSTAMP_CC (default $OS32_GCC16/prefix/bin/m68k-amigaos-gcc)
   Fonts/        the .ttf files of --fonts (default $OB_FONTS); needed unless
                 DIR/Fonts already has them
+  Libs/openfont.library   --openfont FILE (default $OPENFONT_LIB), optional:
+                the engine draws its text with openfont.library 1.4 (WebKit
+                patch 0090) and opens this one when LIBS: has none or an
+                older one
   OpenBrowserLite, obfetch   from --lite (default $OB_LITE_DIR), optional
 
 See docs/BENCHMARKS.md.
@@ -57,6 +61,8 @@ def job_script(page, opts, have_fetch, lite_gui):
     width, height = opts.size
     target = page["target"] if page["url"] else "pages/%s.html" % ident
     view = ["obcore-view", "-wait", str(wait)]
+    if page["settle"] is not None:
+        view += ["-settle", str(page["settle"])]
     if page["text"]:
         view.append("-text")
     if page["url"]:
@@ -158,8 +164,11 @@ def stage_programs(opts, out, info):
         shutil.copyfile(f, os.path.join(out, "Fonts", os.path.basename(f)))
     if not glob.glob(os.path.join(out, "Fonts", "*.ttf")):
         raise SystemExit("no fonts: set --fonts or OB_FONTS to the Liberation and DejaVu .ttf folder")
-    os.makedirs(os.path.join(out, "fontconfig"), exist_ok=True)
-    shutil.copyfile(os.path.join(ROOT, "src", "webcore", "fontconfig", "fonts.conf"), os.path.join(out, "fontconfig", "fonts.conf"))
+    openfont = opts.openfont or os.environ.get("OPENFONT_LIB")
+    if openfont:
+        os.makedirs(os.path.join(out, "Libs"), exist_ok=True)
+        shutil.copyfile(openfont, os.path.join(out, "Libs", "openfont.library"))
+        info.append("openfont.library %s" % sha256_file(openfont))
     shutil.copyfile(os.path.join(ROOT, "src", "webcore", "blocklist"), os.path.join(out, "blocklist"))
 
     lite = opts.lite or os.environ.get("OB_LITE_DIR")
@@ -184,6 +193,7 @@ def main(argv=None):
     p.add_argument("--size", default="800x600", help="viewport WxH (default 800x600)")
     p.add_argument("--bin", help="folder holding obcore-view")
     p.add_argument("--fonts", help="folder of .ttf files (default $OB_FONTS)")
+    p.add_argument("--openfont", help="openfont.library to stage in Libs/ (default $OPENFONT_LIB)")
     p.add_argument("--lite", help="folder holding OpenBrowserLite and/or obfetch (default $OB_LITE_DIR)")
     p.add_argument("--obstamp", help="a built obstamp")
     p.add_argument("--lite-gui", type=int, default=0, metavar="SECONDS",

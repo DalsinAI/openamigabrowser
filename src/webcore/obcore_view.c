@@ -12,6 +12,10 @@
  *                         picture as page-dl.png beside page.png
  *   obcore-view -text ...  also print the page's text (OBVIEW_TEXT, cut
  *                         to 2000 bytes), for pages that show a score
+ *   obcore-view -wait N ...    run the page for at most N seconds (120)
+ *   obcore-view -settle N ...  paint once the load is over and the network
+ *                         has been quiet for N seconds (2; 0 = only when no
+ *                         timer is due), see run()
  *
  * If the run loop stops turning for 20 s (a thread waits on another that
  * never answers), a watchdog prints OBVIEW_STALL, then one OBVIEW_THREAD
@@ -42,7 +46,7 @@
 #include "ob_webview.h"
 #include "oam_stack.h"
 
-static const char version[] __attribute__((used)) = "$VER: obcore-view 0.1 (4.10.2026)";
+static const char version[] __attribute__((used)) = "$VER: obcore-view 0.2 (23.10.2026)";
 
 /* abort(), replaced so a crash says where it came from: the return
  * addresses on the stack that lie in our code, as offsets for the link map. */
@@ -219,6 +223,9 @@ static int loading = -1;   /* -1 not started yet, 1 loading, 0 done */
 static int invalidations;
 static long busyCycles, waits;  /* run loop turns with work waiting, and waits */
 static time_t startTime;        /* for the seconds in OBVIEW_CREATED and OBVIEW_RAN */
+static double settleSeconds = 2.0;  /* -settle: network quiet this long after the load counts as done */
+static long lastNetworkMs;          /* benchNow() of the last request started or ended, or of the load's end */
+static int settledSaid;
 
 /* Benchmark (tools/bench): milliseconds since the program started for each
  * step, the requests, and free memory as AvailMem(MEMF_ANY) sees it. All of
@@ -289,7 +296,7 @@ static void onLoading(void *context, int isLoading, int percent)
     if (isLoading != loading || !isLoading)
         printf("OBVIEW_LOADING %d %d%%\n", isLoading, percent);
     if (!isLoading && loading == 1)
-        benchLoadDone = benchNow();
+        benchLoadDone = lastNetworkMs = benchNow();
     loading = isLoading;
 }
 
@@ -325,10 +332,11 @@ static long sinceStart(void)
 static void onResource(void *context, const char *url, int started, const char *error)
 {
     (void)context;
+    lastNetworkMs = benchNow();
     if (started)
         benchRequests++;
     else {
-        benchLastResource = benchNow();
+        benchLastResource = lastNetworkMs;
         if (benchFirstLoaded < 0)
             benchFirstLoaded = benchLastResource;
         if (error)
@@ -362,8 +370,41 @@ static char *readFile(const char *name)
     return text;
 }
 
+/* Requests asked for and not yet ended. A failure can be reported for a
+ * request that never started (a blocked host), so this can go below 0. */
+static long requestsOpen(void)
+{
+    return benchRequests - benchLoaded - benchFailed;
+}
+
+/* Whether the page is done: the load is over and either nothing is due
+ * within 50 ms, or the network has settled: at most two requests open
+ * (a long poll, a beacon) and none started or ended for -settle seconds.
+ * A page with an endless animation or a short repeating timer (a loading
+ * placeholder, a carousel, a script polling a flag) always has a timer
+ * due, so without the second rule it ran until -wait ran out and was
+ * painted only then (Reddit: loaded in 9 s, painted at 160 s), while a
+ * window paints such a page at each rendering update. The rule is the
+ * one browser test tools call "network idle". */
+static int pageDone(double next)
+{
+    if (loading != 0)
+        return 0;
+    if (next < 0 || next > 0.05)
+        return 1;
+    if (settleSeconds <= 0 || requestsOpen() > 2 || benchNow() - lastNetworkMs < (long)(settleSeconds * 1000))
+        return 0;
+    if (!settledSaid) {
+        settledSaid = 1;
+        printf("OBVIEW_SETTLED network quiet %.1f s, %ld requests open, timers still running, at %ld ms\n", settleSeconds,
+            requestsOpen() > 0 ? requestsOpen() : 0, benchNow());
+        fflush(stdout);
+    }
+    return 1;
+}
+
 /* Runs WebCore's run loop for up to `seconds`, or until the page is done
- * and nothing is due within 50 ms, saying every 15 seconds how it goes. */
+ * (pageDone()), saying every 15 seconds how it goes. */
 static void run(double seconds)
 {
     time_t start = time(NULL), lastTick = start;
@@ -373,7 +414,7 @@ static void run(double seconds)
         heartbeat++;
         benchSample(0);
         next = ob_webcore_next_timer();
-        if (loading == 0 && (next < 0 || next > 0.05))
+        if (pageDone(next))
             break;
         if (next != 0) {
             Delay(next < 0 || next > 0.2 ? 10 : (int)(next * 50) + 1);
@@ -504,6 +545,10 @@ static int viewMain(int argc, char **argv)
         seconds = atof(argv[argi + 1]);
         argi += 2;
     }
+    if (argc > argi + 1 && !strcmp(argv[argi], "-settle")) {
+        settleSeconds = atof(argv[argi + 1]);
+        argi += 2;
+    }
     if (argc > argi + 1 && !strcmp(argv[argi], "-tls")) {
         tlsFile = argv[argi + 1];          /* TLS sessions: read before, saved after */
         argi += 2;
@@ -526,7 +571,7 @@ static int viewMain(int argc, char **argv)
         argi++;
     }
     if (argc <= argi) {
-        printf("usage: obcore-view [-wait seconds] [-tls file] [-input] [-dl] [-text] [-url] <file.html|address> [width height] [page.png]\n");
+        printf("usage: obcore-view [-wait seconds] [-settle seconds] [-tls file] [-input] [-dl] [-text] [-url] <file.html|address> [width height] [page.png]\n");
         return 10;
     }
     source = argv[argi++];

@@ -1,0 +1,47 @@
+From da95463bf099358661d2ce434a10d787cf6f0db0 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 08:48:45 +0000
+Subject: [PATCH] WebCore: shape under the OpenFont lock, measure outside it
+
+The complex text path held OpenFontFace::lock() while it asked cairo for
+glyph extents. cairo takes its scaled font's lock first and then calls
+renderGlyph, which takes OpenFontFace::lock(), so a task measuring while
+another drew the same font could deadlock. Only obof_shape_utf16 holds
+the lock now.
+
+Team 3
+---
+ .../ComplexTextControllerOpenFont.cpp         | 20 ++++++++++++-------
+ 1 file changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/openfont/ComplexTextControllerOpenFont.cpp b/Source/WebCore/platform/graphics/openfont/ComplexTextControllerOpenFont.cpp
+index 55b22f9db66..b2641a47d81 100644
+--- a/Source/WebCore/platform/graphics/openfont/ComplexTextControllerOpenFont.cpp
++++ b/Source/WebCore/platform/graphics/openfont/ComplexTextControllerOpenFont.cpp
+@@ -219,13 +219,19 @@ void ComplexTextController::collectComplexTextRunsForCharacters(std::span<const
+         unsigned runLength = run.endIndex - run.startIndex;
+         shaped.resize(runLength + 8);
+         uint32_t glyphCount = 0;
+-        Locker locker { OpenFontFace::lock() };
+-        for (unsigned attempt = 0; attempt < 2; ++attempt) {
+-            glyphCount = obof_shape_utf16(face->face(), reinterpret_cast<const uint16_t*>(text.span().data()), text.size(), run.startIndex, runLength,
+-                script, 0, rtl ? OBOF_DIR_RTL : OBOF_DIR_LTR, features.span().data(), features.size(), shaped.mutableSpan().data(), shaped.size());
+-            if (glyphCount <= shaped.size())
+-                break;
+-            shaped.resize(glyphCount);
++        {
++            // Only the shaping holds the lock. cairo takes its scaled font's
++            // lock and then renderGlyph takes this one, so asking cairo for
++            // glyph extents below with this one held could deadlock against
++            // a task drawing the same font.
++            Locker locker { OpenFontFace::lock() };
++            for (unsigned attempt = 0; attempt < 2; ++attempt) {
++                glyphCount = obof_shape_utf16(face->face(), reinterpret_cast<const uint16_t*>(text.span().data()), text.size(), run.startIndex, runLength,
++                    script, 0, rtl ? OBOF_DIR_RTL : OBOF_DIR_LTR, features.span().data(), features.size(), shaped.mutableSpan().data(), shaped.size());
++                if (glyphCount <= shaped.size())
++                    break;
++                shaped.resize(glyphCount);
++            }
+         }
+         glyphCount = std::min<uint32_t>(glyphCount, shaped.size());
+         if (!glyphCount)

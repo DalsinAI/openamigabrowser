@@ -8,6 +8,10 @@
 #           live    sites on the internet over https://, fetched read-only
 #   target  a repository path (local pages) or an http(s):// address
 #   options wait=N   seconds obcore-view lets the page load (default BENCH_WAIT, 120)
+#           settle=N obcore-view -settle: paint once the network has been quiet
+#                    N seconds after the load, though timers still run
+#                    (default 2); 0 waits until no timer is due, for pages
+#                    that work on timers after their load (Acid3)
 #           text=1   also print the page's text (OBVIEW_TEXT; Acid3's score)
 #           lite=0   do not run OpenBrowser Lite's obfetch on it
 #
@@ -26,7 +30,7 @@ test1       local   tests/pages/test1.html
 
 # Compatibility
 features    compat  tests/bench/compat/features.html
-acid3       compat  http://acid3.acidtests.org/            text=1 wait=180 lite=0
+acid3       compat  http://acid3.acidtests.org/            text=1 wait=180 settle=0 lite=0
 
 # Live: common sites over https://
 example     live    https://example.com/

@@ -110,10 +110,11 @@ class Manifest(unittest.TestCase):
         self.assertTrue(acid3["text"])
         self.assertFalse(acid3["lite"])
         self.assertEqual(acid3["wait"], 180)
+        self.assertEqual(acid3["settle"], 0)
 
     def test_bad_lines(self):
         for text in ("a local", "a nowhere x.html", "a live tests/x.html", "a b c d e", "bad_id local x.html",
-                     "a local x.html wait=x", "a local x.html\na local y.html"):
+                     "a local x.html wait=x", "a local x.html settle=x", "a local x.html\na local y.html"):
             with self.assertRaises(benchlib.ManifestError, msg=text):
                 benchlib.parse_manifest(text)
 
@@ -162,7 +163,7 @@ class Stage(unittest.TestCase):
             self.assertNotIn("obfetch", job)
             self.assertTrue(all(len(line) < 400 for line in job.splitlines()))
             job.encode("ascii")
-        self.assertIn('obcore-view -wait 180 -text -url "http://acid3.acidtests.org/" 800 600 png/acid3.png', self.read("jobs", "acid3"))
+        self.assertIn('obcore-view -wait 180 -settle 0 -text -url "http://acid3.acidtests.org/" 800 600 png/acid3.png', self.read("jobs", "acid3"))
         self.assertIn('obcore-view -wait 120 "pages/text.html" 800 600 png/text.png', self.read("jobs", "text"))
         self.assertTrue(os.path.isfile(os.path.join(self.tmp, "Bench", "pages", "features.html")))
         self.assertEqual(len(self.read("bench-manifest.txt").splitlines()), len(benchlib.load_manifest()))
@@ -175,8 +176,10 @@ class Stage(unittest.TestCase):
         write(os.path.join(lite, "obfetch"), "fetch")
         write(os.path.join(lite, "OpenBrowserLite"), "lite")
         write(os.path.join(self.tmp, "obstamp"), "stamp")
+        write(os.path.join(self.tmp, "openfont.library"), "openfont")
         self.assertEqual(self.stage("--bin", bin_dir, "--fonts", fonts, "--lite", lite, "--obstamp",
-                                    os.path.join(self.tmp, "obstamp"), "--sets", "live", "--pages", "example,hn",
+                                    os.path.join(self.tmp, "obstamp"), "--openfont", os.path.join(self.tmp, "openfont.library"),
+                                    "--sets", "live", "--pages", "example,hn",
                                     "--repeat", "2", "--lite-gui", "15"), 0)
         job = self.read("jobs", "example")
         self.assertEqual(job.count("obcore-view -wait"), 2)
@@ -186,7 +189,8 @@ class Stage(unittest.TestCase):
         info = self.read("stage-info.txt")
         self.assertIn("engine-fingerprint 231d9aeeb64ac959", info)
         self.assertIn("obfetch " + hashlib.sha256(b"fetch").hexdigest(), info)
-        for name in ("obcore-view", "obstamp", "obfetch", "Fonts/LiberationSans-Regular.ttf", "fontconfig/fonts.conf", "blocklist"):
+        self.assertIn("openfont.library " + hashlib.sha256(b"openfont").hexdigest(), info)
+        for name in ("obcore-view", "obstamp", "obfetch", "Fonts/LiberationSans-Regular.ttf", "Libs/openfont.library", "blocklist"):
             self.assertTrue(os.path.isfile(os.path.join(self.tmp, "Bench", name)), name)
         self.assertEqual(self.read("OBBench").count("Execute jobs/"), 2)
 

@@ -60,7 +60,7 @@ The design documents disagree with each other (inventory of 22 October
 | Decision | Our part | State of our part | In today's engine? | What still links the old one |
 | --- | --- | --- | --- | --- |
 | XML is OXP | OXP, openamigaxml #7-#9 (passes the W3C suite) | done | **yes** (patch 0030, #13) | nothing |
-| Text is OpenFont | openfont.library 1.0 (20 calls): own font reader and rasteriser (openamigafont #9), shaper (#10, HarfBuzz 14.5.1 still inside), font index and fallback (#8) | built only in lab t4-a (17 Oct), in no release; OpenFontLibTest not yet passed on a lab. Short of what WebCore needs: UTF-8 input only, no script, language, direction or feature settings, A8 coverage only, no glyph outlines, no fonts from memory (web fonts), no colour or variable fonts | **no** | WebCore's FreeType, fontconfig and HarfBuzz files: FontCacheFreeType, FontSetCache, FontPlatformDataFreeType, FontCustomPlatformDataFreeType, GlyphPageTreeNodeFreeType, ComplexTextControllerHarfBuzz |
+| Text is OpenFont | openfont.library 1.4 (openamigafont #15, #16): own reader, rasteriser and shaper (HarfBuzz out of the library, 1,054,068 to 252,368 bytes), UTF-16 shaping with script, language, direction and features, outlines, metrics, tables, web fonts from memory, a face for a character, exact family matching (OFA_Exact), and colour emoji (CBDT, sbix) decoded through the PNG datatype (256,700 bytes) | done: OpenFontLibTest passed on lab copies of Instance-14 and Instance-32 (1.3, 23 Oct); WebKit patch 0090 (`USE_OPENFONT`) is the font backend: FontCache, FontPlatformData, glyph pages, web fonts and the shaping path, glyphs drawn through cairo user fonts | **yes** (patch 0090, #94) | nothing: FreeType, HarfBuzz, fontconfig and Expat are 0 bytes in the engine's map (dev build, 23 Oct); cairo is built without its FreeType backend (openamigacairo `CAIRO_FONTS=user`) |
 | Drawing is OpenGfx/OpenGPU | OpenGfx (openamigagfx: graphics.library 47.100 and layers.library 47.102, clean room), opengpu.library 0.16 (openamigartg), pixman.library 2.0 (25 calls over OpenGPU; builds from openamigapixman main, e4bd3ec) | OpenGfx has graphics.library's API: no anti-aliased paths, gradients, alpha compositing or glyph runs, and nothing deeper than 8 planes yet. OpenGPU's command stream has fill, copy, mask, premultiplied compositing, bilinear and affine scaled images and the 13 Porter-Duff operators (not yet on Vulkan), but no anti-aliased paths, gradients, blur or the PDF/HSL blend modes. openamigagfx main builds graphics.library 47.100 and layers.library 47.102 (rebuilt on the dev machine 22 Oct). No GraphicsContext exists on either; GraphicsContextOpenGfx and DrawGlyphRun are in design documents only | **no** | WebCore's cairo GraphicsContext and image surfaces |
 | Network is openweb.fetch | openweb.fetch/1 (openamigaservice `src/webfetch.c`, `docs/OPENWEB_FETCH.md`, v1 12 Oct) | runs on the services card only, and its TLS is the host's OpenSSL 3, not OpenTLS. It has cookies (passes every Set-Cookie through), keep-alive pooling, host-side gzip, deflate and Brotli, and 64 fetches at once. It lacks HTTP/2, WebSocket, proxies, HTTP auth and a LAN transport. No `OWFetch` binary on any drive; no WebCore network backend on it | **no**: today curl 8.22 on opentls.library 1.3 (patch 0022), HTTP/2 through nghttp2 (0023), bsdsocket.library from OpenSocket | WebCore's CurlContext and curl loader |
 | Decoders are datatypes | picture datatypes (openamigaimage); stream.datatype, gzip.datatype, brotli.datatype | pictures: yes. The stream class and the gzip and Brotli datatypes are a design only (JIT-on-core 0.5 §5.1), with no code in any repo | partly | libpng (for cairo) and zlib are still linked; curl decodes compressed bodies |
@@ -73,9 +73,9 @@ What the old libraries cost in today's engine, from its link map (MiB):
 | Library | Size | Goes when |
 | --- | --- | --- |
 | ICU (code 3.4 + data 5.2) | 8.6 | data: step 2; code: step 7 |
-| HarfBuzz | 1.16 | step 3 |
-| FreeType | 0.50 | step 3 |
-| fontconfig, with Expat | 0.45 | step 3 |
+| HarfBuzz | 1.16 | step 3 (gone, #94) |
+| FreeType | 0.50 | step 3 (gone, #94) |
+| fontconfig, with Expat | 0.45 | step 3 (gone, #94) |
 | cairo, pixman, libpng | 0.94 | step 6 |
 | curl, nghttp2, libpsl | 0.54 | step 5 |
 | JavaScriptCore | 21.1 | step 4, into javascript.library |
@@ -136,6 +136,17 @@ is done when its "done when" holds on the lab instance.
    Instance-32 and Instance-14, the window showed Wikipedia on both, and
    the DOM bench's JavaScript took 1,509 and 1,462 ms (nine runs each).
 
+   **One engine (0.8.2 test, 23 October).** The package carries only
+   `WebBrowserEngine` (75,811,000 bytes stripped), which webbrowser.library
+   starts and which has OpenBrowser's window; `OpenBrowser.engine` is no
+   longer packaged or built by `build-browser` (`build-window-engine` keeps
+   it for tests). Its fonts, fontconfig, blocklist and ICU data go once, in
+   `Libs/WebBrowser/` beside it. The drawer goes from 173,019,958 to
+   86,801,839 bytes, and the archive from 80,034,607 to about 47.3 MB
+   (measured on the 0.8.2 test package, built from main 8ba1e04 with this
+   change, before patches 0070-0074). With 0070 the drawer also carries
+   `Libs/WebBrowser/Network/public-suffixes`, once, beside the engine.
+
    Section GC (`OB_GC_SECTIONS`, #45) is off by default; the 22 October
    test build turned it on, and it saves almost nothing on its own; with
    the duplicate template copies folded (`OB_FOLD`, on with it) the
@@ -151,6 +162,13 @@ is done when its "done when" holds on the lab instance.
    font backend (FontCache, FontPlatformData, GlyphPage and the shaping
    path) that calls it. Done when FreeType, HarfBuzz, fontconfig and Expat
    are gone from the engine's map and the benchmark pages render the same.
+   **Done 23 October 2026** (openamigafont #15 and #16, openamigacairo #8,
+   #94, WebKit patch 0090): the engine built on dev in 1,792 s with
+   FreeType, HarfBuzz, harfbuzz-icu, fontconfig and Expat at 0 bytes in
+   both maps. Emoji come from openfont.library 1.4 through the PNG datatype,
+   so FreeType's libpng use went with it. The benchmark pages on the lab
+   copies of Instance-14 and Instance-32 are recorded in
+   `labs/webcore-openfont-20261023/` as they finish.
 4. **The browser on javascript.library.** Before the switch, build the
    library the way the browser is built: MinSizeRel with -O2 for
    JavaScriptCore (#57), and with the 68k JIT patches. Today

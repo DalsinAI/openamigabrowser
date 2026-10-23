@@ -20,7 +20,7 @@ class ManifestError(ValueError):
 
 def parse_manifest(text, name="pages.txt"):
     """Pages as dicts: id, set, target, url (bool: a network address), wait,
-    text, lite. Raises ManifestError on a bad line or a repeated id."""
+    settle, text, lite. Raises ManifestError on a bad line or a repeated id."""
     pages, seen = [], set()
     for number, line in enumerate(text.splitlines(), 1):
         line = re.sub(r"(^|\s)#.*$", "", line).strip()   # a comment; "#" inside an address stays
@@ -37,11 +37,13 @@ def parse_manifest(text, name="pages.txt"):
         if kind not in SETS:
             raise ManifestError("%s:%d: set %r is not one of %s" % (name, number, kind, ", ".join(SETS)))
         page = {"id": ident, "set": kind, "target": target, "url": bool(re.match(r"^https?://", target)),
-                "wait": None, "text": False, "lite": True}
+                "wait": None, "settle": None, "text": False, "lite": True}
         for option in fields[3:]:
             key, _, value = option.partition("=")
             if key == "wait" and value.isdigit():
                 page["wait"] = int(value)
+            elif key == "settle" and value.isdigit():
+                page["settle"] = int(value)
             elif key == "text" and value in ("0", "1"):
                 page["text"] = value == "1"
             elif key == "lite" and value in ("0", "1"):
