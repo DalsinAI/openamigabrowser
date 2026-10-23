@@ -1,7 +1,7 @@
 /*
  * obcore-dump: load a local HTML file into WebCore, print its render tree
  * (milestone 2a) and, given a file name, paint the page into an offscreen
- * bitmap saved as PNG (milestone 2b) through openpng.datatype. The page has
+ * bitmap saved as PNG (milestone 2b) through a PNG datatype. The page has
  * no network yet.
  *
  *   obcore-dump <file.html> [width] [page.png]
@@ -139,7 +139,7 @@ static int dumpMain(int argc, char** argv)
         cairo_surface_flush(surface);
         unsigned char* png = nullptr;
         unsigned long pngSize = 0;
-        const char* status = "no openpng.datatype 47.4";
+        const char* status = "no PNG datatype that writes";
         if (obdt_encode_png(cairo_image_surface_get_data(surface), width, height, cairo_image_surface_get_stride(surface),
             1 /* premultiplied */, &png, &pngSize)) {
             FILE* file = std::fopen(argv[3], "wb");
