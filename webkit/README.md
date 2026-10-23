@@ -305,6 +305,21 @@ The patches, in order:
   `LIBS:json.library` (version 1) must be installed; without it
   `JSON.parse` throws an Error that says so. Also checks the stack in the
   fast `JSON.stringify` on the 68k (no guard page below the stack).
+- `0060-amiga-unused-features-not-built.patch`: Web platform features
+  the browser switches off at run time are not built: accessibility,
+  IndexedDB, service workers (with the Push and Cache APIs), shared
+  workers, the File System and Entries APIs, the Async Clipboard API and
+  credential management. Each has a feature flag (`ENABLE_ACCESSIBILITY`,
+  `ENABLE_INDEXED_DATABASE`, `ENABLE_SERVICE_WORKER`, `ENABLE_PUSH_API`,
+  `ENABLE_CACHE_API`, `ENABLE_SHARED_WORKER`, `ENABLE_FILE_SYSTEM_API`,
+  `ENABLE_ASYNC_CLIPBOARD`, `ENABLE_CREDENTIAL_MANAGEMENT`; on by default)
+  that the Amiga port turns off; `PlatformAmiga.cmake` leaves their IDL
+  files, generated bindings and sources out, and the code that called them
+  compiles them out (a document has no accessibility object cache, no
+  IndexedDB or service worker connection). Also drops the last pieces of
+  Geolocation and WebTransport, which were off but partly built.
+  `DataTransferItem.webkitGetAsEntry()` goes; nothing else pages could
+  reach changes.
 - `0070-amiga-public-suffixes-without-libpsl.patch`: public suffixes
   (cookies, sites, `document.domain`) from our own reader of Mozilla's
   Public Suffix List (`PublicSuffixAmiga.c`) in place of libpsl, which is

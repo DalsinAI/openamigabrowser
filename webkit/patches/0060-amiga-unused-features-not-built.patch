@@ -1,0 +1,2392 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 16:00:00 +0100
+Subject: [PATCH] WebCore: features the Amiga browser switches off are not built
+
+OpenBrowser switches these Web platform features off at run time (by
+setting, or they have no backend in a single-process port), but WebCore
+built all of them into the engine, and on the Amiga's linker every
+compiled function stays in the program. Each gets a feature flag, on by
+default as before, and the Amiga port turns them off:
+
+- ENABLE_ACCESSIBILITY, ENABLE_ASYNC_CLIPBOARD, ENABLE_CACHE_API,
+  ENABLE_CREDENTIAL_MANAGEMENT, ENABLE_FILE_SYSTEM_API,
+  ENABLE_INDEXED_DATABASE, ENABLE_PUSH_API, ENABLE_SERVICE_WORKER and
+  ENABLE_SHARED_WORKER (WebKitFeatures.cmake and PlatformEnable.h,
+  default on; OptionsAmiga.cmake sets them off).
+- PlatformAmiga.cmake leaves each feature's IDL files, the bindings
+  generated from them and its sources out of the build. The bindings
+  generator still reads the IDL files (INCLUDED_FILES), so kept IDL files
+  may name their types in members that are compiled out. The value types
+  that loaders and workers carry stay (ServiceWorkerData and friends,
+  CacheStorageConnection, FileSystemStorageConnection).
+- Everything else that called into them is compiled out with the flag:
+  a document, page or frame view has no accessibility object cache
+  (inline null accessors, so the calls behind them compile away), no
+  IndexedDB connection, no service worker connection, container or
+  controlling service worker; workers have no IndexedDB, cache storage,
+  file system or service worker connection; MessageEvent.source cannot
+  be a ServiceWorker; DataTransferItem has no webkitGetAsEntry() and
+  StorageManager no getDirectory(); structured clone has no file system
+  handles. accessibility/amiga/AccessibilityDisabledAmiga.cpp answers the
+  two accessibility helpers that editing and quirks code still call.
+- The EventTarget and Event factories list the dropped interfaces under
+  their flags.
+- Leftovers of features that were already off: GeolocationCoordinates.cpp
+  builds only with ENABLE(GEOLOCATION), the supplement type checks of
+  dropped features only with their flags, and the empty WebTransport
+  session (EmptyClients) only with ENABLE(WEB_TRANSPORT).
+
+Pages see one change: DataTransferItem.webkitGetAsEntry() is gone (the
+port has no drag and drop, so it only applied to pasted files). The rest
+was already absent or switched off by setting.
+
+Team 3
+---
+ Source/WTF/wtf/PlatformEnable.h                    |   36 +++++++++
+ Source/WebCore/CMakeLists.txt                      |    4 +
+ Source/WebCore/Modules/fetch/FormDataConsumer.cpp  |    4 +
+ .../filesystem/FileSystemStorageConnection.cpp     |    4 +
+ .../Modules/geolocation/GeolocationCoordinates.cpp |    4 +
+ Source/WebCore/Modules/storage/StorageManager.cpp  |    4 +
+ Source/WebCore/Modules/storage/StorageManager.h    |    2 +
+ .../Modules/storage/WorkerStorageConnection.cpp    |    4 +
+ Source/WebCore/PlatformAmiga.cmake                 |   77 +++++++++++++++++++-
+ Source/WebCore/accessibility/AXObjectCache.h       |   12 +++
+ Source/WebCore/bindings/js/JSDOMWindowCustom.cpp   |    2 +
+ Source/WebCore/bindings/js/ScriptModuleLoader.cpp  |    2 +
+ .../WebCore/bindings/js/SerializedScriptValue.cpp  |   10 +++
+ Source/WebCore/bindings/js/SerializedScriptValue.h |    2 +
+ Source/WebCore/bindings/js/WebCoreJSClientData.cpp |    8 ++
+ Source/WebCore/bindings/js/WebCoreJSClientData.h   |    4 +
+ .../bindings/js/WorkerModuleScriptLoader.cpp       |    2 +
+ Source/WebCore/dom/DataTransferItem.cpp            |    2 +
+ Source/WebCore/dom/DataTransferItem.h              |    2 +
+ Source/WebCore/dom/DataTransferItem.idl            |    2 +
+ Source/WebCore/dom/Document.cpp                    |   18 +++++
+ Source/WebCore/dom/Document.h                      |   26 +++++++
+ Source/WebCore/dom/EventInterfaces.in              |   18 ++---
+ Source/WebCore/dom/EventTargetFactory.in           |   24 +++---
+ Source/WebCore/dom/MessageEvent.cpp                |    4 +
+ Source/WebCore/dom/MessageEvent.h                  |   10 +++
+ Source/WebCore/dom/MessageEvent.idl                |    6 +-
+ Source/WebCore/dom/ScriptExecutionContext.cpp      |    6 ++
+ Source/WebCore/dom/ScriptExecutionContext.h        |   10 +++
+ Source/WebCore/html/Origin.cpp                     |    4 +
+ Source/WebCore/loader/DocumentLoader.cpp           |   13 +++
+ Source/WebCore/loader/EmptyClients.cpp             |    8 ++
+ Source/WebCore/loader/WorkerThreadableLoader.cpp   |   22 +++++-
+ Source/WebCore/page/DatabaseProvider.h             |    2 +
+ Source/WebCore/page/LocalDOMWindow.cpp             |    2 +
+ Source/WebCore/page/LocalFrame.cpp                 |    4 +
+ Source/WebCore/page/LocalFrameView.cpp             |    2 +
+ Source/WebCore/page/LocalFrameView.h               |    4 +
+ Source/WebCore/page/Location.cpp                   |    2 +
+ Source/WebCore/page/NavigatorBase.cpp              |    4 +
+ Source/WebCore/page/NavigatorBase.h                |    2 +
+ Source/WebCore/page/NavigatorServiceWorker.idl     |    1 
+ Source/WebCore/page/Page.cpp                       |   13 +++
+ Source/WebCore/page/Page.h                         |   15 ++++
+ Source/WebCore/page/SocketProvider.h               |    2 +
+ Source/WebCore/platform/Supplementable.h           |   20 +++++
+ Source/WebCore/workers/DedicatedWorkerThread.cpp   |    2 +
+ Source/WebCore/workers/WorkerGlobalScope.cpp       |   28 +++++++
+ Source/WebCore/workers/WorkerGlobalScope.h         |   20 +++++
+ Source/WebCore/workers/WorkerMessagingProxy.cpp    |   13 +++
+ .../workers/WorkerOrWorkletScriptController.cpp    |    8 ++
+ Source/WebCore/workers/WorkerScriptLoader.cpp      |    8 ++
+ Source/WebCore/workers/WorkerThread.cpp            |    5 +
+ Source/WebCore/workers/WorkerThread.h              |    6 ++
+ Source/WebCore/workers/service/ServiceWorker.h     |    2 +
+ Source/cmake/OptionsAmiga.cmake                    |   13 +++
+ Source/cmake/WebKitFeatures.cmake                  |    9 ++
+ .../amiga/AccessibilityDisabledAmiga.cpp           |   64 +++++++++++++++++
+ 58 files changed, 578 insertions(+), 29 deletions(-)
+
+diff --git a/Source/WTF/wtf/PlatformEnable.h b/Source/WTF/wtf/PlatformEnable.h
+index 53352ba..cd17ddb 100644
+--- a/Source/WTF/wtf/PlatformEnable.h
++++ b/Source/WTF/wtf/PlatformEnable.h
+@@ -637,10 +637,46 @@
+ #define ENABLE_WEBXR_WEBGPU_BY_DEFAULT 0
+ #endif
+ 
++#if !defined(ENABLE_ACCESSIBILITY)
++#define ENABLE_ACCESSIBILITY 1
++#endif
++
++#if !defined(ENABLE_ASYNC_CLIPBOARD)
++#define ENABLE_ASYNC_CLIPBOARD 1
++#endif
++
++#if !defined(ENABLE_CACHE_API)
++#define ENABLE_CACHE_API 1
++#endif
++
+ #if !defined(ENABLE_COOKIE_STORE_API)
+ #define ENABLE_COOKIE_STORE_API 1
+ #endif
+ 
++#if !defined(ENABLE_CREDENTIAL_MANAGEMENT)
++#define ENABLE_CREDENTIAL_MANAGEMENT 1
++#endif
++
++#if !defined(ENABLE_FILE_SYSTEM_API)
++#define ENABLE_FILE_SYSTEM_API 1
++#endif
++
++#if !defined(ENABLE_INDEXED_DATABASE)
++#define ENABLE_INDEXED_DATABASE 1
++#endif
++
++#if !defined(ENABLE_PUSH_API)
++#define ENABLE_PUSH_API 1
++#endif
++
++#if !defined(ENABLE_SERVICE_WORKER)
++#define ENABLE_SERVICE_WORKER 1
++#endif
++
++#if !defined(ENABLE_SHARED_WORKER)
++#define ENABLE_SHARED_WORKER 1
++#endif
++
+ #if !defined(ENABLE_SCREEN_WAKE_LOCK)
+ #define ENABLE_SCREEN_WAKE_LOCK 1
+ #endif
+diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
+index 39590d3..2a8e3b3 100644
+--- a/Source/WebCore/CMakeLists.txt
++++ b/Source/WebCore/CMakeLists.txt
+@@ -3104,6 +3104,10 @@ GENERATE_BINDINGS(WebCoreBindings
+     INPUT_FILES ${WebCore_IDL_FILES}
+     SUPPLEMENTAL_IDL_FILES ${WebCore_SUPPLEMENTAL_IDL_FILES}
+     PP_INPUT_FILES ${WebCore_BINDINGS_PP_INPUT_FILES}
++    # IDL files of features a port leaves out: no bindings are generated for
++    # them, but kept IDL files may still name their types (in members that
++    # are compiled out) or inherit from them (in interfaces that are).
++    INCLUDED_FILES ${WebCore_LEFT_OUT_IDL_FILES}
+     BASE_DIR ${WEBCORE_DIR}
+     FEATURES ${FEATURE_DEFINES_JAVASCRIPT}
+     DESTINATION ${WebCore_DERIVED_SOURCES_DIR}
+diff --git a/Source/WebCore/Modules/fetch/FormDataConsumer.cpp b/Source/WebCore/Modules/fetch/FormDataConsumer.cpp
+index 866dc7a..a725db4 100644
+--- a/Source/WebCore/Modules/fetch/FormDataConsumer.cpp
++++ b/Source/WebCore/Modules/fetch/FormDataConsumer.cpp
+@@ -158,10 +158,12 @@ void FormDataConsumer::consumePendingStream(PendingStreamState& state)
+     if (!m_hasRequestedPendingStream) {
+         ASSERT(state.serviceWorkerFetchIdentifier());
+         m_hasRequestedPendingStream = true;
++#if ENABLE(SERVICE_WORKER)
+         ensureOnMainThread([state = Ref { state }] {
+             if (RefPtr connection = SWContextManager::singleton().connection())
+                 connection->startPendingStreamUploadForwarding(state.get());
+         });
++#endif
+     }
+ }
+ 
+@@ -255,10 +257,12 @@ void FormDataConsumer::cancel()
+     if (RefPtr state = std::exchange(m_pendingStreamState, { })) {
+         state->clearDataAvailableHandler();
+         if (m_hasRequestedPendingStream) {
++#if ENABLE(SERVICE_WORKER)
+             ensureOnMainThread([state = state.releaseNonNull()] {
+                 if (RefPtr connection = SWContextManager::singleton().connection())
+                     connection->cancelPendingStreamUploadForwarding(state.get());
+             });
++#endif
+         }
+     }
+     m_isReadingFile = false;
+diff --git a/Source/WebCore/Modules/filesystem/FileSystemStorageConnection.cpp b/Source/WebCore/Modules/filesystem/FileSystemStorageConnection.cpp
+index 61bf547..9e5effe 100644
+--- a/Source/WebCore/Modules/filesystem/FileSystemStorageConnection.cpp
++++ b/Source/WebCore/Modules/filesystem/FileSystemStorageConnection.cpp
+@@ -40,8 +40,10 @@ namespace WebCore {
+ bool FileSystemStorageConnection::errorFileSystemWritable(FileSystemWritableFileStreamIdentifier identifier)
+ {
+     RefPtr writable = m_writables.take(identifier).get();
++#if ENABLE(FILE_SYSTEM_API)
+     if (writable)
+         writable->errorIfPossible(Exception { ExceptionCode::AbortError });
++#endif
+     return writable;
+ }
+ 
+@@ -91,8 +93,10 @@ FileSystemHandleKeepAlive FileSystemHandleKeepAlive::copy() const
+ 
+ RefPtr<FileSystemStorageConnection> fileSystemStorageConnectionForContext(ScriptExecutionContext& context)
+ {
++#if ENABLE(FILE_SYSTEM_API)
+     if (auto* workerScope = dynamicDowncast<WorkerGlobalScope>(context))
+         return workerScope->fileSystemStorageConnection();
++#endif
+ 
+     if (auto* document = dynamicDowncast<Document>(context)) {
+         if (RefPtr storageConnection = document->storageConnection())
+diff --git a/Source/WebCore/Modules/geolocation/GeolocationCoordinates.cpp b/Source/WebCore/Modules/geolocation/GeolocationCoordinates.cpp
+index 966a852..1e6f56b 100644
+--- a/Source/WebCore/Modules/geolocation/GeolocationCoordinates.cpp
++++ b/Source/WebCore/Modules/geolocation/GeolocationCoordinates.cpp
+@@ -26,6 +26,8 @@
+ #include "config.h"
+ #include "GeolocationCoordinates.h"
+ 
++#if ENABLE(GEOLOCATION)
++
+ namespace WebCore {
+ 
+ GeolocationCoordinates::GeolocationCoordinates(GeolocationPositionData&& position)
+@@ -35,3 +37,5 @@ GeolocationCoordinates::GeolocationCoordinates(GeolocationPositionData&& positio
+ }
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(GEOLOCATION)
+diff --git a/Source/WebCore/Modules/storage/StorageManager.cpp b/Source/WebCore/Modules/storage/StorageManager.cpp
+index 6cddc96..3f954b9 100644
+--- a/Source/WebCore/Modules/storage/StorageManager.cpp
++++ b/Source/WebCore/Modules/storage/StorageManager.cpp
+@@ -35,7 +35,9 @@
+ #include "JSDOMConvertBoolean.h"
+ #include "JSDOMConvertInterface.h"
+ #include "JSDOMPromiseDeferred.h"
++#if ENABLE(FILE_SYSTEM_API)
+ #include "JSFileSystemDirectoryHandle.h"
++#endif
+ #include "JSStorageManager.h"
+ #include "NavigatorBase.h"
+ #include "SecurityOrigin.h"
+@@ -128,6 +130,7 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
+     });
+ }
+ 
++#if ENABLE(FILE_SYSTEM_API)
+ void StorageManager::fileSystemGetDirectory(DOMPromiseDeferred<IDLInterface<FileSystemDirectoryHandle>>&& promise)
+ {
+     auto connectionInfoOrException = connectionInfo(protect(m_navigator).get(), ExceptionCode::SecurityError);
+@@ -150,5 +153,6 @@ void StorageManager::fileSystemGetDirectory(DOMPromiseDeferred<IDLInterface<File
+         promise.resolve(handle);
+     });
+ }
++#endif
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/Modules/storage/StorageManager.h b/Source/WebCore/Modules/storage/StorageManager.h
+index 065dee1..2b64f6c 100644
+--- a/Source/WebCore/Modules/storage/StorageManager.h
++++ b/Source/WebCore/Modules/storage/StorageManager.h
+@@ -46,7 +46,9 @@ public:
+     void persist(DOMPromiseDeferred<IDLBoolean>&&);
+     using Estimate = StorageEstimate;
+     void estimate(DOMPromiseDeferred<IDLDictionary<Estimate>>&&);
++#if ENABLE(FILE_SYSTEM_API)
+     void fileSystemGetDirectory(DOMPromiseDeferred<IDLInterface<FileSystemDirectoryHandle>>&&);
++#endif
+ 
+ private:
+     explicit StorageManager(NavigatorBase&);
+diff --git a/Source/WebCore/Modules/storage/WorkerStorageConnection.cpp b/Source/WebCore/Modules/storage/WorkerStorageConnection.cpp
+index 162bdfd..cea461e 100644
+--- a/Source/WebCore/Modules/storage/WorkerStorageConnection.cpp
++++ b/Source/WebCore/Modules/storage/WorkerStorageConnection.cpp
+@@ -182,10 +182,14 @@ void WorkerStorageConnection::didGetDirectory(uint64_t callbackIdentifier, Excep
+     RefPtr scope = m_scope.get();
+     if (!scope)
+         return callback(Exception { ExceptionCode::InvalidStateError });
++#if ENABLE(FILE_SYSTEM_API)
+     releaseConnectionScope.release();
+ 
+     Ref workerFileSystemStorageConnection = scope->getFileSystemStorageConnection(protect(*mainThreadFileSystemStorageConnection));
+     callback(StorageConnection::DirectoryInfo { result.returnValue().globalIdentifier, result.returnValue().identifier, WTF::move(workerFileSystemStorageConnection) });
++#else
++    callback(Exception { ExceptionCode::NotSupportedError });
++#endif
+ }
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index 6e25d85..d48f212 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -49,16 +49,87 @@ list(APPEND WebCore_UNIFIED_SOURCE_EXCLUDES
+     "^JSInspector"
+ )
+ 
++# Web platform features the port turns off (OptionsAmiga.cmake) are left out
++# of the build, not only switched off by setting: their IDL files (so no
++# JavaScript bindings are generated, and no constructor or property names
++# them), the bindings generated from those files, and their sources. The
++# rest of WebCore leaves their calls out with the feature's ENABLE() flag.
++# The IDL files stay readable to the bindings generator (INCLUDED_FILES in
++# CMakeLists.txt) for compiled-out members that still name their types.
++set(WebCore_LEFT_OUT_IDL_FILES "")
++macro(AMIGA_LEAVE_OUT _feature _idlRegex)
++    if (NOT ${_feature})
++        foreach (_idl IN LISTS WebCore_IDL_FILES WebCore_SUPPLEMENTAL_IDL_FILES)
++            if (_idl MATCHES "${_idlRegex}")
++                list(APPEND WebCore_LEFT_OUT_IDL_FILES "${_idl}")
++                get_filename_component(_name "${_idl}" NAME_WE)
++                if (NOT _name MATCHES "\\+")
++                    list(APPEND WebCore_UNIFIED_SOURCE_EXCLUDES "^JS${_name}\\.cpp( |$)")
++                endif ()
++            endif ()
++        endforeach ()
++        list(FILTER WebCore_IDL_FILES EXCLUDE REGEX "${_idlRegex}")
++        list(FILTER WebCore_SUPPLEMENTAL_IDL_FILES EXCLUDE REGEX "${_idlRegex}")
++        list(APPEND WebCore_UNIFIED_SOURCE_EXCLUDES ${ARGN})
++    endif ()
++endmacro()
++
++AMIGA_LEAVE_OUT(ENABLE_ACCESSIBILITY "^$"
++    "^accessibility/"
++)
++AMIGA_LEAVE_OUT(ENABLE_ASYNC_CLIPBOARD "(^|/)Modules/async-clipboard/"
++    "^Modules/async-clipboard/"
++)
++AMIGA_LEAVE_OUT(ENABLE_CACHE_API "(^|/)Modules/cache/"
++    # The connection classes stay: CacheStorageProvider (page/) is built on them.
++    "^Modules/cache/(DOMCache|DOMCacheStorage|WindowOrWorkerGlobalScopeCaches)\\.cpp"
++)
++AMIGA_LEAVE_OUT(ENABLE_CREDENTIAL_MANAGEMENT "(^|/)Modules/(credentialmanagement|identity)/"
++    "^Modules/(credentialmanagement|identity)/"
++)
++AMIGA_LEAVE_OUT(ENABLE_FILE_SYSTEM_API "(^|/)Modules/(filesystem|entriesapi)/"
++    # FileSystemStorageConnection stays: StorageConnection and serialized values use it.
++    "^Modules/entriesapi/"
++    "^Modules/filesystem/(FileSystemDirectoryHandle|FileSystemFileHandle|FileSystemHandle|FileSystemHandleStorageKeepAlive|FileSystemSyncAccessHandle|FileSystemWritableFileStream|FileSystemWritableFileStreamSink|WorkerFileSystemStorageConnection)\\.cpp"
++)
++AMIGA_LEAVE_OUT(ENABLE_INDEXED_DATABASE "(^|/)Modules/indexeddb/"
++    "^Modules/indexeddb/"
++    "^bindings/js/IDBBindingUtilities\\.cpp"
++    "^bindings/js/JSIDB(Cursor|CursorWithValue|ObjectStore|Record|Request|Transaction)Custom\\.cpp"
++)
++AMIGA_LEAVE_OUT(ENABLE_PUSH_API "(^|/)Modules/push-api/(Push|ServiceWorker)"
++    "^Modules/push-api/"
++)
++AMIGA_LEAVE_OUT(ENABLE_SERVICE_WORKER "(^|/)workers/service/"
++    # The value types stay: loaders and workers carry them.
++    "^workers/service/(server|context|background-fetch)/"
++    "^workers/service/(ExtendableEvent|ExtendableMessageEvent|FetchEvent|InstallEvent|NavigationPreloadManager|SWClientConnection|ServiceWorker|ServiceWorkerClient|ServiceWorkerClients|ServiceWorkerContainer|ServiceWorkerGlobalScope|ServiceWorkerJob|ServiceWorkerProvider|ServiceWorkerRegistration|ServiceWorkerWindowClient|WorkerSWClientConnection)\\.cpp"
++    "^bindings/js/JS(ExtendableMessageEvent|FetchEvent|ServiceWorkerGlobalScope)Custom\\.cpp"
++)
++AMIGA_LEAVE_OUT(ENABLE_SHARED_WORKER "(^|/)workers/shared/"
++    "^workers/shared/"
++)
++
+ list(APPEND WebCore_USER_AGENT_STYLE_SHEETS
+     ${WEBCORE_DIR}/css/themeAdwaita.css
+ )
+ 
+ set(WebCore_USER_AGENT_SCRIPTS_DEPENDENCIES ${WEBCORE_DIR}/rendering/adwaita/RenderThemeAdwaita.cpp)
+ 
+-list(APPEND WebCore_SOURCES
+-    accessibility/playstation/AXObjectCachePlayStation.cpp
+-    accessibility/playstation/AccessibilityObjectPlayStation.cpp
++if (ENABLE_ACCESSIBILITY)
++    list(APPEND WebCore_SOURCES
++        accessibility/playstation/AXObjectCachePlayStation.cpp
++        accessibility/playstation/AccessibilityObjectPlayStation.cpp
++    )
++else ()
++    # What code outside accessibility/ still calls (AXObjectCache.h and
++    # Document.h answer the rest inline).
++    list(APPEND WebCore_SOURCES
++        accessibility/amiga/AccessibilityDisabledAmiga.cpp
++    )
++endif ()
+ 
++list(APPEND WebCore_SOURCES
+     # WebCrypto without a crypto library: digests only (PAL's CryptoDigest).
+     crypto/amiga/CryptoAmiga.cpp
+ 
+diff --git a/Source/WebCore/accessibility/AXObjectCache.h b/Source/WebCore/accessibility/AXObjectCache.h
+index c0daaed..68bf1a4 100644
+--- a/Source/WebCore/accessibility/AXObjectCache.h
++++ b/Source/WebCore/accessibility/AXObjectCache.h
+@@ -605,7 +605,12 @@ public:
+         RequireSettingOnly,
+         None
+     };
++#if ENABLE(ACCESSIBILITY)
+     static void enableAccessibility(AXThreadModePreconditions = AXThreadModePreconditions::RequireClientAndSetting);
++#else
++    // No accessibility support is built: it is never enabled.
++    static void enableAccessibility(AXThreadModePreconditions = AXThreadModePreconditions::RequireClientAndSetting) { }
++#endif
+     // Resets mode to Off without notifying the UI process, so the change
+     // stays local to this web process. Used by Internals::resetToConsistentState
+     // to avoid interfering with other web content processes running tests.
+@@ -638,8 +643,13 @@ public:
+     // Enhanced user interface accessibility can be toggled by the assistive technology.
+     WEBCORE_EXPORT static void setEnhancedUserInterfaceAccessibility(bool flag);
+ 
++#if ENABLE(ACCESSIBILITY)
+     static bool accessibilityEnabled();
+     WEBCORE_EXPORT static bool NODELETE accessibilityEnhancedUserInterfaceEnabled();
++#else
++    static constexpr bool accessibilityEnabled() { return false; }
++    static constexpr bool accessibilityEnhancedUserInterfaceEnabled() { return false; }
++#endif
+ #if ENABLE(ACCESSIBILITY_ISOLATED_TREE)
+     static bool useAXThreadTextApis() { return !isMainThread(); }
+     static bool shouldCreateAXThreadCompatibleMarkers() { return isIsolatedTreeEnabled(); }
+@@ -1321,6 +1331,7 @@ private:
+     WeakHashMap<RenderObject, Vector<AXStitchGroup>, SingleThreadWeakPtrImpl> m_stitchGroups;
+ };
+ 
++#if ENABLE(ACCESSIBILITY)
+ inline bool AXObjectCache::accessibilityEnabled()
+ {
+     return !isAccessibilityModeOff(accessibilityMode());
+@@ -1345,6 +1356,7 @@ inline void AXObjectCache::enableAccessibility([[maybe_unused]] AXThreadModePrec
+     // we move to MainThread mode at a minimum.
+     std::ignore = attemptMainThreadModeTransition();
+ }
++#endif // ENABLE(ACCESSIBILITY)
+ 
+ inline bool AXObjectCache::forceDeferredSpellChecking()
+ {
+diff --git a/Source/WebCore/bindings/js/JSDOMWindowCustom.cpp b/Source/WebCore/bindings/js/JSDOMWindowCustom.cpp
+index c3e7885..c2093a7 100644
+--- a/Source/WebCore/bindings/js/JSDOMWindowCustom.cpp
++++ b/Source/WebCore/bindings/js/JSDOMWindowCustom.cpp
+@@ -42,7 +42,9 @@
+ #include "JSEventListener.h"
+ #include "JSHTMLAudioElement.h"
+ #include "JSHTMLOptionElement.h"
++#if ENABLE(INDEXED_DATABASE)
+ #include "JSIDBFactory.h"
++#endif
+ #include "JSWindowProxy.h"
+ #include "JSWorker.h"
+ #if ENABLE(WEB_DATABASE)
+diff --git a/Source/WebCore/bindings/js/ScriptModuleLoader.cpp b/Source/WebCore/bindings/js/ScriptModuleLoader.cpp
+index 801ed10..cd7117b 100644
+--- a/Source/WebCore/bindings/js/ScriptModuleLoader.cpp
++++ b/Source/WebCore/bindings/js/ScriptModuleLoader.cpp
+@@ -650,8 +650,10 @@ void ScriptModuleLoader::notifyFinished(ModuleScriptLoader& moduleScriptLoader,
+                     downcast<WorkerScriptFetcher>(loader.scriptFetcher()).setReferrerPolicy(loader.referrerPolicy());
+             }
+             responseURL = canonicalizeAndRegisterResponseURL(responseURL, workerScriptLoader.isRedirected(), workerScriptLoader.responseSource());
++#if ENABLE(SERVICE_WORKER)
+             if (auto* globalScope = dynamicDowncast<ServiceWorkerGlobalScope>(*context))
+                 globalScope->setScriptResource(sourceURL, ServiceWorkerContextData::ImportedScript { loader.script(), responseURL, loader.responseMIMEType() });
++#endif
+         }
+         m_requestURLToResponseURLMap.add(sourceURL.string(), responseURL);
+ 
+diff --git a/Source/WebCore/bindings/js/SerializedScriptValue.cpp b/Source/WebCore/bindings/js/SerializedScriptValue.cpp
+index 9ca8bc7..edd841d 100644
+--- a/Source/WebCore/bindings/js/SerializedScriptValue.cpp
++++ b/Source/WebCore/bindings/js/SerializedScriptValue.cpp
+@@ -59,8 +59,10 @@
+ #include "JSExecState.h"
+ #include "JSFile.h"
+ #include "JSFileList.h"
++#if ENABLE(FILE_SYSTEM_API)
+ #include "JSFileSystemDirectoryHandle.h"
+ #include "JSFileSystemFileHandle.h"
++#endif
+ #include "JSIDBSerializationGlobalObject.h"
+ #include "JSImageBitmap.h"
+ #include "JSImageData.h"
+@@ -1293,6 +1295,7 @@ public:
+         }
+ #endif
+ 
++#if ENABLE(FILE_SYSTEM_API)
+         auto serializeFileSystemHandle = [&](FileSystemHandle& handle) {
+             if (handle.isClosed()) {
+                 code = SerializationReturnCode::DataCloneError;
+@@ -1319,6 +1322,7 @@ public:
+             return serializeFileSystemHandle(fileHandle->wrapped());
+         if (auto* dirHandle = dynamicDowncast<JSFileSystemDirectoryHandle>(obj))
+             return serializeFileSystemHandle(dirHandle->wrapped());
++#endif
+ 
+         return false;
+     }
+@@ -3168,6 +3172,7 @@ private:
+         return result;
+     }
+ 
++#if ENABLE(FILE_SYSTEM_API)
+     JSValue readFileSystemHandle()
+     {
+         uint8_t kindByte;
+@@ -3233,6 +3238,7 @@ private:
+         handle->markAsUnresolved(WTF::move(clientOrigin), connection.releaseNonNull());
+         return getJSValue(handle);
+     }
++#endif
+ 
+ public:
+     String agentClusterID()
+@@ -3467,8 +3473,10 @@ public:
+         case DOMExceptionTag:
+             return readDOMException();
+ 
++#if ENABLE(FILE_SYSTEM_API)
+         case FileSystemHandleTag:
+             return readFileSystemHandle();
++#endif
+ 
+         default:
+             // Tag is not a terminal — let JSC::CloneDeserializerBase::readTerminal
+@@ -4525,6 +4533,7 @@ Vector<FileSystemHandleGlobalIdentifier> SerializedScriptValue::fileSystemHandle
+     return result;
+ }
+ 
++#if ENABLE(INDEXED_DATABASE)
+ void SerializedScriptValue::writeBlobsToDiskForIndexedDB(bool isEphemeral, CompletionHandler<void(IDBValue&&)>&& completionHandler)
+ {
+     ASSERT(isMainThread());
+@@ -4572,6 +4581,7 @@ IDBValue SerializedScriptValue::writeBlobsToDiskForIndexedDBSynchronously(bool i
+ 
+     return value;
+ }
++#endif // ENABLE(INDEXED_DATABASE)
+ 
+ auto SerializedScriptValue::deserializationBehavior(JSC::JSObject& object) -> DeserializationBehavior
+ {
+diff --git a/Source/WebCore/bindings/js/SerializedScriptValue.h b/Source/WebCore/bindings/js/SerializedScriptValue.h
+index aefcb5b..b8e2daf 100644
+--- a/Source/WebCore/bindings/js/SerializedScriptValue.h
++++ b/Source/WebCore/bindings/js/SerializedScriptValue.h
+@@ -107,8 +107,10 @@ public:
+     WEBCORE_EXPORT Vector<String> blobURLs() const;
+     WEBCORE_EXPORT Vector<URLKeepingBlobAlive> blobHandles() const;
+     Vector<FileSystemHandleGlobalIdentifier> fileSystemHandleGlobalIdentifiers() const;
++#if ENABLE(INDEXED_DATABASE)
+     void writeBlobsToDiskForIndexedDB(bool isEphemeral, CompletionHandler<void(IDBValue&&)>&&);
+     IDBValue writeBlobsToDiskForIndexedDBSynchronously(bool isEphemeral, JSC::VM&);
++#endif
+     WEBCORE_EXPORT static Ref<SerializedScriptValue> createFromWireBytes(Vector<uint8_t>&&);
+     WEBCORE_EXPORT const Vector<uint8_t>& wireBytes() const LIFETIME_BOUND;
+ 
+diff --git a/Source/WebCore/bindings/js/WebCoreJSClientData.cpp b/Source/WebCore/bindings/js/WebCoreJSClientData.cpp
+index d378de7..4beaf47 100644
+--- a/Source/WebCore/bindings/js/WebCoreJSClientData.cpp
++++ b/Source/WebCore/bindings/js/WebCoreJSClientData.cpp
+@@ -44,9 +44,13 @@
+ #include "JSObservableArray.h"
+ #include "JSPaintWorkletGlobalScope.h"
+ #include "JSQuotaExceededError.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "JSServiceWorkerGlobalScope.h"
++#endif
+ #include "JSShadowRealmGlobalScope.h"
++#if ENABLE(SHARED_WORKER)
+ #include "JSSharedWorkerGlobalScope.h"
++#endif
+ #if ENABLE(WEB_TRANSPORT)
+ #include "JSWebTransportError.h"
+ #endif
+@@ -97,9 +101,13 @@ JSHeapData::JSHeapData(Heap& heap)
+     , m_heapCellTypeForJSDOMWindow(JSC::IsoHeapCellType::Args<JSDOMWindow>())
+     , m_heapCellTypeForJSDedicatedWorkerGlobalScope(JSC::IsoHeapCellType::Args<JSDedicatedWorkerGlobalScope>())
+     , m_heapCellTypeForJSWorkerGlobalScope(JSC::IsoHeapCellType::Args<JSWorkerGlobalScope>())
++#if ENABLE(SHARED_WORKER)
+     , m_heapCellTypeForJSSharedWorkerGlobalScope(JSC::IsoHeapCellType::Args<JSSharedWorkerGlobalScope>())
++#endif
+     , m_heapCellTypeForJSShadowRealmGlobalScope(JSC::IsoHeapCellType::Args<JSShadowRealmGlobalScope>())
++#if ENABLE(SERVICE_WORKER)
+     , m_heapCellTypeForJSServiceWorkerGlobalScope(JSC::IsoHeapCellType::Args<JSServiceWorkerGlobalScope>())
++#endif
+     , m_heapCellTypeForJSWorkletGlobalScope(JSC::IsoHeapCellType::Args<JSWorkletGlobalScope>())
+     , m_heapCellTypeForJSPaintWorkletGlobalScope(JSC::IsoHeapCellType::Args<JSPaintWorkletGlobalScope>())
+ #if ENABLE(WEB_AUDIO)
+diff --git a/Source/WebCore/bindings/js/WebCoreJSClientData.h b/Source/WebCore/bindings/js/WebCoreJSClientData.h
+index a18bb47..efd17f0 100644
+--- a/Source/WebCore/bindings/js/WebCoreJSClientData.h
++++ b/Source/WebCore/bindings/js/WebCoreJSClientData.h
+@@ -87,9 +87,13 @@ public:
+     JSC::IsoHeapCellType m_heapCellTypeForJSDOMWindow;
+     JSC::IsoHeapCellType m_heapCellTypeForJSDedicatedWorkerGlobalScope;
+     JSC::IsoHeapCellType m_heapCellTypeForJSWorkerGlobalScope;
++#if ENABLE(SHARED_WORKER)
+     JSC::IsoHeapCellType m_heapCellTypeForJSSharedWorkerGlobalScope;
++#endif
+     JSC::IsoHeapCellType m_heapCellTypeForJSShadowRealmGlobalScope;
++#if ENABLE(SERVICE_WORKER)
+     JSC::IsoHeapCellType m_heapCellTypeForJSServiceWorkerGlobalScope;
++#endif
+     JSC::IsoHeapCellType m_heapCellTypeForJSWorkletGlobalScope;
+     JSC::IsoHeapCellType m_heapCellTypeForJSPaintWorkletGlobalScope;
+ #if ENABLE(WEB_AUDIO)
+diff --git a/Source/WebCore/bindings/js/WorkerModuleScriptLoader.cpp b/Source/WebCore/bindings/js/WorkerModuleScriptLoader.cpp
+index a005f94..3535a98 100644
+--- a/Source/WebCore/bindings/js/WorkerModuleScriptLoader.cpp
++++ b/Source/WebCore/bindings/js/WorkerModuleScriptLoader.cpp
+@@ -64,6 +64,7 @@ void WorkerModuleScriptLoader::load(ScriptExecutionContext& context, URL&& sourc
+ {
+     m_sourceURL = WTF::move(sourceURL);
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (auto* globalScope = dynamicDowncast<ServiceWorkerGlobalScope>(context)) {
+         if (auto* scriptResource = globalScope->scriptResource(m_sourceURL)) {
+             m_script = scriptResource->script;
+@@ -74,6 +75,7 @@ void WorkerModuleScriptLoader::load(ScriptExecutionContext& context, URL&& sourc
+             return;
+         }
+     }
++#endif
+ 
+     ResourceRequest request { URL { m_sourceURL } };
+ 
+diff --git a/Source/WebCore/dom/DataTransferItem.cpp b/Source/WebCore/dom/DataTransferItem.cpp
+index 9d031f7..c392399 100644
+--- a/Source/WebCore/dom/DataTransferItem.cpp
++++ b/Source/WebCore/dom/DataTransferItem.cpp
+@@ -122,6 +122,7 @@ File* DataTransferItem::getAsFile() const
+     return m_file;
+ }
+ 
++#if ENABLE(FILE_SYSTEM_API)
+ RefPtr<FileSystemEntry> DataTransferItem::getAsEntry(ScriptExecutionContext& context) const
+ {
+     RefPtr file = getAsFile();
+@@ -130,5 +131,6 @@ RefPtr<FileSystemEntry> DataTransferItem::getAsEntry(ScriptExecutionContext& con
+ 
+     return DOMFileSystem::createEntryForFile(context, file.releaseNonNull());
+ }
++#endif
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/dom/DataTransferItem.h b/Source/WebCore/dom/DataTransferItem.h
+index 91bfe06..0f33cb9 100644
+--- a/Source/WebCore/dom/DataTransferItem.h
++++ b/Source/WebCore/dom/DataTransferItem.h
+@@ -63,7 +63,9 @@ public:
+     String NODELETE type() const;
+     void getAsString(Document&, RefPtr<StringCallback>&&) const;
+     File* NODELETE getAsFile() const;
++#if ENABLE(FILE_SYSTEM_API)
+     RefPtr<FileSystemEntry> getAsEntry(ScriptExecutionContext&) const;
++#endif
+ 
+ private:
+     DataTransferItem(WeakPtr<DataTransferItemList>&&, const String& type, Kind);
+diff --git a/Source/WebCore/dom/DataTransferItem.idl b/Source/WebCore/dom/DataTransferItem.idl
+index e28c6f6..e88d64b 100644
+--- a/Source/WebCore/dom/DataTransferItem.idl
++++ b/Source/WebCore/dom/DataTransferItem.idl
+@@ -40,6 +40,8 @@
+     File? getAsFile();
+ 
+     // https://wicg.github.io/entries-api/#html-data
++#if defined(ENABLE_FILE_SYSTEM_API) && ENABLE_FILE_SYSTEM_API
+     [CallWith=CurrentScriptExecutionContext, ImplementedAs=getAsEntry] FileSystemEntry? webkitGetAsEntry();
++#endif
+ };
+ 
+diff --git a/Source/WebCore/dom/Document.cpp b/Source/WebCore/dom/Document.cpp
+index 2b12d1d..c4e5486 100644
+--- a/Source/WebCore/dom/Document.cpp
++++ b/Source/WebCore/dom/Document.cpp
+@@ -280,7 +280,9 @@
+ #include "SVGSVGElement.h"
+ #include "SVGTitleElement.h"
+ #include "SVGUseElement.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "SWClientConnection.h"
++#endif
+ #include "ScopedEventQueue.h"
+ #include "ScriptController.h"
+ #include "ScriptDisallowedScope.h"
+@@ -301,9 +303,11 @@
+ #include "SelectPopoverElement.h"
+ #include "SelectorQuery.h"
+ #include "SerializedNode.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "ServiceWorkerClientData.h"
+ #include "ServiceWorkerContainer.h"
+ #include "ServiceWorkerProvider.h"
++#endif
+ #include "Settings.h"
+ #include "ShadowRoot.h"
+ #include "Site.h"
+@@ -3857,6 +3861,7 @@ bool Document::isEventLoopGroupStoppedPermanently() const
+     return m_documentTaskGroup && m_documentTaskGroup->isStoppedPermanently();
+ }
+ 
++#if ENABLE(ACCESSIBILITY)
+ void Document::clearAXObjectCache()
+ {
+     // Clear the cache member variable before calling delete because attempts
+@@ -3923,6 +3928,7 @@ AXObjectCache* Document::axObjectCache() const
+     Document::hasEverCreatedAnAXObjectCache = true;
+     return m_axObjectCache.get();
+ }
++#endif // ENABLE(ACCESSIBILITY)
+ 
+ void Document::setVisuallyOrdered()
+ {
+@@ -5079,6 +5085,7 @@ void Document::setTrustedTypesEnforcement(JSC::TrustedTypesEnforcement enforceme
+     m_requiresTrustedTypes = enforcement != JSC::TrustedTypesEnforcement::None;
+ }
+ 
++#if ENABLE(INDEXED_DATABASE)
+ IDBClient::IDBConnectionProxy* Document::idbConnectionProxy()
+ {
+     if (RefPtr connectionProxy = m_idbConnectionProxy; connectionProxy && !connectionProxy->isValid())
+@@ -5091,6 +5098,7 @@ IDBClient::IDBConnectionProxy* Document::idbConnectionProxy()
+     }
+     return m_idbConnectionProxy.get();
+ }
++#endif
+ 
+ StorageConnection* Document::storageConnection()
+ {
+@@ -7693,14 +7701,18 @@ void Document::setBackForwardCacheState(BackForwardCacheState state)
+ 
+         clearSharedObjectPool();
+ 
++#if ENABLE(INDEXED_DATABASE)
+         if (RefPtr idbConnectionProxy = m_idbConnectionProxy)
+             idbConnectionProxy->setContextSuspended(*scriptExecutionContext(), true);
++#endif
+         break;
+     case NotInBackForwardCache:
+         if (childNeedsStyleRecalc())
+             scheduleStyleRecalc();
++#if ENABLE(INDEXED_DATABASE)
+         if (RefPtr idbConnectionProxy = m_idbConnectionProxy)
+             idbConnectionProxy->setContextSuspended(*scriptExecutionContext(), false);
++#endif
+         break;
+     case AboutToEnterBackForwardCache:
+         break;
+@@ -7784,8 +7796,10 @@ void Document::resume(ReasonForSuspension reason)
+ 
+     m_isSuspended = false;
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (settings().serviceWorkersEnabled() && reason == ReasonForSuspension::BackForwardCache)
+         setServiceWorkerConnection(&ServiceWorkerProvider::singleton().serviceWorkerConnection());
++#endif
+ 
+ #if ENABLE(MODEL_ELEMENT_IMMERSIVE)
+     if (reason == ReasonForSuspension::BackForwardCache) {
+@@ -8396,11 +8410,13 @@ void Document::finishedParsing()
+     if (m_cachedResourceLoader)
+         m_cachedResourceLoader->clearPreloads(CachedResourceLoader::ClearPreloadsMode::ClearSpeculativePreloads);
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (settings().serviceWorkersEnabled()) {
+         // Stop queuing service worker client messages now that the DOMContentLoaded event has been fired.
+         if (RefPtr serviceWorkerContainer = this->serviceWorkerContainer())
+             serviceWorkerContainer->startMessages();
+     }
++#endif
+ 
+ #if ENABLE(APP_HIGHLIGHTS)
+     if (auto* appHighlightStorage = appHighlightStorageIfExists())
+@@ -11671,6 +11687,7 @@ void Document::didLogMessage(const WTFLogChannel& channel, WTFLogLevel level, st
+     });
+ }
+ 
++#if ENABLE(SERVICE_WORKER)
+ void Document::setServiceWorkerConnection(RefPtr<SWClientConnection>&& serviceWorkerConnection)
+ {
+     if (m_serviceWorkerConnection == serviceWorkerConnection || m_hasPreparedForDestruction || m_isSuspended)
+@@ -11696,6 +11713,7 @@ void Document::updateServiceWorkerClientData()
+     auto controllingServiceWorkerRegistrationIdentifier = activeServiceWorker() ? std::make_optional<ServiceWorkerRegistrationIdentifier>(activeServiceWorker()->registrationIdentifier()) : std::nullopt;
+     serviceWorkerConnection->registerServiceWorkerClient(clientOrigin(), ServiceWorkerClientData::from(*this), controllingServiceWorkerRegistrationIdentifier, userAgent(url()));
+ }
++#endif // ENABLE(SERVICE_WORKER)
+ 
+ void Document::navigateFromServiceWorker(const URL& url, CompletionHandler<void(ScheduleLocationChangeResult)>&& callback)
+ {
+diff --git a/Source/WebCore/dom/Document.h b/Source/WebCore/dom/Document.h
+index dc4ca67..70bf0eb 100644
+--- a/Source/WebCore/dom/Document.h
++++ b/Source/WebCore/dom/Document.h
+@@ -856,9 +856,16 @@ public:
+ 
+     bool updateLayoutIfDimensionsOutOfDate(Element&, OptionSet<DimensionsCheck> = { DimensionsCheck::Width, DimensionsCheck::Height }, OptionSet<LayoutOptions> = { });
+ 
++#if ENABLE(ACCESSIBILITY)
+     inline AXObjectCache* existingAXObjectCache() const;
+     WEBCORE_EXPORT AXObjectCache* axObjectCache() const;
+     void clearAXObjectCache();
++#else
++    // No accessibility: a document never has an accessibility object cache.
++    AXObjectCache* existingAXObjectCache() const { return nullptr; }
++    AXObjectCache* axObjectCache() const { return nullptr; }
++    void clearAXObjectCache() { }
++#endif
+ 
+     WEBCORE_EXPORT std::optional<PageIdentifier> NODELETE pageID() const;
+     std::optional<FrameIdentifier> frameID() const { return m_frameIdentifier; }
+@@ -938,7 +945,11 @@ public:
+ 
+     bool requiresTrustedTypes() const { return m_requiresTrustedTypes && !shouldBypassMainWorldContentSecurityPolicy(); }
+ 
++#if ENABLE(INDEXED_DATABASE)
+     IDBClient::IDBConnectionProxy* idbConnectionProxy() final;
++#else
++    IDBClient::IDBConnectionProxy* idbConnectionProxy() final { return nullptr; }
++#endif
+     StorageConnection* storageConnection();
+     SocketProvider* NODELETE socketProvider() final;
+     RefPtr<RTCDataChannelRemoteHandlerConnection> createRTCDataChannelRemoteHandlerConnection() final;
+@@ -1957,8 +1968,13 @@ public:
+     const HashMap<String, Ref<HTMLAttachmentElement>>& attachmentElementsByIdentifier() const LIFETIME_BOUND { return m_attachmentIdentifierToElementMap; }
+ #endif
+ 
++#if ENABLE(SERVICE_WORKER)
+     void setServiceWorkerConnection(RefPtr<SWClientConnection>&&);
+     void updateServiceWorkerClientData() final;
++#else
++    void setServiceWorkerConnection(std::nullptr_t) { }
++    void updateServiceWorkerClientData() final { }
++#endif
+     WEBCORE_EXPORT void navigateFromServiceWorker(const URL&, CompletionHandler<void(ScheduleLocationChangeResult)>&&);
+ 
+     bool allowsAddingRenderBlockedElements() const;
+@@ -2271,7 +2287,9 @@ private:
+     void wheelOrTouchEventHandlersChanged(Node* = nullptr);
+ 
+     HttpEquivPolicy httpEquivPolicy() const;
++#if ENABLE(ACCESSIBILITY)
+     AXObjectCache* existingAXObjectCacheSlow() const;
++#endif
+ 
+     bool shouldMaskURLForBindingsInternal(const URL&) const;
+ 
+@@ -2608,7 +2626,9 @@ private:
+     TargetClientToIdMap m_clientToIDMap;
+ #endif
+ 
++#if ENABLE(INDEXED_DATABASE)
+     RefPtr<IDBClient::IDBConnectionProxy> m_idbConnectionProxy;
++#endif
+ 
+ #if ENABLE(ATTACHMENT_ELEMENT)
+     HashMap<String, Ref<HTMLAttachmentElement>> m_attachmentIdentifierToElementMap;
+@@ -2640,7 +2660,9 @@ private:
+     RefPtr<WindowEventLoop> m_eventLoop;
+     const std::unique_ptr<EventLoopTaskGroup> m_documentTaskGroup;
+ 
++#if ENABLE(SERVICE_WORKER)
+     RefPtr<SWClientConnection> m_serviceWorkerConnection;
++#endif
+ 
+     RegistrableDomain m_registrableDomainRequestedPageSpecificStorageAccessWithUserInteraction { };
+     String m_referrerOverride;
+@@ -2879,7 +2901,9 @@ private:
+     mutable std::unique_ptr<CSSParserContext> m_cachedCSSParserContext;
+     mutable std::unique_ptr<PermissionsPolicy> m_permissionsPolicy;
+ 
++#if ENABLE(ACCESSIBILITY)
+     mutable std::unique_ptr<AXObjectCache> m_axObjectCache;
++#endif
+ #if !ENABLE_ACCESSIBILITY_LOCAL_FRAME
+     mutable WeakPtr<AXObjectCache> m_topAXObjectCache;
+ #endif
+@@ -2898,12 +2922,14 @@ private:
+     CachedSetInnerHTML m_cachedSetInnerHTML;
+ }; // class Document
+ 
++#if ENABLE(ACCESSIBILITY)
+ inline AXObjectCache* Document::existingAXObjectCache() const
+ {
+     if (!hasEverCreatedAnAXObjectCache)
+         return nullptr;
+     return existingAXObjectCacheSlow();
+ }
++#endif
+ 
+ inline bool Document::hasBrowsingContext() const
+ {
+diff --git a/Source/WebCore/dom/EventInterfaces.in b/Source/WebCore/dom/EventInterfaces.in
+index 223d98b..eac8b80 100644
+--- a/Source/WebCore/dom/EventInterfaces.in
++++ b/Source/WebCore/dom/EventInterfaces.in
+@@ -6,8 +6,8 @@ Event
+ Events interfaceName=Event
+ HTMLEvents interfaceName=Event
+ AnimationPlaybackEvent
+-BackgroundFetchEvent
+-BackgroundFetchUpdateUIEvent
++BackgroundFetchEvent conditional=SERVICE_WORKER
++BackgroundFetchUpdateUIEvent conditional=SERVICE_WORKER
+ BeforeLoadEvent interfaceName=Event
+ BeforeUnloadEvent
+ BufferedChangeEvent conditional=MEDIA_SOURCE
+@@ -21,16 +21,16 @@ CSSTransitionEvent
+ CustomEvent
+ DragEvent
+ ExtendableCookieChangeEvent conditional=COOKIE_STORE_API
+-ExtendableEvent
+-ExtendableMessageEvent
++ExtendableEvent conditional=SERVICE_WORKER
++ExtendableMessageEvent conditional=SERVICE_WORKER
+ ErrorEvent
+-FetchEvent
++FetchEvent conditional=SERVICE_WORKER
+ FocusEvent
+ FormDataEvent
+ HashChangeEvent
+ InputEvent
+ InputEvents interfaceName=InputEvent
+-InstallEvent
++InstallEvent conditional=SERVICE_WORKER
+ KeyboardEvent
+ KeyboardEvents interfaceName=KeyboardEvent
+ MediaQueryListEvent
+@@ -47,8 +47,8 @@ PageTransitionEvent
+ PopStateEvent
+ ProgressEvent
+ PromiseRejectionEvent
+-PushEvent
+-PushSubscriptionChangeEvent
++PushEvent conditional=PUSH_API
++PushSubscriptionChangeEvent conditional=PUSH_API
+ SubmitEvent
+ ToggleEvent
+ TextEvent
+@@ -86,7 +86,7 @@ SpeechSynthesisEvent conditional=SPEECH_SYNTHESIS
+ WebGLContextEvent conditional=WEBGL
+ StorageEvent
+ SVGEvents interfaceName=Event
+-IDBVersionChangeEvent
++IDBVersionChangeEvent conditional=INDEXED_DATABASE
+ TouchEvent conditional=TOUCH_EVENTS
+ DeviceMotionEvent conditional=DEVICE_ORIENTATION
+ DeviceOrientationEvent conditional=DEVICE_ORIENTATION
+diff --git a/Source/WebCore/dom/EventTargetFactory.in b/Source/WebCore/dom/EventTargetFactory.in
+index 0e055d9..38fcc74 100644
+--- a/Source/WebCore/dom/EventTargetFactory.in
++++ b/Source/WebCore/dom/EventTargetFactory.in
+@@ -7,10 +7,10 @@ AbortSignal
+ ApplePaySession conditional=APPLE_PAY
+ AudioNode conditional=WEB_AUDIO
+ AudioTrackList conditional=VIDEO
+-BackgroundFetchRegistration
++BackgroundFetchRegistration conditional=SERVICE_WORKER
+ BaseAudioContext conditional=WEB_AUDIO
+ BroadcastChannel
+-Clipboard
++Clipboard conditional=ASYNC_CLIPBOARD
+ CloseWatcher
+ CookieStore conditional=COOKIE_STORE_API
+ DedicatedWorkerGlobalScope
+@@ -21,10 +21,10 @@ EventSource
+ FileReader
+ FontFaceSet
+ GPUDevice conditional=WEBGPU
+-IDBDatabase
+-IDBOpenDBRequest
+-IDBRequest
+-IDBTransaction
++IDBDatabase conditional=INDEXED_DATABASE
++IDBOpenDBRequest conditional=INDEXED_DATABASE
++IDBRequest conditional=INDEXED_DATABASE
++IDBTransaction conditional=INDEXED_DATABASE
+ ManagedMediaSource conditional=MEDIA_SOURCE
+ ManagedSourceBuffer conditional=MEDIA_SOURCE
+ MediaController conditional=VIDEO
+@@ -54,12 +54,12 @@ RTCDTMFSender conditional=WEB_RTC
+ RTCIceTransport conditional=WEB_RTC
+ RTCPeerConnection conditional=WEB_RTC
+ RTCSctpTransport conditional=WEB_RTC
+-ServiceWorker
+-ServiceWorkerContainer
+-ServiceWorkerGlobalScope
+-ServiceWorkerRegistration
+-SharedWorker
+-SharedWorkerGlobalScope
++ServiceWorker conditional=SERVICE_WORKER
++ServiceWorkerContainer conditional=SERVICE_WORKER
++ServiceWorkerGlobalScope conditional=SERVICE_WORKER
++ServiceWorkerRegistration conditional=SERVICE_WORKER
++SharedWorker conditional=SHARED_WORKER
++SharedWorkerGlobalScope conditional=SHARED_WORKER
+ SourceBuffer conditional=MEDIA_SOURCE
+ SourceBufferList conditional=MEDIA_SOURCE
+ ScreenOrientation
+diff --git a/Source/WebCore/dom/MessageEvent.cpp b/Source/WebCore/dom/MessageEvent.cpp
+index a83b4dc..b184cc2 100644
+--- a/Source/WebCore/dom/MessageEvent.cpp
++++ b/Source/WebCore/dom/MessageEvent.cpp
+@@ -37,7 +37,11 @@
+ #include <JavaScriptCore/TopExceptionScope.h>
+ #include <wtf/TZoneMallocInlines.h>
+ 
++#if ENABLE(SERVICE_WORKER)
+ template class mpark::variant<WTF::Ref<WebCore::WindowProxy>, WTF::Ref<WebCore::MessagePort>, WTF::Ref<WebCore::ServiceWorker>>;
++#else
++template class mpark::variant<WTF::Ref<WebCore::WindowProxy>, WTF::Ref<WebCore::MessagePort>>;
++#endif
+ 
+ namespace WebCore {
+ 
+diff --git a/Source/WebCore/dom/MessageEvent.h b/Source/WebCore/dom/MessageEvent.h
+index 321efa4..cb11cfa 100644
+--- a/Source/WebCore/dom/MessageEvent.h
++++ b/Source/WebCore/dom/MessageEvent.h
+@@ -31,7 +31,9 @@
+ #include "JSValueInWrappedObject.h"
+ #include "MessagePort.h"
+ #include "SerializedScriptValue.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "ServiceWorker.h"
++#endif
+ #include "WindowProxy.h"
+ 
+ namespace WebCore {
+@@ -39,7 +41,11 @@ namespace WebCore {
+ class Blob;
+ class SecurityOrigin;
+ 
++#if ENABLE(SERVICE_WORKER)
+ using MessageEventSource = Variant<Ref<WindowProxy>, Ref<MessagePort>, Ref<ServiceWorker>>;
++#else
++using MessageEventSource = Variant<Ref<WindowProxy>, Ref<MessagePort>>;
++#endif
+ 
+ class MessageEvent final : public Event {
+     WTF_MAKE_TZONE_ALLOCATED(MessageEvent);
+@@ -109,4 +115,8 @@ private:
+ 
+ } // namespace WebCore
+ 
++#if ENABLE(SERVICE_WORKER)
+ extern template class mpark::variant<WTF::Ref<WebCore::WindowProxy>, WTF::Ref<WebCore::MessagePort>, WTF::Ref<WebCore::ServiceWorker>>;
++#else
++extern template class mpark::variant<WTF::Ref<WebCore::WindowProxy>, WTF::Ref<WebCore::MessagePort>>;
++#endif
+diff --git a/Source/WebCore/dom/MessageEvent.idl b/Source/WebCore/dom/MessageEvent.idl
+index 9c19089..fd350e4 100644
+--- a/Source/WebCore/dom/MessageEvent.idl
++++ b/Source/WebCore/dom/MessageEvent.idl
+@@ -27,7 +27,11 @@
+  */
+ 
+ // https://html.spec.whatwg.org/multipage/comms.html#messageeventsource
+-typedef (WindowProxy or MessagePort or ServiceWorker) MessageEventSource;
++typedef (WindowProxy or MessagePort
++#if defined(ENABLE_SERVICE_WORKER) && ENABLE_SERVICE_WORKER
++    or ServiceWorker
++#endif
++) MessageEventSource;
+ 
+ // https://html.spec.whatwg.org/multipage/comms.html#messageevent
+ [
+diff --git a/Source/WebCore/dom/ScriptExecutionContext.cpp b/Source/WebCore/dom/ScriptExecutionContext.cpp
+index e0d1d00..436bab3 100644
+--- a/Source/WebCore/dom/ScriptExecutionContext.cpp
++++ b/Source/WebCore/dom/ScriptExecutionContext.cpp
+@@ -64,16 +64,20 @@
+ #include "RTCDataChannelRemoteHandlerConnection.h"
+ #include "RejectedPromiseTracker.h"
+ #include "ResourceRequest.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "SWClientConnection.h"
+ #include "SWContextManager.h"
++#endif
+ #include "ScriptController.h"
+ #include "ScriptDisallowedScope.h"
+ #include "ScriptExecutionContextInlines.h"
+ #include "ScriptTrackingPrivacyCategory.h"
+ #include "SecurityOrigin.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "ServiceWorker.h"
+ #include "ServiceWorkerGlobalScope.h"
+ #include "ServiceWorkerProvider.h"
++#endif
+ #include "Settings.h"
+ #include "SocketProvider.h"
+ #include "WebCoreJSClientData.h"
+@@ -781,6 +785,7 @@ bool ScriptExecutionContext::allowsMediaDevices() const
+ #endif
+ }
+ 
++#if ENABLE(SERVICE_WORKER)
+ void ScriptExecutionContext::setActiveServiceWorker(RefPtr<ServiceWorker>&& serviceWorker)
+ {
+     m_activeServiceWorker = WTF::move(serviceWorker);
+@@ -828,6 +833,7 @@ ServiceWorkerContainer* ScriptExecutionContext::ensureServiceWorkerContainer()
+ 
+     return navigator ? &navigator->serviceWorker() : nullptr;
+ }
++#endif // ENABLE(SERVICE_WORKER)
+ 
+ void ScriptExecutionContext::setCrossOriginMode(CrossOriginMode crossOriginMode)
+ {
+diff --git a/Source/WebCore/dom/ScriptExecutionContext.h b/Source/WebCore/dom/ScriptExecutionContext.h
+index 59717c7..04dbc59 100644
+--- a/Source/WebCore/dom/ScriptExecutionContext.h
++++ b/Source/WebCore/dom/ScriptExecutionContext.h
+@@ -347,6 +347,7 @@ public:
+     WEBCORE_EXPORT String domainForCachePartition() const;
+ 
+     bool allowsMediaDevices() const;
++#if ENABLE(SERVICE_WORKER)
+     ServiceWorker* activeServiceWorker() const { return m_activeServiceWorker.get(); }
+     void setActiveServiceWorker(RefPtr<ServiceWorker>&&);
+ 
+@@ -356,6 +357,13 @@ public:
+ 
+     ServiceWorkerContainer* serviceWorkerContainer();
+     ServiceWorkerContainer* ensureServiceWorkerContainer();
++#else
++    // No service workers: no context ever has one or a container.
++    ServiceWorker* activeServiceWorker() const { return nullptr; }
++    void setActiveServiceWorker(std::nullptr_t) { }
++    ServiceWorkerContainer* serviceWorkerContainer() { return nullptr; }
++    ServiceWorkerContainer* ensureServiceWorkerContainer() { return nullptr; }
++#endif
+     virtual void updateServiceWorkerClientData() { ASSERT_NOT_REACHED(); }
+     WEBCORE_EXPORT static bool postTaskTo(ScriptExecutionContextIdentifier, Task&&);
+     WEBCORE_EXPORT static bool postTaskForModeToWorkerOrWorklet(ScriptExecutionContextIdentifier, Task&&, const String&);
+@@ -467,8 +475,10 @@ private:
+     bool m_inScriptExecutionContextDestructor { false };
+ #endif
+ 
++#if ENABLE(SERVICE_WORKER)
+     RefPtr<ServiceWorker> m_activeServiceWorker;
+     HashMap<ServiceWorkerIdentifier, WeakRef<ServiceWorker, WeakPtrImplWithEventTargetData>> m_serviceWorkers;
++#endif
+ 
+     mutable ScriptExecutionContextIdentifier m_identifier;
+ 
+diff --git a/Source/WebCore/html/Origin.cpp b/Source/WebCore/html/Origin.cpp
+index c540ea1..45fc01e 100644
+--- a/Source/WebCore/html/Origin.cpp
++++ b/Source/WebCore/html/Origin.cpp
+@@ -35,7 +35,9 @@
+ #include "JSDOMGlobalObjectInlines.h"
+ #include "JSDOMURL.h"
+ #include "JSDOMWindow.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "JSExtendableMessageEvent.h"
++#endif
+ #include "JSHTMLAnchorElement.h"
+ #include "JSHTMLAreaElement.h"
+ #include "JSMessageEvent.h"
+@@ -96,10 +98,12 @@ ExceptionOr<Ref<Origin>> Origin::from(ScriptExecutionContext& context, JSC::JSVa
+         Ref messageEvent = jsMessageEvent->wrapped();
+         if (RefPtr securityOrigin = messageEvent->securityOrigin())
+             return create(securityOrigin.releaseNonNull());
++#if ENABLE(SERVICE_WORKER)
+     } else if (auto* jsExtendableMessageEvent = dynamicDowncast<JSExtendableMessageEvent>(value)) {
+         Ref extendableMessageEvent = jsExtendableMessageEvent->wrapped();
+         if (RefPtr securityOrigin = extendableMessageEvent->securityOrigin())
+             return create(securityOrigin.releaseNonNull());
++#endif
+     } else if (auto* jsOrigin = dynamicDowncast<JSOrigin>(value)) {
+         Ref origin = jsOrigin->wrapped();
+         return create(origin->m_origin.copyRef());
+diff --git a/Source/WebCore/loader/DocumentLoader.cpp b/Source/WebCore/loader/DocumentLoader.cpp
+index 92cbeb8..7ea310a 100644
+--- a/Source/WebCore/loader/DocumentLoader.cpp
++++ b/Source/WebCore/loader/DocumentLoader.cpp
+@@ -621,6 +621,7 @@ void DocumentLoader::matchRegistration(const URL& url, SWClientConnection::Regis
+         return;
+     }
+ 
++#if ENABLE(SERVICE_WORKER)
+     RefPtr frame = m_frame.get();
+     auto origin = (!frame->isMainFrame() && frame->document()) ? protect(frame->document())->topOrigin().data() : SecurityOriginData::fromURL(url);
+     if (!protect(ServiceWorkerProvider::singleton().serviceWorkerConnection())->mayHaveServiceWorkerRegisteredForOrigin(origin)) {
+@@ -630,6 +631,9 @@ void DocumentLoader::matchRegistration(const URL& url, SWClientConnection::Regis
+ 
+     Ref connection = ServiceWorkerProvider::singleton().serviceWorkerConnection();
+     connection->matchRegistration(WTF::move(origin), url, WTF::move(callback));
++#else
++    callback(std::nullopt);
++#endif
+ }
+ 
+ void DocumentLoader::redirectReceived(CachedResource& resource, ResourceRequest&& request, const ResourceResponse& redirectResponse, CompletionHandler<void(ResourceRequest&&)>&& completionHandler)
+@@ -1347,6 +1351,7 @@ void DocumentLoader::commitData(const SharedBuffer& data)
+         if (RefPtr archive = m_archive; archive && archive->shouldOverrideBaseURL())
+             document->setBaseURLOverride(archive->mainResource()->url());
+ #endif
++#if ENABLE(SERVICE_WORKER)
+         if (m_canUseServiceWorkers) {
+             if (!document->securityOrigin().isOpaque()) {
+                 if (m_serviceWorkerRegistrationData && m_serviceWorkerRegistrationData->activeWorker) {
+@@ -1372,6 +1377,7 @@ void DocumentLoader::commitData(const SharedBuffer& data)
+                 m_resultingClientId = std::nullopt;
+             }
+         }
++#endif
+         // Call receivedFirstData() exactly once per load. We should only reach this point multiple times
+         // for multipart loads, and FrameLoader::isMultipartReplacing() will be true after the first time.
+         bool frameHadNoTreeParent = frame && !frame->tree().parent();
+@@ -2145,7 +2151,12 @@ void DocumentLoader::loadErrorDocument()
+ 
+ static bool canUseServiceWorkers(LocalFrame* frame)
+ {
++#if ENABLE(SERVICE_WORKER)
+     return frame && frame->settings().serviceWorkersEnabled() && !is<HTMLPlugInElement>(frame->ownerElement());
++#else
++    UNUSED_PARAM(frame);
++    return false;
++#endif
+ }
+ 
+ bool DocumentLoader::shouldCancelLoadingAboutURL(const URL& url) const
+@@ -2266,8 +2277,10 @@ void DocumentLoader::unregisterReservedServiceWorkerClient()
+     if (!m_resultingClientId)
+         return;
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (RefPtr serviceWorkerConnection = ServiceWorkerProvider::singleton().existingServiceWorkerConnection())
+         serviceWorkerConnection->unregisterServiceWorkerClient(*m_resultingClientId);
++#endif
+ }
+ 
+ void DocumentLoader::loadMainResource(ResourceRequest&& request)
+diff --git a/Source/WebCore/loader/EmptyClients.cpp b/Source/WebCore/loader/EmptyClients.cpp
+index 7534bb6..4bdcd5c 100644
+--- a/Source/WebCore/loader/EmptyClients.cpp
++++ b/Source/WebCore/loader/EmptyClients.cpp
+@@ -87,11 +87,13 @@
+ #include "UserContentProvider.h"
+ #include "VisitedLinkStore.h"
+ #include "WebRTCProvider.h"
++#if ENABLE(WEB_TRANSPORT)
+ #include "WebTransportConnectionInfo.h"
+ #include "WebTransportConnectionStats.h"
+ #include "WebTransportReceiveStreamStats.h"
+ #include "WebTransportSendStreamStats.h"
+ #include "WebTransportSession.h"
++#endif
+ #include <JavaScriptCore/HeapInlines.h>
+ #include <pal/SessionID.h>
+ #include <wtf/NeverDestroyed.h>
+@@ -205,6 +207,7 @@ private:
+ };
+ 
+ class EmptyDatabaseProvider final : public DatabaseProvider {
++#if ENABLE(INDEXED_DATABASE)
+     struct EmptyIDBConnectionToServerDeletegate final : public IDBClient::IDBConnectionToServerDelegate, public RefCounted<EmptyIDBConnectionToServerDeletegate> {
+         static Ref<EmptyIDBConnectionToServerDeletegate> create() { return adoptRef(*new EmptyIDBConnectionToServerDeletegate); }
+ 
+@@ -258,6 +261,7 @@ class EmptyDatabaseProvider final : public DatabaseProvider {
+         static NeverDestroyed<Ref<IDBClient::IDBConnectionToServer>> emptyConnection = IDBClient::IDBConnectionToServer::create(emptyDelegate.get(), sessionID).leakRef();
+         return emptyConnection->get();
+     }
++#endif
+ };
+ 
+ class EmptyDiagnosticLoggingClient final : public DiagnosticLoggingClient {
+@@ -1247,6 +1251,7 @@ private:
+     void NODELETE postMessage(const PartitionedSecurityOrigin&, const String&, BroadcastChannelIdentifier, Ref<SerializedScriptValue>&&, CompletionHandler<void()>&&) final { }
+ };
+ 
++#if ENABLE(WEB_TRANSPORT)
+ class EmptyWebTransportSession final : public WebTransportSession, public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<EmptyWebTransportSession> {
+ public:
+     WTF_ABSTRACT_THREAD_SAFE_REF_COUNTED_AND_CAN_MAKE_WEAK_PTR_IMPL;
+@@ -1271,12 +1276,15 @@ public:
+     void incomingMaxBufferedDatagramsUpdated(uint32_t) final { }
+     void outgoingMaxBufferedDatagramsUpdated(uint32_t) final { }
+ };
++#endif
+ 
+ class EmptySocketProvider final : public SocketProvider {
+ public:
+     RefPtr<ThreadableWebSocketChannel> createWebSocketChannel(Document&, WebSocketChannelClient&, IsInitiatedByDedicatedWorker) final { return nullptr; }
+ 
++#if ENABLE(WEB_TRANSPORT)
+     Ref<WebTransportSession> createWebTransportSession(ScriptExecutionContext&, WebTransportSessionClient&) { return adoptRef(*new EmptyWebTransportSession()); }
++#endif
+ };
+ 
+ Ref<SocketProvider> emptySocketProvider()
+diff --git a/Source/WebCore/loader/WorkerThreadableLoader.cpp b/Source/WebCore/loader/WorkerThreadableLoader.cpp
+index 25fbe82..b76026e 100644
+--- a/Source/WebCore/loader/WorkerThreadableLoader.cpp
++++ b/Source/WebCore/loader/WorkerThreadableLoader.cpp
+@@ -158,10 +158,13 @@ WorkerThreadableLoader::MainThreadBridge::MainThreadBridge(ThreadableLoaderClien
+     if (optionsCopy->options.serviceWorkersMode == ServiceWorkersMode::All) {
+         if (is<ServiceWorkerGlobalScope>(globalScope))
+             optionsCopy->options.serviceWorkersMode = ServiceWorkersMode::None;
++#if ENABLE(SERVICE_WORKER)
+         else if (RefPtr activeServiceWorker = globalScope.activeServiceWorker()) {
+             optionsCopy->options.serviceWorkerRegistrationIdentifier = activeServiceWorker->registrationIdentifier();
+             optionsCopy->options.serviceWorkersMode = ServiceWorkersMode::All;
+-        } else if (is<DedicatedWorkerGlobalScope>(globalScope))
++        }
++#endif
++        else if (is<DedicatedWorkerGlobalScope>(globalScope))
+             optionsCopy->options.serviceWorkersMode = ServiceWorkersMode::None;
+         else
+             optionsCopy->options.serviceWorkersMode = ServiceWorkersMode::All;
+@@ -169,11 +172,16 @@ WorkerThreadableLoader::MainThreadBridge::MainThreadBridge(ThreadableLoaderClien
+     if (!optionsCopy->options.clientIdentifier)
+         optionsCopy->options.clientIdentifier = globalScope.identifier().object();
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (RefPtr serviceWorkerGlobalScope = dynamicDowncast<ServiceWorkerGlobalScope>(globalScope)) {
+         InspectorInstrumentation::willSendRequest(*serviceWorkerGlobalScope, m_workerRequestIdentifier, request);
+         optionsCopy->options.workerIdentifier = serviceWorkerGlobalScope->thread()->identifier();
+-    } else if (RefPtr sharedWorkerGlobalScope = dynamicDowncast<SharedWorkerGlobalScope>(globalScope))
++    }
++#endif
++#if ENABLE(SHARED_WORKER)
++    if (RefPtr sharedWorkerGlobalScope = dynamicDowncast<SharedWorkerGlobalScope>(globalScope))
+         optionsCopy->options.workerIdentifier = sharedWorkerGlobalScope->thread()->identifier();
++#endif
+ 
+     if (!m_loaderProxy)
+         return;
+@@ -256,10 +264,14 @@ void WorkerThreadableLoader::MainThreadBridge::didReceiveResponse(ScriptExecutio
+     ScriptExecutionContext::postTaskForModeToWorkerOrWorklet(m_contextIdentifier, [workerClientWrapper = m_workerClientWrapper, workerRequestIdentifier = m_workerRequestIdentifier, mainContextIdentifier, identifier, responseData = response.crossThreadData()] (ScriptExecutionContext& context) mutable {
+         ASSERT(context.isWorkerGlobalScope() || context.isWorkletGlobalScope());
+         auto response = ResourceResponse::fromCrossThreadData(WTF::move(responseData));
++#if ENABLE(SERVICE_WORKER)
+         if (auto* serviceWorkerGlobalScope = dynamicDowncast<ServiceWorkerGlobalScope>(context)) {
+             workerClientWrapper->didReceiveResponse(mainContextIdentifier, workerRequestIdentifier, response);
+             InspectorInstrumentation::didReceiveResourceResponse(*serviceWorkerGlobalScope, workerRequestIdentifier, response);
+         } else
++#else
++        UNUSED_VARIABLE(workerRequestIdentifier);
++#endif
+             workerClientWrapper->didReceiveResponse(mainContextIdentifier, identifier, response);
+     }, m_taskMode);
+ }
+@@ -269,8 +281,10 @@ void WorkerThreadableLoader::MainThreadBridge::didReceiveData(const SharedBuffer
+     ScriptExecutionContext::postTaskForModeToWorkerOrWorklet(m_contextIdentifier, [workerClientWrapper = m_workerClientWrapper, workerRequestIdentifier = m_workerRequestIdentifier, buffer = Ref { data }] (ScriptExecutionContext& context) {
+         ASSERT(context.isWorkerGlobalScope() || context.isWorkletGlobalScope());
+         workerClientWrapper->didReceiveData(buffer);
++#if ENABLE(SERVICE_WORKER)
+         if (auto* serviceWorkerGlobalScope = dynamicDowncast<ServiceWorkerGlobalScope>(context))
+             InspectorInstrumentation::didReceiveData(*serviceWorkerGlobalScope, workerRequestIdentifier, buffer);
++#endif
+     }, m_taskMode);
+ }
+ 
+@@ -280,8 +294,10 @@ void WorkerThreadableLoader::MainThreadBridge::didFinishLoading(ScriptExecutionC
+     ScriptExecutionContext::postTaskForModeToWorkerOrWorklet(m_contextIdentifier, [workerClientWrapper = m_workerClientWrapper, workerRequestIdentifier = m_workerRequestIdentifier, metrics = metrics.isolatedCopy(), mainContext, identifier] (ScriptExecutionContext& context) mutable {
+         ASSERT(context.isWorkerGlobalScope() || context.isWorkletGlobalScope());
+         workerClientWrapper->didFinishLoading(mainContext, identifier, metrics);
++#if ENABLE(SERVICE_WORKER)
+         if (auto* serviceWorkerGlobalScope = dynamicDowncast<ServiceWorkerGlobalScope>(context))
+             InspectorInstrumentation::didFinishLoading(*serviceWorkerGlobalScope, workerRequestIdentifier, metrics);
++#endif
+     }, m_taskMode);
+ }
+ 
+@@ -292,8 +308,10 @@ void WorkerThreadableLoader::MainThreadBridge::didFail(std::optional<ScriptExecu
+         ASSERT(context.isWorkerGlobalScope() || context.isWorkletGlobalScope());
+         ThreadableLoader::logError(context, error, workerClientWrapper->initiator());
+         workerClientWrapper->didFail(mainContext, error);
++#if ENABLE(SERVICE_WORKER)
+         if (auto* serviceWorkerGlobalScope = dynamicDowncast<ServiceWorkerGlobalScope>(context))
+             InspectorInstrumentation::didFailLoading(*serviceWorkerGlobalScope, workerRequestIdentifier, error);
++#endif
+     }, m_taskMode);
+ }
+ 
+diff --git a/Source/WebCore/page/DatabaseProvider.h b/Source/WebCore/page/DatabaseProvider.h
+index 9317807..a32c810 100644
+--- a/Source/WebCore/page/DatabaseProvider.h
++++ b/Source/WebCore/page/DatabaseProvider.h
+@@ -40,7 +40,9 @@ class IDBConnectionToServer;
+ class WEBCORE_EXPORT DatabaseProvider : public RefCounted<DatabaseProvider> {
+ public:
+     virtual ~DatabaseProvider();
++#if ENABLE(INDEXED_DATABASE)
+     virtual IDBClient::IDBConnectionToServer& idbConnectionToServerForSession(PAL::SessionID) = 0;
++#endif
+ };
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/page/LocalDOMWindow.cpp b/Source/WebCore/page/LocalDOMWindow.cpp
+index 14efa8d..489481b 100644
+--- a/Source/WebCore/page/LocalDOMWindow.cpp
++++ b/Source/WebCore/page/LocalDOMWindow.cpp
+@@ -98,7 +98,9 @@
+ #include "JSDOMPromiseDeferred.h"
+ #include "JSDOMWindowBase.h"
+ #include "JSExecState.h"
++#if ENABLE(DECLARATIVE_WEB_PUSH)
+ #include "JSPushSubscription.h"
++#endif
+ #include "KeyboardEvent.h"
+ #include "LocalFrame.h"
+ #include "LocalFrameInlines.h"
+diff --git a/Source/WebCore/page/LocalFrame.cpp b/Source/WebCore/page/LocalFrame.cpp
+index 09838f6..e75b487 100644
+--- a/Source/WebCore/page/LocalFrame.cpp
++++ b/Source/WebCore/page/LocalFrame.cpp
+@@ -85,7 +85,9 @@
+ #include "InspectorInstrumentation.h"
+ #include "JSDOMWindow.h"
+ #include "JSNode.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "JSServiceWorkerGlobalScope.h"
++#endif
+ #include "JSWindowProxy.h"
+ #include "LocalDOMWindow.h"
+ #include "LocalFrameLoaderClient.h"
+@@ -1308,8 +1310,10 @@ LocalFrame* LocalFrame::fromJSContext(JSContextRef context)
+     JSC::JSGlobalObject* globalObjectObj = toJS(context);
+     if (auto* window = dynamicDowncast<JSDOMWindow>(globalObjectObj))
+         return dynamicDowncast<LocalFrame>(window->wrapped().frame());
++#if ENABLE(SERVICE_WORKER)
+     if (auto* serviceWorkerGlobalScope = dynamicDowncast<JSServiceWorkerGlobalScope>(globalObjectObj))
+         return protect(serviceWorkerGlobalScope->wrapped())->serviceWorkerPage() ? dynamicDowncast<LocalFrame>(protect(serviceWorkerGlobalScope->wrapped())->serviceWorkerPage()->mainFrame()) : nullptr;
++#endif
+     return nullptr;
+ }
+ 
+diff --git a/Source/WebCore/page/LocalFrameView.cpp b/Source/WebCore/page/LocalFrameView.cpp
+index bf31210..b923cf1 100644
+--- a/Source/WebCore/page/LocalFrameView.cpp
++++ b/Source/WebCore/page/LocalFrameView.cpp
+@@ -6709,6 +6709,7 @@ void LocalFrameView::notifyWidgetsInAllFrames(WidgetNotification notification)
+     }
+ }
+     
++#if ENABLE(ACCESSIBILITY)
+ AXObjectCache* LocalFrameView::axObjectCache() const
+ {
+     SUPPRESS_UNCHECKED_LOCAL AXObjectCache* cache = nullptr;
+@@ -6726,6 +6727,7 @@ AXObjectCache* LocalFrameView::axObjectCache() const
+     }
+     return cache;
+ }
++#endif
+ 
+ #if PLATFORM(IOS_FAMILY)
+ bool LocalFrameView::useCustomFixedPositionLayoutRect() const
+diff --git a/Source/WebCore/page/LocalFrameView.h b/Source/WebCore/page/LocalFrameView.h
+index aec8ec8..e6b4cbd 100644
+--- a/Source/WebCore/page/LocalFrameView.h
++++ b/Source/WebCore/page/LocalFrameView.h
+@@ -725,7 +725,11 @@ public:
+ 
+     WEBCORE_EXPORT void invalidateControlTints();
+     void updateAccessibilityObjectRegions();
++#if ENABLE(ACCESSIBILITY)
+     AXObjectCache* axObjectCache() const;
++#else
++    AXObjectCache* axObjectCache() const { return nullptr; }
++#endif
+ 
+     void invalidateScrollbarsForAllScrollableAreas();
+ 
+diff --git a/Source/WebCore/page/Location.cpp b/Source/WebCore/page/Location.cpp
+index 584dd77..f86ca2d 100644
+--- a/Source/WebCore/page/Location.cpp
++++ b/Source/WebCore/page/Location.cpp
+@@ -302,6 +302,7 @@ void Location::reload(LocalDOMWindow& activeWindow)
+     if (targetDocument->url().protocolIsJavaScript())
+         return;
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (targetDocument->quirks().shouldDelayReloadWhenRegisteringServiceWorker()) {
+         if (RefPtr container = targetDocument->serviceWorkerContainer()) {
+             container->whenRegisterJobsAreFinished([localFrame, activeDocument] {
+@@ -310,6 +311,7 @@ void Location::reload(LocalDOMWindow& activeWindow)
+             return;
+         }
+     }
++#endif
+ 
+     protect(localFrame->navigationScheduler())->scheduleRefresh(activeDocument);
+ }
+diff --git a/Source/WebCore/page/NavigatorBase.cpp b/Source/WebCore/page/NavigatorBase.cpp
+index d6a6e9b..ad6df99 100644
+--- a/Source/WebCore/page/NavigatorBase.cpp
++++ b/Source/WebCore/page/NavigatorBase.cpp
+@@ -32,7 +32,9 @@
+ #include "Document.h"
+ #include "GPU.h"
+ #include "ScriptTrackingPrivacyCategory.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "ServiceWorkerContainer.h"
++#endif
+ #include "Settings.h"
+ #include "StorageManager.h"
+ #include "WebCoreOpaqueRoot.h"
+@@ -171,6 +173,7 @@ WebLockManager& NavigatorBase::locks()
+ }
+ #endif
+ 
++#if ENABLE(SERVICE_WORKER)
+ ServiceWorkerContainer& NavigatorBase::serviceWorker()
+ {
+     ASSERT(!scriptExecutionContext() || scriptExecutionContext()->settingsValues().serviceWorkersEnabled);
+@@ -185,6 +188,7 @@ ExceptionOr<ServiceWorkerContainer&> NavigatorBase::serviceWorker(ScriptExecutio
+         return Exception { ExceptionCode::SecurityError, "Service Worker is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag"_s };
+     return serviceWorker();
+ }
++#endif
+ 
+ int NavigatorBase::hardwareConcurrency(ScriptExecutionContext& context)
+ {
+diff --git a/Source/WebCore/page/NavigatorBase.h b/Source/WebCore/page/NavigatorBase.h
+index 530b4f7..d37bcf6 100644
+--- a/Source/WebCore/page/NavigatorBase.h
++++ b/Source/WebCore/page/NavigatorBase.h
+@@ -86,12 +86,14 @@ private:
+     const RefPtr<WebLockManager> m_webLockManager;
+ #endif
+ 
++#if ENABLE(SERVICE_WORKER)
+ public:
+     ServiceWorkerContainer& serviceWorker();
+     ExceptionOr<ServiceWorkerContainer&> serviceWorker(ScriptExecutionContext&);
+ 
+ private:
+     const std::unique_ptr<ServiceWorkerContainer> m_serviceWorkerContainer;
++#endif
+ };
+ 
+ WebCoreOpaqueRoot NODELETE root(NavigatorBase*);
+diff --git a/Source/WebCore/page/NavigatorServiceWorker.idl b/Source/WebCore/page/NavigatorServiceWorker.idl
+index 6219ef9..3ee6cb9 100644
+--- a/Source/WebCore/page/NavigatorServiceWorker.idl
++++ b/Source/WebCore/page/NavigatorServiceWorker.idl
+@@ -25,6 +25,7 @@
+ 
+ // https://w3c.github.io/ServiceWorker/#navigator-serviceworker
+ [
++    Conditional=SERVICE_WORKER,
+     EnabledBySetting=ServiceWorkersEnabled
+ ] interface mixin NavigatorServiceWorker {
+     [CallWith=CurrentScriptExecutionContext, SecureContext, SameObject] readonly attribute ServiceWorkerContainer serviceWorker;
+diff --git a/Source/WebCore/page/Page.cpp b/Source/WebCore/page/Page.cpp
+index 3135195..1e11c28 100644
+--- a/Source/WebCore/page/Page.cpp
++++ b/Source/WebCore/page/Page.cpp
+@@ -4287,8 +4287,10 @@ void Page::setSessionID(PAL::SessionID sessionID)
+     ASSERT(m_sessionID == PAL::SessionID::legacyPrivateSessionID() || m_sessionID == PAL::SessionID::defaultSessionID());
+     ASSERT(sessionID == PAL::SessionID::legacyPrivateSessionID() || sessionID == PAL::SessionID::defaultSessionID());
+ 
++#if ENABLE(INDEXED_DATABASE)
+     if (sessionID != m_sessionID)
+         m_idbConnectionToServer = nullptr;
++#endif
+ 
+     if (sessionID != m_sessionID) {
+         constexpr auto doNotCreate = StorageNamespaceProvider::ShouldCreateNamespace::No;
+@@ -4448,6 +4450,7 @@ void Page::setAllowsMediaDocumentInlinePlayback(bool flag)
+ 
+ #endif
+ 
++#if ENABLE(INDEXED_DATABASE)
+ IDBClient::IDBConnectionToServer& Page::idbConnection()
+ {
+     if (RefPtr cached = m_idbConnectionToServer; cached && !cached->isValid())
+@@ -4463,6 +4466,7 @@ IDBClient::IDBConnectionToServer* Page::optionalIDBConnection()
+ {
+     return m_idbConnectionToServer.get();
+ }
++#endif
+ 
+ #if ENABLE(RESOURCE_USAGE)
+ void Page::setResourceUsageOverlayVisible(bool visible)
+@@ -4516,6 +4520,7 @@ void Page::clearAXObjectCache()
+         mainFrameDocument->clearAXObjectCache();
+ }
+ 
++#if ENABLE(ACCESSIBILITY)
+ AXObjectCache* Page::existingAXObjectCache()
+ {
+     RefPtr localMainFrame = dynamicDowncast<LocalFrame>(m_mainFrame.get());
+@@ -4533,6 +4538,7 @@ AXObjectCache* Page::axObjectCache()
+     // Always try to get or create the cache from the main frame document
+     return mainFrameDocument->axObjectCache();
+ }
++#endif
+ 
+ void Page::setUnobscuredSafeAreaInsets(const FloatBoxExtent& insets)
+ {
+@@ -5407,6 +5413,10 @@ void Page::resetTextRecognitionResult(const HTMLElement& element)
+ 
+ JSC::JSGlobalObject* Page::serviceWorkerGlobalObject(DOMWrapperWorld& world)
+ {
++#if !ENABLE(SERVICE_WORKER)
++    UNUSED_PARAM(world);
++    return nullptr;
++#else
+     RefPtr serviceWorkerGlobalScope = m_serviceWorkerGlobalScope.get();
+     if (!serviceWorkerGlobalScope)
+         return nullptr;
+@@ -5418,8 +5428,10 @@ JSC::JSGlobalObject* Page::serviceWorkerGlobalObject(DOMWrapperWorld& world)
+     // FIXME: We currently do not support non-normal worlds in service workers.
+     RELEASE_ASSERT(&downcast<JSVMClientData>(serviceWorkerGlobalScope->vm().clientData)->normalWorldSingleton() == &world);
+     return scriptController->globalScopeWrapper();
++#endif
+ }
+ 
++#if ENABLE(SERVICE_WORKER)
+ void Page::setServiceWorkerGlobalScope(ServiceWorkerGlobalScope& serviceWorkerGlobalScope)
+ {
+     ASSERT(isMainThread());
+@@ -5434,6 +5446,7 @@ RefPtr<ServiceWorkerThread> Page::serviceWorkerThread() const
+         return nullptr;
+     return serviceWorkerGlobalScope->thread();
+ }
++#endif
+ 
+ StorageConnection& Page::storageConnection()
+ {
+diff --git a/Source/WebCore/page/Page.h b/Source/WebCore/page/Page.h
+index f947b9d..c5c8327 100644
+--- a/Source/WebCore/page/Page.h
++++ b/Source/WebCore/page/Page.h
+@@ -750,8 +750,13 @@ public:
+     WEBCORE_EXPORT void appearanceDidChange();
+ 
+     void clearAXObjectCache();
++#if ENABLE(ACCESSIBILITY)
+     AXObjectCache* existingAXObjectCache();
+     WEBCORE_EXPORT AXObjectCache* axObjectCache();
++#else
++    AXObjectCache* existingAXObjectCache() { return nullptr; }
++    AXObjectCache* axObjectCache() { return nullptr; }
++#endif
+ 
+     // Page and FrameView both store a Pagination value. Page::pagination() is set only by API,
+     // and FrameView::pagination() is set only by CSS. Page::pagination() will affect all
+@@ -830,9 +835,13 @@ public:
+     WEBCORE_EXPORT static Page* serviceWorkerPage(ScriptExecutionContextIdentifier);
+ 
+     // Service worker pages have an associated ServiceWorkerGlobalScope on the main thread.
++#if ENABLE(SERVICE_WORKER)
+     void setServiceWorkerGlobalScope(ServiceWorkerGlobalScope&);
++#endif
+     WEBCORE_EXPORT JSC::JSGlobalObject* serviceWorkerGlobalObject(DOMWrapperWorld&);
++#if ENABLE(SERVICE_WORKER)
+     WEBCORE_EXPORT RefPtr<ServiceWorkerThread> serviceWorkerThread() const;
++#endif
+ 
+     // Notifications when the Page starts and stops being presented via a native window.
+     WEBCORE_EXPORT void setActivityState(OptionSet<ActivityState>);
+@@ -1123,8 +1132,10 @@ public:
+     bool allowsPlaybackControlsForAutoplayingAudio() const { return m_allowsPlaybackControlsForAutoplayingAudio; }
+     void setAllowsPlaybackControlsForAutoplayingAudio(bool allowsPlaybackControlsForAutoplayingAudio) { m_allowsPlaybackControlsForAutoplayingAudio = allowsPlaybackControlsForAutoplayingAudio; }
+ 
++#if ENABLE(INDEXED_DATABASE)
+     IDBClient::IDBConnectionToServer& idbConnection();
+     WEBCORE_EXPORT IDBClient::IDBConnectionToServer* NODELETE optionalIDBConnection();
++#endif
+ 
+     void setShowAllPlugins(bool showAll) { m_showAllPlugins = showAll; }
+     bool showAllPlugins() const;
+@@ -1681,7 +1692,9 @@ private:
+ 
+     bool m_scriptedAnimationsSuspended { false };
+ 
++#if ENABLE(INDEXED_DATABASE)
+     RefPtr<IDBClient::IDBConnectionToServer> m_idbConnectionToServer;
++#endif
+ 
+     MemoryCompactRobinHoodHashSet<String> m_seenPlugins;
+     MemoryCompactRobinHoodHashSet<String> m_seenMediaEngines;
+@@ -1702,7 +1715,9 @@ private:
+     Ref<BroadcastChannelRegistry> m_broadcastChannelRegistry;
+     RefPtr<WheelEventTestMonitor> m_wheelEventTestMonitor;
+     WeakHashSet<ActivityStateChangeObserver> m_activityStateChangeObservers;
++#if ENABLE(SERVICE_WORKER)
+     WeakPtr<ServiceWorkerGlobalScope, WeakPtrImplWithEventTargetData> m_serviceWorkerGlobalScope;
++#endif
+ 
+ #if ENABLE(RESOURCE_USAGE)
+     RefPtr<ResourceUsageOverlay> m_resourceUsageOverlay;
+diff --git a/Source/WebCore/page/SocketProvider.h b/Source/WebCore/page/SocketProvider.h
+index f83dad7..35dae33 100644
+--- a/Source/WebCore/page/SocketProvider.h
++++ b/Source/WebCore/page/SocketProvider.h
+@@ -44,7 +44,9 @@ enum class IsInitiatedByDedicatedWorker : bool;
+ class WEBCORE_EXPORT SocketProvider : public ThreadSafeRefCounted<SocketProvider> {
+ public:
+     virtual RefPtr<ThreadableWebSocketChannel> createWebSocketChannel(Document&, WebSocketChannelClient&, IsInitiatedByDedicatedWorker) = 0;
++#if ENABLE(WEB_TRANSPORT)
+     virtual Ref<WebTransportSession> createWebTransportSession(ScriptExecutionContext&, WebTransportSessionClient&) = 0;
++#endif
+ 
+     virtual void countWebSocketChannelsForTesting(CompletionHandler<void(unsigned)>&& completionHandler) { completionHandler(0); }
+ 
+diff --git a/Source/WebCore/platform/Supplementable.h b/Source/WebCore/platform/Supplementable.h
+index d1cbb16..563eb4a 100644
+--- a/Source/WebCore/platform/Supplementable.h
++++ b/Source/WebCore/platform/Supplementable.h
+@@ -80,15 +80,21 @@ public:
+     virtual bool isCSSNumericFactory() const { return false; }
+     virtual bool isDOMCSSPaintWorklet() const { return false; }
+     virtual bool isDOMCSSRegisterCustomProperty() const { return false; }
++#if ENABLE(CACHE_API)
+     virtual bool isDOMWindowCaches() const { return false; }
++#endif
++#if ENABLE(INDEXED_DATABASE)
+     virtual bool isDOMWindowIndexedDatabase() const { return false; }
++#endif
+     virtual bool isDOMWindowTrustedTypes() const { return false; }
+     virtual bool isDeviceMotionController() const { return false; }
+     virtual bool isDeviceOrientationController() const { return false; }
+     virtual bool isDocumentMediaElement() const { return false; }
+     virtual bool isDocumentPictureInPicture() const { return false; }
+     virtual bool isDocumentStorageAccess() const { return false; }
++#if ENABLE(GEOLOCATION)
+     virtual bool isGeolocationController() const { return false; }
++#endif
+     virtual bool isHTMLVideoElementPictureInPicture() const { return false; }
+     virtual bool isInternalSettingsWrapper() const { return false; }
+     virtual bool isLocalDOMWindowMediaControls() const { return false; }
+@@ -96,12 +102,18 @@ public:
+     virtual bool isMediaKeySystemController() const { return false; }
+     virtual bool isNavigatorAudioSession() const { return false; }
+     virtual bool isNavigatorBeacon() const { return false; }
++#if ENABLE(ASYNC_CLIPBOARD)
+     virtual bool isNavigatorClipboard() const { return false; }
++#endif
+     virtual bool isNavigatorContacts() const { return false; }
++#if ENABLE(CREDENTIAL_MANAGEMENT)
+     virtual bool isNavigatorCredentials() const { return false; }
++#endif
+     virtual bool isNavigatorDevicePosture() const { return false; }
+     virtual bool isNavigatorGamepad() const { return false; }
++#if ENABLE(GEOLOCATION)
+     virtual bool isNavigatorGeolocation() const { return false; }
++#endif
+     virtual bool isNavigatorLoginStatus() const { return false; }
+     virtual bool isNavigatorMediaCapabilities() const { return false; }
+     virtual bool isNavigatorMediaDevices() const { return false; }
+@@ -110,11 +122,19 @@ public:
+     virtual bool isNavigatorScreenWakeLock() const { return false; }
+     virtual bool isNavigatorUserActivation() const { return false; }
+     virtual bool isNotificationController() const { return false; }
++#if ENABLE(SERVICE_WORKER)
+     virtual bool isServiceWorkerRegistrationBackgroundFetchAPI() const { return false; }
++#endif
++#if ENABLE(PUSH_API)
+     virtual bool isServiceWorkerRegistrationPushAPI() const { return false; }
++#endif
+     virtual bool isUserMediaController() const { return false; }
++#if ENABLE(CACHE_API)
+     virtual bool isWorkerGlobalScopeCaches() const { return false; }
++#endif
++#if ENABLE(INDEXED_DATABASE)
+     virtual bool isWorkerGlobalScopeIndexedDatabase() const { return false; }
++#endif
+     virtual bool isWorkerGlobalScopeTrustedTypes() const { return false; }
+     virtual bool isWorkerNavigatorMediaCapabilities() const { return false; }
+     virtual bool isWorkerNavigatorPermissions() const { return false; }
+diff --git a/Source/WebCore/workers/DedicatedWorkerThread.cpp b/Source/WebCore/workers/DedicatedWorkerThread.cpp
+index d9f411c..07583df 100644
+--- a/Source/WebCore/workers/DedicatedWorkerThread.cpp
++++ b/Source/WebCore/workers/DedicatedWorkerThread.cpp
+@@ -52,8 +52,10 @@ DedicatedWorkerThread::~DedicatedWorkerThread() = default;
+ Ref<WorkerGlobalScope> DedicatedWorkerThread::createWorkerGlobalScope(const WorkerParameters& params, Ref<SecurityOrigin>&& origin, Ref<SecurityOrigin>&& topOrigin)
+ {
+     auto scope = DedicatedWorkerGlobalScope::create(params, WTF::move(origin), *this, WTF::move(topOrigin), idbConnectionProxy(), socketProvider(), WTF::move(m_workerClient));
++#if ENABLE(SERVICE_WORKER)
+     if (params.serviceWorkerData)
+         scope->setActiveServiceWorker(ServiceWorker::getOrCreate(scope.get(), ServiceWorkerData { *params.serviceWorkerData }));
++#endif
+     scope->updateServiceWorkerClientData();
+     return scope;
+ }
+diff --git a/Source/WebCore/workers/WorkerGlobalScope.cpp b/Source/WebCore/workers/WorkerGlobalScope.cpp
+index 6c13e5f..f5a54c6 100644
+--- a/Source/WebCore/workers/WorkerGlobalScope.cpp
++++ b/Source/WebCore/workers/WorkerGlobalScope.cpp
+@@ -122,7 +122,9 @@ WorkerGlobalScope::WorkerGlobalScope(WorkerThreadType type, const WorkerParamete
+     , m_isOnline(params.isOnline)
+     , m_shouldBypassMainWorldContentSecurityPolicy(params.shouldBypassMainWorldContentSecurityPolicy)
+     , m_topOrigin(WTF::move(topOrigin))
++#if ENABLE(INDEXED_DATABASE)
+     , m_connectionProxy(connectionProxy)
++#endif
+     , m_socketProvider(socketProvider)
+     , m_performance(Performance::create(this, params.timeOrigin))
+     , m_reportingScope(ReportingScope::create(*this))
+@@ -179,17 +181,23 @@ void WorkerGlobalScope::prepareForDestruction()
+     if (auto* trustedTypes = downcast<WorkerGlobalScopeTrustedTypes>(requireSupplement(WorkerGlobalScopeTrustedTypes::supplementName())))
+         trustedTypes->prepareForDestruction();
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (settingsValues().serviceWorkersEnabled)
+         swClientConnection().unregisterServiceWorkerClient(identifier());
++#endif
+ 
++#if ENABLE(INDEXED_DATABASE)
+     if (RefPtr connectionProxy = m_connectionProxy)
+         connectionProxy->abortActivitiesForCurrentThread();
++#endif
+ 
+     if (m_storageConnection)
+         m_storageConnection->scopeClosed();
+ 
++#if ENABLE(FILE_SYSTEM_API)
+     if (RefPtr fileSystemStorageConnection = m_fileSystemStorageConnection)
+         fileSystemStorageConnection->scopeClosed();
++#endif
+ }
+ 
+ void WorkerGlobalScope::removeAllEventListeners()
+@@ -242,6 +250,7 @@ RefPtr<RTCDataChannelRemoteHandlerConnection> WorkerGlobalScope::createRTCDataCh
+     return connection;
+ }
+ 
++#if ENABLE(INDEXED_DATABASE)
+ IDBClient::IDBConnectionProxy* WorkerGlobalScope::idbConnectionProxy()
+ {
+     if (RefPtr connectionProxy = m_connectionProxy; connectionProxy && connectionProxy->isValid())
+@@ -261,6 +270,7 @@ IDBClient::IDBConnectionProxy* WorkerGlobalScope::idbConnectionProxy()
+ 
+     return m_connectionProxy.get();
+ }
++#endif
+ 
+ GraphicsClient* WorkerGlobalScope::graphicsClient()
+ {
+@@ -269,20 +279,28 @@ GraphicsClient* WorkerGlobalScope::graphicsClient()
+ 
+ void WorkerGlobalScope::suspend()
+ {
++#if ENABLE(INDEXED_DATABASE)
+     if (RefPtr connectionProxy = m_connectionProxy)
+         connectionProxy->setContextSuspended(*this, true);
++#endif
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (settingsValues().serviceWorkersEnabled)
+         swClientConnection().unregisterServiceWorkerClient(identifier());
++#endif
+ }
+ 
+ void WorkerGlobalScope::resume()
+ {
++#if ENABLE(SERVICE_WORKER)
+     if (settingsValues().serviceWorkersEnabled)
+         updateServiceWorkerClientData();
++#endif
+ 
++#if ENABLE(INDEXED_DATABASE)
+     if (RefPtr connectionProxy = m_connectionProxy)
+         connectionProxy->setContextSuspended(*this, false);
++#endif
+ }
+ 
+ WorkerStorageConnection& WorkerGlobalScope::storageConnection()
+@@ -298,6 +316,7 @@ void WorkerGlobalScope::postFileSystemStorageTask(Function<void()>&& task)
+     sharedFileSystemStorageQueueSingleton().dispatch(WTF::move(task));
+ }
+ 
++#if ENABLE(FILE_SYSTEM_API)
+ WorkerFileSystemStorageConnection& WorkerGlobalScope::getFileSystemStorageConnection(Ref<FileSystemStorageConnection>&& mainThreadConnection)
+ {
+     if (!m_fileSystemStorageConnection)
+@@ -325,6 +344,7 @@ WorkerFileSystemStorageConnection* WorkerGlobalScope::fileSystemStorageConnectio
+     }
+     return m_fileSystemStorageConnection.get();
+ }
++#endif
+ 
+ WorkerLocation& WorkerGlobalScope::location() const
+ {
+@@ -439,6 +459,7 @@ ExceptionOr<void> WorkerGlobalScope::importScripts(const FixedVector<Variant<Ref
+ 
+     FetchOptions::Cache cachePolicy = FetchOptions::Cache::Default;
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (auto* serviceWorkerGlobalScope = dynamicDowncast<ServiceWorkerGlobalScope>(*this)) {
+         // FIXME: We need to add support for the 'imported scripts updated' flag as per:
+         // https://w3c.github.io/ServiceWorker/#importscripts
+@@ -446,6 +467,7 @@ ExceptionOr<void> WorkerGlobalScope::importScripts(const FixedVector<Variant<Ref
+         if (registration.updateViaCache() == ServiceWorkerUpdateViaCache::None || registration.needsUpdate())
+             cachePolicy = FetchOptions::Cache::NoCache;
+     }
++#endif
+ 
+     for (auto& url : completedURLs) {
+         // FIXME: Convert this to check the isolated world's Content Security Policy once webkit.org/b/104520 is solved.
+@@ -586,6 +608,7 @@ Performance& WorkerGlobalScope::performance() const
+     return *m_performance;
+ }
+ 
++#if ENABLE(CACHE_API)
+ CacheStorageConnection& WorkerGlobalScope::cacheStorageConnection()
+ {
+     if (!m_cacheStorageConnection) {
+@@ -604,6 +627,7 @@ CacheStorageConnection& WorkerGlobalScope::cacheStorageConnection()
+     }
+     return *m_cacheStorageConnection;
+ }
++#endif
+ 
+ MessagePortChannelProvider& WorkerGlobalScope::messagePortChannelProvider()
+ {
+@@ -612,12 +636,14 @@ MessagePortChannelProvider& WorkerGlobalScope::messagePortChannelProvider()
+     return *m_messagePortChannelProvider;
+ }
+ 
++#if ENABLE(SERVICE_WORKER)
+ WorkerSWClientConnection& WorkerGlobalScope::swClientConnection()
+ {
+     if (!m_swClientConnection)
+         lazyInitialize(m_swClientConnection, WorkerSWClientConnection::create(*this));
+     return *m_swClientConnection;
+ }
++#endif
+ 
+ void WorkerGlobalScope::createImageBitmap(ImageBitmap::Source&& source, ImageBitmapOptions&& options, ImageBitmap::Promise&& promise)
+ {
+@@ -769,6 +795,7 @@ void WorkerGlobalScope::updateSourceProviderBuffers(const ScriptBuffer& mainScri
+     }
+ }
+ 
++#if ENABLE(SERVICE_WORKER)
+ void WorkerGlobalScope::updateServiceWorkerClientData()
+ {
+     if (!settingsValues().serviceWorkersEnabled)
+@@ -778,6 +805,7 @@ void WorkerGlobalScope::updateServiceWorkerClientData()
+     auto controllingServiceWorkerRegistrationIdentifier = activeServiceWorker() ? std::make_optional<ServiceWorkerRegistrationIdentifier>(activeServiceWorker()->registrationIdentifier()) : std::nullopt;
+     swClientConnection().registerServiceWorkerClient(clientOrigin(), ServiceWorkerClientData::from(*this), controllingServiceWorkerRegistrationIdentifier, String { m_userAgent });
+ }
++#endif
+ 
+ void WorkerGlobalScope::enqueueSecurityPolicyViolationEvent(SecurityPolicyViolationEventInit&& eventInit)
+ {
+diff --git a/Source/WebCore/workers/WorkerGlobalScope.h b/Source/WebCore/workers/WorkerGlobalScope.h
+index c946f16..7fc31fc 100644
+--- a/Source/WebCore/workers/WorkerGlobalScope.h
++++ b/Source/WebCore/workers/WorkerGlobalScope.h
+@@ -97,7 +97,11 @@ public:
+     String origin() const;
+     const String& inspectorIdentifier() const LIFETIME_BOUND { return m_inspectorIdentifier; }
+ 
++#if ENABLE(INDEXED_DATABASE)
+     IDBClient::IDBConnectionProxy* idbConnectionProxy() final;
++#else
++    IDBClient::IDBConnectionProxy* idbConnectionProxy() final { return nullptr; }
++#endif
+     void suspend() final;
+     void resume() final;
+     GraphicsClient* graphicsClient() final;
+@@ -107,13 +111,21 @@ public:
+ 
+     WorkerStorageConnection& storageConnection();
+     static void postFileSystemStorageTask(Function<void()>&&);
++#if ENABLE(FILE_SYSTEM_API)
+     WorkerFileSystemStorageConnection& getFileSystemStorageConnection(Ref<FileSystemStorageConnection>&&);
+     WEBCORE_EXPORT WorkerFileSystemStorageConnection* fileSystemStorageConnection();
++#endif
++#if ENABLE(CACHE_API)
+     CacheStorageConnection& cacheStorageConnection();
++#endif
+     MessagePortChannelProvider& messagePortChannelProvider();
+ 
++#if ENABLE(SERVICE_WORKER)
+     WorkerSWClientConnection& swClientConnection();
+     void updateServiceWorkerClientData() final;
++#else
++    void updateServiceWorkerClientData() final { }
++#endif
+ 
+     Ref<WorkerThread> thread() const;
+ 
+@@ -235,7 +247,9 @@ private:
+ 
+     const Ref<SecurityOrigin> m_topOrigin;
+ 
++#if ENABLE(INDEXED_DATABASE)
+     RefPtr<IDBClient::IDBConnectionProxy> m_connectionProxy;
++#endif
+ 
+     const RefPtr<SocketProvider> m_socketProvider;
+ 
+@@ -246,9 +260,13 @@ private:
+     WeakPtr<ScriptBufferSourceProvider> m_mainScriptSourceProvider;
+     MemoryCompactRobinHoodHashMap<URL, WeakHashSet<ScriptBufferSourceProvider>> m_importedScriptsSourceProviders;
+ 
++#if ENABLE(CACHE_API)
+     const RefPtr<CacheStorageConnection> m_cacheStorageConnection;
++#endif
+     const RefPtr<WorkerMessagePortChannelProvider> m_messagePortChannelProvider;
++#if ENABLE(SERVICE_WORKER)
+     const RefPtr<WorkerSWClientConnection> m_swClientConnection;
++#endif
+     const std::unique_ptr<CSSValuePool> m_cssValuePool;
+     const std::unique_ptr<WorkerClient> m_workerClient;
+     const RefPtr<CSSFontSelector> m_cssFontSelector;
+@@ -258,7 +276,9 @@ private:
+     String m_agentClusterID;
+     const NetworkLoadPolicy m_networkLoadPolicy;
+     const RefPtr<WorkerStorageConnection> m_storageConnection;
++#if ENABLE(FILE_SYSTEM_API)
+     RefPtr<WorkerFileSystemStorageConnection> m_fileSystemStorageConnection;
++#endif
+ };
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/workers/WorkerMessagingProxy.cpp b/Source/WebCore/workers/WorkerMessagingProxy.cpp
+index 1c3a6c7..7ed565f 100644
+--- a/Source/WebCore/workers/WorkerMessagingProxy.cpp
++++ b/Source/WebCore/workers/WorkerMessagingProxy.cpp
+@@ -156,7 +156,12 @@ void WorkerMessagingProxy::startWorkerGlobalScope(const URL& scriptURL, PAL::Ses
+     WorkerThreadStartMode startMode = m_inspectorProxy->workerStartMode(*scriptExecutionContext);
+     String identifier = m_inspectorProxy->identifier();
+ 
+-    RefPtr proxy = scriptExecutionContext->idbConnectionProxy();
++#if ENABLE(INDEXED_DATABASE)
++    RefPtr idbConnectionProxy = scriptExecutionContext->idbConnectionProxy();
++    auto* proxy = idbConnectionProxy.get();
++#else
++    IDBClient::IDBConnectionProxy* proxy = nullptr;
++#endif
+     RefPtr socketProvider = scriptExecutionContext->socketProvider();
+ 
+     bool isOnline = parentWorkerGlobalScope ? parentWorkerGlobalScope->isOnline() : platformStrategies()->loaderStrategy()->isOnLine();
+@@ -173,7 +178,7 @@ void WorkerMessagingProxy::startWorkerGlobalScope(const URL& scriptURL, PAL::Ses
+         WTF::move(agentClusterID),
+         scriptExecutionContext->networkLoadPolicy()
+     };
+-    auto thread = DedicatedWorkerThread::create(params, sourceCode, *this, *this, *this, *this, startMode, protect(scriptExecutionContext->topOrigin()), proxy.get(), socketProvider.get(), runtimeFlags);
++    auto thread = DedicatedWorkerThread::create(params, sourceCode, *this, *this, *this, *this, startMode, protect(scriptExecutionContext->topOrigin()), proxy, socketProvider.get(), runtimeFlags);
+ 
+     if (parentWorkerGlobalScope) {
+         parentWorkerGlobalScope->thread()->addChildThread(thread);
+@@ -353,11 +358,15 @@ RefPtr<IDBClient::IDBConnectionProxy> WorkerMessagingProxy::createIDBConnectionP
+     if (!document)
+         return nullptr;
+ 
++#if ENABLE(INDEXED_DATABASE)
+     RefPtr page = document->page();
+     if (!page)
+         return nullptr;
+ 
+     return &page->idbConnection().proxy();
++#else
++    return nullptr;
++#endif
+ }
+ 
+ void WorkerMessagingProxy::postExceptionToWorkerObject(const String& errorMessage, int lineNumber, int columnNumber, const String& sourceURL)
+diff --git a/Source/WebCore/workers/WorkerOrWorkletScriptController.cpp b/Source/WebCore/workers/WorkerOrWorkletScriptController.cpp
+index 948fc15..223ac32 100644
+--- a/Source/WebCore/workers/WorkerOrWorkletScriptController.cpp
++++ b/Source/WebCore/workers/WorkerOrWorkletScriptController.cpp
+@@ -37,8 +37,12 @@
+ #include "JSEventTarget.h"
+ #include "JSExecState.h"
+ #include "JSPaintWorkletGlobalScope.h"
++#if ENABLE(SERVICE_WORKER)
+ #include "JSServiceWorkerGlobalScope.h"
++#endif
++#if ENABLE(SHARED_WORKER)
+ #include "JSSharedWorkerGlobalScope.h"
++#endif
+ #include "ModuleFetchFailureKind.h"
+ #include "ModuleFetchParameters.h"
+ #include "ScriptSourceCode.h"
+@@ -692,15 +696,19 @@ void WorkerOrWorkletScriptController::initScript()
+         return;
+     }
+ 
++#if ENABLE(SHARED_WORKER)
+     if (is<SharedWorkerGlobalScope>(m_globalScope)) {
+         initScriptWithSubclass<JSSharedWorkerGlobalScopePrototype, JSSharedWorkerGlobalScope, SharedWorkerGlobalScope>();
+         return;
+     }
++#endif
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (is<ServiceWorkerGlobalScope>(m_globalScope)) {
+         initScriptWithSubclass<JSServiceWorkerGlobalScopePrototype, JSServiceWorkerGlobalScope, ServiceWorkerGlobalScope>();
+         return;
+     }
++#endif
+ 
+     if (is<PaintWorkletGlobalScope>(m_globalScope)) {
+         initScriptWithSubclass<JSPaintWorkletGlobalScopePrototype, JSPaintWorkletGlobalScope, PaintWorkletGlobalScope>();
+diff --git a/Source/WebCore/workers/WorkerScriptLoader.cpp b/Source/WebCore/workers/WorkerScriptLoader.cpp
+index 6d9b242..d79ee84 100644
+--- a/Source/WebCore/workers/WorkerScriptLoader.cpp
++++ b/Source/WebCore/workers/WorkerScriptLoader.cpp
+@@ -84,6 +84,7 @@ std::optional<Exception> WorkerScriptLoader::loadSynchronously(ScriptExecutionCo
+     m_advancedPrivacyProtections = scriptExecutionContext->advancedPrivacyProtections();
+     m_globalPrivacyControlEnabled = scriptExecutionContext->settingsValues().globalPrivacyControlEnabled;
+ 
++#if ENABLE(SERVICE_WORKER)
+     RefPtr serviceWorkerGlobalScope = dynamicDowncast<ServiceWorkerGlobalScope>(workerGlobalScope);
+     if (serviceWorkerGlobalScope) {
+         if (auto* scriptResource = serviceWorkerGlobalScope->scriptResource(url)) {
+@@ -96,6 +97,7 @@ std::optional<Exception> WorkerScriptLoader::loadSynchronously(ScriptExecutionCo
+         if (state != ServiceWorkerState::Parsed && state != ServiceWorkerState::Installing)
+             return Exception { ExceptionCode::NetworkError, "Importing a script from a service worker that is past installing state"_s };
+     }
++#endif
+ 
+     std::unique_ptr<ResourceRequest> request(createResourceRequest(initiatorIdentifier));
+     if (!request)
+@@ -121,12 +123,14 @@ std::optional<Exception> WorkerScriptLoader::loadSynchronously(ScriptExecutionCo
+     if (failed())
+         return Exception { ExceptionCode::NetworkError, m_error.sanitizedDescription() };
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (serviceWorkerGlobalScope) {
+         if (!MIMETypeRegistry::isSupportedJavaScriptMIMEType(responseMIMEType()))
+             return Exception { ExceptionCode::NetworkError, "mime type is not a supported JavaScript mime type"_s };
+ 
+         serviceWorkerGlobalScope->setScriptResource(url, ServiceWorkerContextData::ImportedScript { script(), m_responseURL, m_responseMIMEType });
+     }
++#endif
+     return std::nullopt;
+ }
+ 
+@@ -258,6 +262,7 @@ void WorkerScriptLoader::didReceiveResponse(ScriptExecutionContextIdentifier mai
+         m_crossOriginEmbedderPolicy = obtainCrossOriginEmbedderPolicy(response, nullptr);
+     m_referrerPolicy = response.httpHeaderField(HTTPHeaderName::ReferrerPolicy);
+ 
++#if ENABLE(SERVICE_WORKER)
+     if (m_topOriginForServiceWorkerRegistration && response.source() == ResourceResponse::Source::MemoryCache && m_context) {
+         m_isMatchingServiceWorkerRegistration = true;
+         RefPtr worker = dynamicDowncast<WorkerGlobalScope>(*m_context);
+@@ -274,6 +279,7 @@ void WorkerScriptLoader::didReceiveResponse(ScriptExecutionContextIdentifier mai
+         });
+         return;
+     }
++#endif
+ 
+     if (RefPtr client = m_client.get())
+         client->didReceiveResponse(mainContext, identifier, response);
+@@ -389,8 +395,10 @@ WorkerScriptLoader::ServiceWorkerDataManager::~ServiceWorkerDataManager()
+ {
+     if (!m_activeServiceWorkerData)
+         return;
++#if ENABLE(SERVICE_WORKER)
+     if (RefPtr serviceWorkerConnection = ServiceWorkerProvider::singleton().existingServiceWorkerConnection())
+         serviceWorkerConnection->unregisterServiceWorkerClient(m_clientIdentifier);
++#endif
+ }
+ 
+ void WorkerScriptLoader::ServiceWorkerDataManager::setData(ServiceWorkerData&& data)
+diff --git a/Source/WebCore/workers/WorkerThread.cpp b/Source/WebCore/workers/WorkerThread.cpp
+index 4e29b5f..f4692f0 100644
+--- a/Source/WebCore/workers/WorkerThread.cpp
++++ b/Source/WebCore/workers/WorkerThread.cpp
+@@ -112,9 +112,14 @@ WorkerThread::WorkerThread(const WorkerParameters& params, const ScriptBuffer& s
+     , m_workerBadgeProxy(&badgeProxy)
+     , m_runtimeFlags(runtimeFlags)
+     , m_startupData(makeUnique<WorkerThreadStartupData>(params, sourceCode, startMode, topOrigin))
++#if ENABLE(INDEXED_DATABASE)
+     , m_idbConnectionProxy(connectionProxy)
++#endif
+     , m_socketProvider(socketProvider)
+ {
++#if !ENABLE(INDEXED_DATABASE)
++    UNUSED_PARAM(connectionProxy);
++#endif
+     ++workerThreadCounter;
+ }
+ 
+diff --git a/Source/WebCore/workers/WorkerThread.h b/Source/WebCore/workers/WorkerThread.h
+index 1c7ad75..226c7ab 100644
+--- a/Source/WebCore/workers/WorkerThread.h
++++ b/Source/WebCore/workers/WorkerThread.h
+@@ -123,7 +123,11 @@ protected:
+ 
+     WorkerGlobalScope* NODELETE globalScope();
+ 
++#if ENABLE(INDEXED_DATABASE)
+     IDBClient::IDBConnectionProxy* idbConnectionProxy() { return m_idbConnectionProxy.get(); }
++#else
++    IDBClient::IDBConnectionProxy* idbConnectionProxy() { return nullptr; }
++#endif
+     SocketProvider* socketProvider() { return m_socketProvider.get(); }
+ 
+     std::unique_ptr<WorkerClient> m_workerClient;
+@@ -147,7 +151,9 @@ private:
+ 
+     std::unique_ptr<WorkerThreadStartupData> m_startupData;
+ 
++#if ENABLE(INDEXED_DATABASE)
+     const RefPtr<IDBClient::IDBConnectionProxy> m_idbConnectionProxy;
++#endif
+     const RefPtr<SocketProvider> m_socketProvider;
+     bool m_isInStaticScriptEvaluation { false };
+ };
+diff --git a/Source/WebCore/workers/service/ServiceWorker.h b/Source/WebCore/workers/service/ServiceWorker.h
+index bb9b52c..074335f 100644
+--- a/Source/WebCore/workers/service/ServiceWorker.h
++++ b/Source/WebCore/workers/service/ServiceWorker.h
+@@ -94,10 +94,12 @@ private:
+     RefPtr<PendingActivity<ServiceWorker>> m_pendingActivityForEventDispatch;
+ };
+ 
++#if ENABLE(SERVICE_WORKER)
+ inline ServiceWorker* ScriptExecutionContext::serviceWorker(ServiceWorkerIdentifier identifier)
+ {
+     return m_serviceWorkers.get(identifier);
+ }
++#endif
+ 
+ } // namespace WebCore
+ 
+diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
+index a0736da..e1a1a17 100644
+--- a/Source/cmake/OptionsAmiga.cmake
++++ b/Source/cmake/OptionsAmiga.cmake
+@@ -85,6 +85,19 @@ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_LOCKS PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEB_TRANSPORT PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBGL PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_XSLT PRIVATE OFF)
++
++# Web platform features this browser switches off at run time are not built
++# at all (patch 0060; PlatformAmiga.cmake leaves out their sources).
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_ACCESSIBILITY PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_ASYNC_CLIPBOARD PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_CACHE_API PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_CREDENTIAL_MANAGEMENT PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FILE_SYSTEM_API PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_INDEXED_DATABASE PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_PUSH_API PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SERVICE_WORKER PRIVATE OFF)
++WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SHARED_WORKER PRIVATE OFF)
++
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_AVIF PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_JPEGXL PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_LCMS PRIVATE OFF)
+diff --git a/Source/cmake/WebKitFeatures.cmake b/Source/cmake/WebKitFeatures.cmake
+index ff857f8..2c9aac3 100644
+--- a/Source/cmake/WebKitFeatures.cmake
++++ b/Source/cmake/WebKitFeatures.cmake
+@@ -189,6 +189,7 @@ macro(WEBKIT_OPTION_BEGIN)
+         endif ()
+     endif ()
+ 
++    WEBKIT_OPTION_DEFINE(ENABLE_ACCESSIBILITY "Toggle accessibility support (the accessibility object tree)" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_ACCESSIBILITY_ISOLATED_TREE "Toggle accessibility isolated tree support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_API_TESTS "Enable public API unit tests" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_APPLE_PAY "Toggle Apple Pay support" PRIVATE OFF)
+@@ -211,6 +212,7 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_APPLE_PAY_SHIPPING_CONTACT_EDITING_MODE "Toggle Apple Pay shipping contact editing mode support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_APPLE_PAY_SHIPPING_METHOD_DATE_COMPONENTS_RANGE "Toggle Apple Pay shipping method date range support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_APPLICATION_MANIFEST "Toggle Application Manifest support" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_ASYNC_CLIPBOARD "Toggle the Async Clipboard API (navigator.clipboard)" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_ASYNC_SCROLLING "Enable asynchronous scrolling" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_ATTACHMENT_ELEMENT "Toggle Attachment Element support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_AUTOCAPITALIZE "Toggle autocapitalize support" PRIVATE OFF)
+@@ -219,12 +221,14 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_BACK_FORWARD_LIST_SWIFT "Toggle Swift back forward list" PRIVATE ${ENABLE_BACK_FORWARD_LIST_SWIFT_DEFAULT})
+     WEBKIT_OPTION_DEFINE(ENABLE_BREAKPAD "Toggle breakpad minidump support." PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_BUBBLEWRAP_SANDBOX "Toggle Bubblewrap sandboxing support" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_CACHE_API "Toggle the Cache API (caches)" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_CACHE_PARTITIONING "Toggle cache partitioning support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_CONNECTED_VOLUMETRIC_SCENE "Toggle connected volumetric scene support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_CONTENT_EXTENSIONS "Toggle Content Extensions support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_CONTENT_FILTERING "Toggle content filtering support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_CONTEXT_MENUS "Toggle Context Menu support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_COOKIE_STORE_API "Toggle Cookie Store API support" PRIVATE ON)
++    WEBKIT_OPTION_DEFINE(ENABLE_CREDENTIAL_MANAGEMENT "Toggle the Credential Management API (navigator.credentials)" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_CSS_TAP_HIGHLIGHT_COLOR "Toggle CSS -webkit-tap-highlight-color support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_CURSOR_VISIBILITY "Toggle cursor visibility support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_C_LOOP "Enable CLoop interpreter" PRIVATE ${ENABLE_C_LOOP_DEFAULT})
+@@ -235,12 +239,14 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_DRAG_SUPPORT "Toggle support of drag actions (including selection of text with mouse)" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_ENCRYPTED_MEDIA "Toggle EME V3 support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_EXPERIMENTAL_FEATURES "Enable experimental features" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_FILE_SYSTEM_API "Toggle the File System and File and Directory Entries APIs" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_FTL_JIT "Toggle FTL JIT support" PRIVATE ${ENABLE_FTL_DEFAULT})
+     WEBKIT_OPTION_DEFINE(ENABLE_FULLSCREEN_API "Toggle Fullscreen API support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_GAMEPAD "Toggle Gamepad support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_GEOLOCATION "Toggle Geolocation support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_GPU_PROCESS "Toggle GPU Process support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_IMAGE_DIFF "Toggle image diff support for layout tests" PRIVATE ON)
++    WEBKIT_OPTION_DEFINE(ENABLE_INDEXED_DATABASE "Toggle IndexedDB support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_INSPECTOR_ALTERNATE_DISPATCHERS "Toggle inspector alternate dispatchers support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_INSPECTOR_EXTENSIONS "Toggle inspector web extensions support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_INSPECTOR_TELEMETRY "Toggle inspector telemetry support" PRIVATE OFF)
+@@ -290,13 +296,16 @@ macro(WEBKIT_OPTION_BEGIN)
+     WEBKIT_OPTION_DEFINE(ENABLE_PICTURE_IN_PICTURE_API "Toggle Picture-in-Picture API support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_POINTER_LOCK "Toggle pointer lock support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_PREDEFINED_COLOR_SPACE_DISPLAY_P3 "Toggle display-p3 PredefinedColorSpace enum values" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_PUSH_API "Toggle the Push API" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_REFTRACKER "Enable debugging tools for tracking RAII objects" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_RELEASE_LOG "Toggle release log support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_REMOTE_INSPECTOR "Toggle remote inspector support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_RESOURCE_USAGE "Toggle resource usage support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_SAMPLING_PROFILER "Toggle sampling profiler support" PRIVATE ${ENABLE_SAMPLING_PROFILER_DEFAULT})
+     WEBKIT_OPTION_DEFINE(ENABLE_SANDBOX_EXTENSIONS "Toggle sandbox extensions support" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_SERVICE_WORKER "Toggle Service Worker support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_SERVICE_CONTROLS "Toggle service controls support" PRIVATE OFF)
++    WEBKIT_OPTION_DEFINE(ENABLE_SHARED_WORKER "Toggle Shared Worker support" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_SHAREABLE_RESOURCE "Toggle network shareable resources support" PRIVATE OFF)
+     WEBKIT_OPTION_DEFINE(ENABLE_SMOOTH_SCROLLING "Toggle smooth scrolling" PRIVATE ON)
+     WEBKIT_OPTION_DEFINE(ENABLE_SPATIAL_PORTAL "Toggle Spatial CSS Portal support" PRIVATE OFF)
+diff --git a/Source/WebCore/accessibility/amiga/AccessibilityDisabledAmiga.cpp b/Source/WebCore/accessibility/amiga/AccessibilityDisabledAmiga.cpp
+new file mode 100644
+index 0000000..f4b34a5
+--- /dev/null
++++ b/Source/WebCore/accessibility/amiga/AccessibilityDisabledAmiga.cpp
+@@ -0,0 +1,64 @@
++/*
++ * Copyright (C) 2026 AmigaChrome Team.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
++ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
++ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// The Amiga port builds WebCore without accessibility (ENABLE_ACCESSIBILITY
++// off, patch 0060): accessibility/ is not compiled and documents never make
++// an AXObjectCache. The few accessibility helpers that code outside
++// accessibility/ still calls are answered here.
++
++#include "config.h"
++
++#if !ENABLE(ACCESSIBILITY)
++
++#include "AccessibilityObject.h"
++#include <wtf/text/StringView.h>
++
++namespace WebCore {
++
++// The ARIA role of an element, for the roles WebCore checks for outside
++// accessibility/ (buttons and navigation landmarks); any other role is
++// Unknown. As in AccessibilityObject.cpp, the first known token counts.
++AccessibilityRole AccessibilityObject::ariaRoleToWebCoreRole(const String& value)
++{
++    if (value.isEmpty())
++        return AccessibilityRole::Unknown;
++    for (auto roleName : StringView(value).split(' ')) {
++        if (equalLettersIgnoringASCIICase(roleName, "button"_s))
++            return AccessibilityRole::Button;
++        if (equalLettersIgnoringASCIICase(roleName, "navigation"_s))
++            return AccessibilityRole::LandmarkNavigation;
++    }
++    return AccessibilityRole::Unknown;
++}
++
++// Text for accessibility notifications, which are never posted.
++String AccessibilityObject::stringForVisiblePositionRange(const VisiblePositionRange&)
++{
++    return { };
++}
++
++} // namespace WebCore
++
++#endif // !ENABLE(ACCESSIBILITY)
