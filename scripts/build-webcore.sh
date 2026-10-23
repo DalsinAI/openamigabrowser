@@ -131,7 +131,7 @@
 #                        tests that run it directly; the package does not
 #                        carry it)
 #   build-tests          build obcore-view and obcore-dump only
-#   jsimage [PROGRAM...] build the programs (default OpenBrowser.engine) as
+#   jsimage [PROGRAM...] build the programs (default WebBrowserEngine) as
 #                        jsimage clients: they take JavaScriptCore, WTF,
 #                        bmalloc and the run-time they share from
 #                        JavaScriptEngine at load time instead of linking
@@ -749,7 +749,7 @@ jsimage_program() {
 }
 
 build_jsimage() {
-    [ $# -gt 0 ] || set -- OpenBrowser.engine
+    [ $# -gt 0 ] || set -- WebBrowserEngine
     [ "$(generator)" = Ninja ] || die "jsimage needs a build folder made with Ninja: $BUILD"
     JSIMAGE="python3 $HERE/jsimage.py --nm=$GCC16/prefix/bin/m68k-amigaos-nm"
     mkdir -p "$BUILD/jsimage" "$BUILD/logs"
