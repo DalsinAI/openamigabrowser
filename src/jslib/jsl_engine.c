@@ -113,7 +113,20 @@ int main(void)
     }
     enginePort->ep_Version = JSL_TABLE_VERSION;
     enginePort->ep_Table = jsl_engine_table();
+    /* Check again as the port goes public: another engine may have started
+     * while this one read ICU's data */
+    Forbid();
+    if (FindPort((CONST_STRPTR)JAVASCRIPT_ENGINE_PORT)) {
+        Permit();
+        FreeSignal(enginePort->ep_Port.mp_SigBit);
+        CloseDevice(&timer->tr_node);
+        DeleteIORequest(&timer->tr_node);
+        DeleteMsgPort(timerPort);
+        FreeVec(enginePort);
+        return 0;   /* already running */
+    }
     AddPort(&enginePort->ep_Port);
+    Permit();
 
     timer->tr_node.io_Command = TR_ADDREQUEST;
     timer->tr_time.tv_secs = 1;
