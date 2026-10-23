@@ -305,6 +305,17 @@ The patches, in order:
   `LIBS:json.library` (version 1) must be installed; without it
   `JSON.parse` throws an Error that says so. Also checks the stack in the
   fast `JSON.stringify` on the 68k (no guard page below the stack).
+- `0070-amiga-public-suffixes-without-libpsl.patch`: public suffixes
+  (cookies, sites, `document.domain`) from our own reader of Mozilla's
+  Public Suffix List (`PublicSuffixAmiga.c`) in place of libpsl, which is
+  no longer linked. The list is `PROGDIR:Network/public-suffixes`, made by
+  `tools/psl-compile.py` (`data/public-suffixes`, in the package); a newer
+  list needs no new engine. Host test: `tests/test_public_suffixes.c`,
+  the list's own checks, in `tests/run-host-tests.sh`.
+- `0071-amiga-no-curl-websocket-stream.patch`: curl's WebSocket stream
+  (`CurlStream`, `CurlStreamScheduler`) is not built. It serves WebKit's
+  network process, which the port does not have; pages get no WebSocket
+  channel today (`EmptySocketProvider`), so nothing changes.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

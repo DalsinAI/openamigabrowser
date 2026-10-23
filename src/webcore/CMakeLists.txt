@@ -105,7 +105,7 @@ macro(OB_LINK _target)
     target_link_libraries(${_target} PRIVATE
         -Wl,--start-group
         OBCore WebCore PAL JavaScriptCore WTF bmalloc
-        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z oxp sqlite3 curl ${OB_NGHTTP2} psl
+        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z oxp sqlite3 curl ${OB_NGHTTP2}
         icui18n icuuc icudata
         amiga pthread atomic stdc++ m
         -Wl,--end-group

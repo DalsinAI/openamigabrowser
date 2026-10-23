@@ -1,0 +1,85 @@
+From bf86a53804e0492a11222e34f28ca7709af493c6 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 04:28:03 +0000
+Subject: [PATCH] WebCore: no curl WebSocket stream on the Amiga
+
+CurlStream and CurlStreamScheduler serve WebKit's network process, which
+the Amiga port has none of: pages are made with
+pageConfigurationWithEmptyClients(), whose EmptySocketProvider gives a
+WebSocket no channel, and nothing else calls them. They are no longer
+built, and CurlContext::streamScheduler(), which pulled them into the
+link, is left out on PLATFORM(AMIGA). Nothing changes for a page.
+---
+ Source/WebCore/PlatformAmiga.cmake                   | 11 +++++++++++
+ Source/WebCore/platform/network/curl/CurlContext.cpp |  4 ++++
+ Source/WebCore/platform/network/curl/CurlContext.h   |  3 +++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index 8efd2fd6438..8522452a3a2 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -25,6 +25,17 @@ list(REMOVE_ITEM WebCore_LIBRARIES
+ list(REMOVE_ITEM WebCore_SOURCES
+     platform/network/curl/PublicSuffixStoreCurl.cpp
+ )
++
++# curl's WebSocket stream (CurlStream, CurlStreamScheduler) is unused: the
++# port gives pages no WebSocket channel over curl (EmptySocketProvider).
++list(REMOVE_ITEM WebCore_SOURCES
++    platform/network/curl/CurlStream.cpp
++    platform/network/curl/CurlStreamScheduler.cpp
++)
++list(REMOVE_ITEM WebCore_PRIVATE_FRAMEWORK_HEADERS
++    platform/network/curl/CurlStream.h
++    platform/network/curl/CurlStreamScheduler.h
++)
+ list(REMOVE_ITEM WebCore_LIBRARIES
+     LibPSL::LibPSL
+ )
+diff --git a/Source/WebCore/platform/network/curl/CurlContext.cpp b/Source/WebCore/platform/network/curl/CurlContext.cpp
+index 158bbe3c3fc..4f0779a7c1e 100644
+--- a/Source/WebCore/platform/network/curl/CurlContext.cpp
++++ b/Source/WebCore/platform/network/curl/CurlContext.cpp
+@@ -34,7 +34,9 @@
+ #if USE(OPENSSL)
+ #include "CurlSSLVerifier.h"
+ #endif
++#if !PLATFORM(AMIGA)
+ #include "CurlStreamScheduler.h"
++#endif
+ #include "HTTPHeaderMap.h"
+ #include <NetworkLoadMetrics.h>
+ #include <mutex>
+@@ -169,11 +171,13 @@ void CurlContext::initShareHandle()
+     curl_easy_cleanup(curl);
+ }
+ 
++#if !PLATFORM(AMIGA)
+ CurlStreamScheduler& CurlContext::streamScheduler()
+ {
+     static NeverDestroyed<CurlStreamScheduler> sharedInstance;
+     return sharedInstance;
+ }
++#endif
+ 
+ void CurlContext::clearAlternativeServicesStorageFile()
+ {
+diff --git a/Source/WebCore/platform/network/curl/CurlContext.h b/Source/WebCore/platform/network/curl/CurlContext.h
+index a856e94f930..2f1f5f98c7e 100644
+--- a/Source/WebCore/platform/network/curl/CurlContext.h
++++ b/Source/WebCore/platform/network/curl/CurlContext.h
+@@ -114,7 +114,10 @@ public:
+     const CurlShareHandle& shareHandle() LIFETIME_BOUND { return m_shareHandle; }
+ 
+     CurlRequestScheduler& scheduler() { return *m_scheduler; }
++#if !PLATFORM(AMIGA)
++    // The WebSocket stream; the Amiga port has no WebSocket over curl.
+     WEBCORE_EXPORT CurlStreamScheduler& streamScheduler();
++#endif
+ 
+     // Alt-Svc
+     const String& alternativeServicesStorageFile() const LIFETIME_BOUND { return m_alternativeServicesStorageFile; }
+-- 
+2.43.0
+
