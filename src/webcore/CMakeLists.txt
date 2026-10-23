@@ -236,6 +236,48 @@ WEBKIT_EXECUTABLE_DECLARE(OpenBrowser)
 WEBKIT_EXECUTABLE(OpenBrowser)
 OB_LINK(OpenBrowser)
 
+# JavaScriptEngine: the program behind javascript.library (src/jslib),
+# built here so that its JavaScriptCore is the browser's own: the same
+# patches, flags (OB_OPTIMIZE, OB_PCREL, OB_GC_SECTIONS) and archives, and
+# folded like the browser's programs. Its sources compile as WebKit's jsc
+# shell does, with JavaScriptCore's own include folders (jsl_cache.cpp is
+# on JavaScriptCore's private interface). It links no WebCore.
+set(JavaScriptEngine_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_cache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_engine.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_os_exec.c
+)
+if (OB_ICU_DATA STREQUAL "file")
+    list(APPEND JavaScriptEngine_SOURCES ob_icudata.c ob_icustub.c)
+elseif (OB_ICU_DATA STREQUAL "library")
+    list(APPEND JavaScriptEngine_SOURCES ob_icudata.c)
+endif ()
+set(JavaScriptEngine_FRAMEWORKS JavaScriptCore WTF bmalloc)
+set(JavaScriptEngine_PRIVATE_INCLUDE_DIRECTORIES
+    $<TARGET_PROPERTY:JavaScriptCore,INCLUDE_DIRECTORIES>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/sdk/Include_H
+)
+if (OB_ICU_DATA STREQUAL "library")
+    list(APPEND JavaScriptEngine_PRIVATE_INCLUDE_DIRECTORIES ${OB_UNICODE_DIR}/include)
+endif ()
+WEBKIT_EXECUTABLE_DECLARE(JavaScriptEngine)
+WEBKIT_EXECUTABLE(JavaScriptEngine)
+if (OB_ICU_DATA STREQUAL "library")
+    target_link_directories(JavaScriptEngine PRIVATE ${OB_UNICODE_DIR}/lib)
+endif ()
+target_link_directories(JavaScriptEngine PRIVATE ${AC_WEBKIT_DEPS}/lib)
+target_link_options(JavaScriptEngine PRIVATE -Wl,-Map=${CMAKE_BINARY_DIR}/bin/JavaScriptEngine.map)
+target_link_libraries(JavaScriptEngine PRIVATE
+    -Wl,--start-group
+    JavaScriptCore WTF bmalloc
+    icui18n icuuc icudata
+    amiga pthread atomic stdc++ m
+    -Wl,--end-group
+)
+
 # OpenBrowser: the small program the icon starts. It shows a title window at
 # once and asks webbrowser.library (LIBS:, or the drawer's Libs before
 # Install) for a browser window, which WebBrowserEngine opens. It needs nothing of WebKit's, only the C library,

@@ -71,8 +71,14 @@ DOS calls are fine. A slot function returns a new value (`JS_New*`,
 
 - Library and JS: `scripts/build-javascript-library.sh` (os32-gcc16 or the
   OpenAmigaGCC release, OpenNDK). CI: `.github/workflows/jslib.yml`.
-- Engine: `scripts/build-javascript-engine.sh` after `scripts/build-jsc.sh`
-  (os32-gcc16, the patched WebKit tree).
+- Engine: `scripts/build-webcore.sh build-javascript` in the browser's
+  build folder. JavaScriptEngine is then built on the browser's own
+  JavaScriptCore, with the same patches (the 68k JIT included) and flags
+  (MinSizeRel with -O2 for JavaScriptCore, pc-relative, one hunk, section
+  GC), folded like the browser's programs, and it reads ICU's data from
+  `LOCALE:Unicode/` or `LIBS:JavaScript/Unicode/` (OB_ICU_DATA=file). The
+  older way, `scripts/build-javascript-engine.sh` after `scripts/build-jsc.sh`
+  (a separate JSCOnly build, Release -O3, ICU's data linked in), still works.
 - Core tests: `tests/jslib/run.sh` builds `tests/jslib/core_test.c` with the
   core against the 68k JIT lab's m68k-linux JavaScriptCore and runs it under
   qemu-m68k (68040): 69 checks of values, calls, errors, host classes,

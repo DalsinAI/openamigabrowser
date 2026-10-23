@@ -25,6 +25,9 @@
 
 #include "jsl_os.h"
 #include "jsl_engine_amiga.h"
+#if OB_ICU_DATA_FILE
+#include "ob_icudata.h"
+#endif
 
 static const char version[] __attribute__((used)) = "$VER: JavaScriptEngine 1.0 (22.10.2026) AmigaChrome Team";
 
@@ -76,6 +79,14 @@ int main(void)
         return 0;   /* already running */
     }
     Permit();
+
+#if OB_ICU_DATA_FILE
+    /* Built with the browser (src/webcore/CMakeLists.txt): ICU's data is
+     * the file in LOCALE:Unicode/ or LIBS:JavaScript/Unicode/, read before
+     * the first script task starts JavaScriptCore */
+    if (!ob_icu_data_load())
+        return 20;
+#endif
 
     enginePort = AllocVec(sizeof *enginePort, MEMF_PUBLIC | MEMF_CLEAR);
     timerPort = CreateMsgPort();

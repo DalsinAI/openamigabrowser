@@ -148,6 +148,12 @@
         (copyfiles (source "Extras/Libs/javascript.library") (dest "LIBS:") (nogauge))
         (makedir "LIBS:JavaScript")
         (copyfiles (source "Extras/Libs/JavaScript") (dest "LIBS:JavaScript") (all))
+        ; JavaScriptEngine reads ICU's data from LOCALE:Unicode, or else
+        ; from its own drawer
+        (if (not (exists "LOCALE:Unicode/icudt78b.dat"))
+            (
+                (makedir "LIBS:JavaScript/Unicode")
+                (copyfiles (source "OpenBrowser/Libs/WebBrowser/Unicode") (dest "LIBS:JavaScript/Unicode") (all) (nogauge))))
         (copyfiles (source "Extras/C/JS") (dest "C:") (nogauge))))
 
 (if (not (exists "LIBS:bsdsocket.library"))
