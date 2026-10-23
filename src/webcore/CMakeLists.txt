@@ -269,6 +269,10 @@ if (OB_ICU_DATA STREQUAL "library")
 endif ()
 target_link_directories(JavaScriptEngine PRIVATE ${AC_WEBKIT_DEPS}/lib)
 target_link_options(JavaScriptEngine PRIVATE -Wl,-Map=${CMAKE_BINARY_DIR}/bin/JavaScriptEngine.map)
+# Nothing in the engine reads jsimage_id or jsimage_client (jsimage.py
+# stamps the first, the client sets the second), so OB_GC_SECTIONS would
+# drop them; -u keeps both.
+target_link_options(JavaScriptEngine PRIVATE -Wl,-u,_jsimage_id -Wl,-u,_jsimage_client)
 # As a jsimage (scripts/jsimage.py, "build-webcore.sh jsimage"), the engine
 # keeps every name of JavaScriptCore, WTF and bmalloc that its clients
 # linked: jsimage/needs.ld, an EXTERN list (empty until then).
