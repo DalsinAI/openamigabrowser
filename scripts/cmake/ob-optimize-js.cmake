@@ -2,6 +2,9 @@
 # and the interpreter beside it, which get -O2. A whole -O2 build ran the
 # DOM bench about 25 % faster but made the engine 26 MB larger and every
 # page load 0.3-1 s slower, so only the JavaScript engine is built for speed.
+# WebKit patch 0059 builds JavaScriptCore's cold parts (Intl, Temporal,
+# the typed array prototype functions, the C API, the debugger and the
+# like) back at -Os, per source, after this -O2.
 # Read through CMAKE_PROJECT_INCLUDE, so after each project(); the targets
 # exist only at the end of the top-level folder, hence the deferred call.
 get_property(_ob_optimize_js_done GLOBAL PROPERTY OB_OPTIMIZE_JS_DEFERRED)
