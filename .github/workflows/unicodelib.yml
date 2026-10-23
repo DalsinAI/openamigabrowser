@@ -1,0 +1,105 @@
+name: unicode.library
+
+# unicode.library (src/unicodelib, PLAN.md step 7): ICU 78.3 built for the
+# 68040 as scripts/build-icu.sh builds it for the engine, the library and
+# its stubs with the OpenAmigaGCC release and OpenNDK (pinned as
+# jsonlib.yml pins them), then UnicodeTest run against the library in
+# amitools' vamos (68040). The ICU build is cached on its inputs.
+on:
+  push:
+    paths:
+      - 'src/unicodelib/**'
+      - 'icu/**'
+      - 'scripts/build-icu.sh'
+      - 'scripts/build-unicode-library.sh'
+      - 'scripts/gen-unicodelib-sdk.sh'
+      - '.github/workflows/unicodelib.yml'
+  pull_request:
+    paths:
+      - 'src/unicodelib/**'
+      - 'icu/**'
+      - 'scripts/build-icu.sh'
+      - 'scripts/build-unicode-library.sh'
+      - 'scripts/gen-unicodelib-sdk.sh'
+      - '.github/workflows/unicodelib.yml'
+  workflow_dispatch:
+
+env:
+  OPENSDK_REF: 5bfeaea0d004e86afb990fddb591bf0039f09233      # openamigasdk main, as jsonlib.yml
+  TC_URL: https://github.com/DalsinAI/openamigagcc/releases/download/v16.2.0-open3/openamigagcc-16.2.0-open3-x86_64-linux.tar.xz
+  TC_SHA256: 9fcc136ab59e3bb5b91d2764d0bf290b709d72d7380be4ce0cdf005edf8eff21
+  ICU_URL: https://github.com/unicode-org/icu/releases/download/release-78.3/icu4c-78.3-sources.tgz
+  ICU_SHA256: 3a2e7a47604ba702f345878308e6fefeca612ee895cf4a5f222e7955fabfe0c0
+
+jobs:
+  amiga:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DalsinAI/openamigasdk
+          ref: ${{ env.OPENSDK_REF }}
+          path: openamigasdk
+      - name: Fetch the toolchain
+        run: |
+          mkdir -p tc
+          curl -fsSL -o tc/tc.tar.xz "$TC_URL"
+          echo "$TC_SHA256  tc/tc.tar.xz" | sha256sum -c -
+          tar xf tc/tc.tar.xz -C tc
+          # build-icu.sh's stove layout: prefix/ and an (unused) compat library
+          mkdir -p stove/compat
+          ln -s "$PWD/tc/openamigagcc-16.2.0-open3-x86_64-linux" stove/prefix
+          stove/prefix/bin/m68k-amigaos-ar rcs stove/compat/libos32compat.a
+          command -v gmake || sudo ln -s "$(command -v make)" /usr/local/bin/gmake
+      - name: SDK headers against the SFD
+        run: OPENSDK_SRC=$PWD/openamigasdk python3 openamigasdk/OpenNDK/tools/ndkgen.py --check --out src/unicodelib/sdk src/unicodelib/sfd/unicode_lib.sfd
+      - uses: actions/cache@v4
+        id: icu
+        with:
+          path: deps/icu78-m68k-amigaos
+          key: icu78-${{ env.ICU_SHA256 }}-${{ env.TC_SHA256 }}-${{ hashFiles('icu/**', 'scripts/build-icu.sh') }}
+      - name: ICU 78.3 for the 68040 (host tools first)
+        if: steps.icu.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p icu-src icu-host
+          curl -fsSL -o icu-src/icu.tgz "$ICU_URL"
+          echo "$ICU_SHA256  icu-src/icu.tgz" | sha256sum -c -
+          tar xzf icu-src/icu.tgz -C icu-src
+          patch -p1 -d icu-src/icu < icu/patches/0001-icu78-amigaos3.patch
+          (cd icu-host && ../icu-src/icu/source/configure --disable-tests --disable-samples > configure.log && make -j"$(nproc)" > build.log)
+          ICU_SRC=$PWD/icu-src/icu ICU_HOST_BUILD=$PWD/icu-host OS32_GCC16=$PWD/stove OAB_DEPS=$PWD/deps \
+            JOBS=$(nproc) sh scripts/build-icu.sh
+      - name: unicode.library, its stubs and UnicodeTest
+        run: |
+          TOOLCHAIN_DIR=$PWD/tc/openamigagcc-16.2.0-open3-x86_64-linux OAB_DEPS=$PWD/deps \
+          NDK_INCLUDE=$PWD/openamigasdk/OpenNDK/Include_H \
+            sh scripts/build-unicode-library.sh build/unicode-library
+      - name: UnicodeTest in vamos (68040)
+        run: |
+          pip install --quiet amitools==0.8.1 machine68k==0.3.0
+          mkdir -p vam/libs/Unicode
+          cp build/unicode-library/unicode.library vam/libs/
+          cp build/unicode-library/Unicode/icudt78b.dat vam/libs/Unicode/
+          cp build/unicode-library/tests/UnicodeTest vam/
+          cd vam
+          vamos -C 68040 -m 65536 -H disable -s 64 -V "vam:$PWD" -a LIBS:vam:libs UnicodeTest | tee test.log
+          grep -q '^ALL PASSED' test.log
+      - name: Summary
+        run: |
+          B=build/unicode-library
+          echo "### unicode.library" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -l $B/unicode.library $B/Unicode/icudt78b.dat $B/tests/UnicodeTest $B/icu/lib/libicuuc.a >> "$GITHUB_STEP_SUMMARY"
+          sha256sum $B/unicode.library $B/Unicode/icudt78b.dat $B/tests/UnicodeTest | tee -a "$GITHUB_STEP_SUMMARY"
+          cat vam/test.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unicode-library-68040
+          path: |
+            build/unicode-library/unicode.library
+            build/unicode-library/Unicode/icudt78b.dat
+            build/unicode-library/tests/UnicodeTest
+            build/unicode-library/icu
+          retention-days: 30
