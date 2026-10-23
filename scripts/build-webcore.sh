@@ -11,8 +11,13 @@
 #                ICU, the OpenAmiga libraries and OpenTLS, the build options.
 #   the browser  OpenBrowser's own code (src/webcore): the page layer library
 #                OBCore and the programs
-#                  OpenBrowser   the launcher: a title window, then it loads
-#                                and runs OpenBrowser.engine, the browser
+#                  WebBrowserEngine  the browser: the one engine behind
+#                                webbrowser.library (src/webbrowser), with
+#                                OpenBrowser's window
+#                  OpenBrowser   the launcher: a title window, then it asks
+#                                webbrowser.library for a browser window
+#                  OpenBrowser.engine  the same window as a program of its
+#                                own (build-window-engine; not packaged)
 #                  obcore-view   the page layer without a window (tests)
 #                  obcore-dump   a local page's render tree, and a PNG of it
 #                A change here compiles the changed files and relinks; it
@@ -111,14 +116,19 @@
 #                        set the compiler cache (which recompiles nothing)
 #   build-bindings       generate WebCore's derived sources, one job at a time
 #   build-engine         build the engine, if its fingerprint has changed
-#   build-browser        build OBCore and OpenBrowser only
+#   build-browser        build OBCore, WebBrowserEngine and the OpenBrowser
+#                        launcher only
+#   build-window-engine  build OpenBrowser.engine, the browser window as a
+#                        program of its own, without webbrowser.library (for
+#                        tests that run it directly; the package does not
+#                        carry it)
 #   build-tests          build obcore-view and obcore-dump only
 #   fold [PROGRAM...]    fold and link again the programs ninja has linked
 #                        since they were last folded (OpenBrowser.engine,
 #                        obcore-view, obcore-dump, WebBrowserEngine; or the
-#                        ones named). build-browser and build-tests fold
-#                        their programs when OB_FOLD is 1; run this after
-#                        "ninja WebBrowserEngine"
+#                        ones named). build-browser, build-window-engine
+#                        and build-tests fold their programs when OB_FOLD
+#                        is 1
 #   test-browser         stage the programs, test pages and settings in
 #                        OB_TEST_DIR, with an AmigaDOS script that runs them
 #   clean-browser        remove the browser's objects and programs
@@ -604,9 +614,18 @@ fold_programs() {
 }
 
 build_browser() {
-    browser_build browser OBCore OpenBrowser OpenBrowserLauncher
+    browser_build browser OBCore WebBrowserEngine OpenBrowserLauncher
+    if fold_wanted; then fold_programs WebBrowserEngine; fi
+    ls -l "$BUILD/bin/OpenBrowser" "$BUILD/bin/WebBrowserEngine"
+}
+
+# OpenBrowser.engine: the same browser window as a program of its own, which
+# runs without webbrowser.library. Not in the package (WebBrowserEngine is
+# the one engine there); kept for tests that run the window directly.
+build_window_engine() {
+    browser_build window-engine OBCore OpenBrowser
     if fold_wanted; then fold_programs OpenBrowser.engine; fi
-    ls -l "$BUILD/bin/OpenBrowser" "$BUILD/bin/OpenBrowser.engine"
+    ls -l "$BUILD/bin/OpenBrowser.engine"
 }
 
 build_tests() {
@@ -647,9 +666,13 @@ test_browser() {
     strip="$GCC16/prefix/bin/m68k-amigaos-strip"
     mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig" "$OB_TEST_DIR/Fonts"
     cp "$@" "$OB_TEST_DIR/Fonts/"
-    for program in OpenBrowser OpenBrowser.engine obcore-view obcore-dump; do
+    for program in obcore-view obcore-dump; do
         "$strip" -o "$OB_TEST_DIR/$program" "$BUILD/bin/$program"
     done
+    # the window as a program of its own, when build-window-engine made it
+    if [ -f "$BUILD/bin/OpenBrowser.engine" ]; then
+        "$strip" -o "$OB_TEST_DIR/OpenBrowser.engine" "$BUILD/bin/OpenBrowser.engine"
+    fi
     cp "$ROOT"/tests/pages/*.html "$OB_TEST_DIR/pages/"
     cp "$ROOT/src/webcore/fontconfig/fonts.conf" "$OB_TEST_DIR/fontconfig/"
     cp "$ROOT/src/webcore/blocklist" "$OB_TEST_DIR/"
@@ -680,9 +703,9 @@ test_browser() {
 
 clean_browser() {
     rm -rf "$BUILD"/OpenBrowser/CMakeFiles/OBCore.dir "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowser.dir \
-        "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowserLauncher.dir \
+        "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowserLauncher.dir "$BUILD"/OpenBrowser/CMakeFiles/WebBrowserEngine.dir \
         "$BUILD"/OpenBrowser/CMakeFiles/obcore-view.dir "$BUILD"/OpenBrowser/CMakeFiles/obcore-dump.dir
-    rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/OpenBrowser.engine \
+    rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/OpenBrowser.engine "$BUILD"/bin/WebBrowserEngine \
         "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump "$BUILD"/bin/*.plain.map
     rm -rf "$BUILD"/lib-folded
     echo "Removed the browser's objects and programs from $BUILD"
@@ -706,6 +729,7 @@ case "$MODE" in
     build-bindings) need_sources; build_bindings ;;
     build-engine) build_engine ;;
     build-browser) build_browser ;;
+    build-window-engine) build_window_engine ;;
     build-tests) build_tests ;;
     fold) shift; [ $# -gt 0 ] || set -- $FOLD_PROGRAMS; fold_programs "$@" ;;
     test-browser) test_browser ;;

@@ -1,11 +1,14 @@
 /*
  * OpenBrowser's launcher: the small OpenBrowser program that the icon (or a
- * Shell) starts. The browser itself, PROGDIR:OpenBrowser.engine, is about
- * 100 MB and takes a while to load from disk, so the launcher first opens a
- * title window, then loads the engine with a progress bar, then runs it in
- * this same process: the engine gets this program's icon and tool types (or
- * its Shell arguments) and PROGDIR:. The engine reports its own steps to the
- * title window (ob_splash.h) and closes it once its window is open.
+ * Shell) starts. The browser runs in WebBrowserEngine, the one engine behind
+ * webbrowser.library: the launcher opens LIBS:webbrowser.library, or the
+ * drawer's own PROGDIR:Libs/webbrowser.library before Install, and asks it
+ * for a browser window (WB_OpenBrowser). The library starts the engine when
+ * it is not running: LIBS:WebBrowser/WebBrowserEngine, or else the drawer's
+ * PROGDIR:Libs/WebBrowser/WebBrowserEngine. The engine is about 76 MB and
+ * takes a while to load from disk, so the launcher first opens a title
+ * window; the engine reports its own steps to it (ob_splash.h) and closes it
+ * once its window is open.
  * MIT, Copyright (c) 2026 AmigaChrome Team.
  */
 #include <stdio.h>
@@ -32,10 +35,7 @@
 #include "libraries/webbrowser.h"
 #include "proto/webbrowser.h"
 
-static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.8.1 (23.10.2026)";
-
-#define ENGINE "PROGDIR:OpenBrowser.engine"
-#define ENGINE_STACK 400000
+static const char version[] __attribute__((used)) = "$VER: OpenBrowser 0.8.2 (23.10.2026)";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
@@ -171,73 +171,6 @@ static void splashMain(void)
     Signal(mainTask, SIGBREAKF_CTRL_E);
 }
 
-/* ---- Loading the engine, with the bar following the bytes read. */
-
-static LONG engineBytes, loadedBytes, lastShown = -1;
-
-static void showLoading(void)
-{
-    LONG shown = engineBytes ? (LONG)((double)loadedBytes * 70 / engineBytes) : 0;
-    char text[80];
-    if (shown == lastShown)
-        return;
-    lastShown = shown;
-    snprintf(text, sizeof text, "Loading OpenBrowser: %ld of %ld MB", (long)(loadedBytes >> 20), (long)(engineBytes >> 20));
-    ob_splash(text, (int)shown);
-}
-
-static LONG readFunction(BPTR file __asm("d1"), APTR buffer __asm("d2"), LONG length __asm("d3"),
-    struct DosLibrary *dosBase __asm("a6"))
-{
-    LONG done = 0;
-    (void)dosBase;
-    while (done < length) {
-        LONG chunk = length - done > 262144 ? 262144 : length - done;
-        LONG got = Read(file, (UBYTE *)buffer + done, chunk);
-        if (got < 0)
-            return done ? done : got;
-        done += got;
-        loadedBytes += got;
-        showLoading();
-        if (got < chunk)
-            break;
-    }
-    return done;
-}
-
-static APTR allocFunction(ULONG size __asm("d0"), ULONG flags __asm("d1"), struct ExecBase *execBase __asm("a6"))
-{
-    (void)execBase;
-    return AllocMem(size, flags);
-}
-
-static void freeFunction(APTR memory __asm("a1"), ULONG size __asm("d0"), struct ExecBase *execBase __asm("a6"))
-{
-    (void)execBase;
-    FreeMem(memory, size);
-}
-
-static const LONG loadFunctions[3] = { (LONG)readFunction, (LONG)allocFunction, (LONG)freeFunction };
-
-static BPTR loadEngine(void)
-{
-    BPTR file = Open((CONST_STRPTR)ENGINE, MODE_OLDFILE), segments = 0;
-    struct FileInfoBlock *info = AllocDosObject(DOS_FIB, NULL);
-    LONG stack = 0;
-    if (file && info && ExamineFH(file, info))
-        engineBytes = info->fib_Size;
-    if (info)
-        FreeDosObject(DOS_FIB, info);
-    if (file) {
-        showLoading();
-        segments = InternalLoadSeg(file, 0, loadFunctions, &stack);
-        Close(file);
-        if ((LONG)segments < 0)  /* an overlaid program: not ours */
-            segments = 0;
-    }
-    return segments;
-}
-
 /* The icon's tool types (JAVASCRIPT=NO, PICTURES=NO, WEBFONTS=YES,
  * LITE=YES) as webbrowser.library tags. */
 static void toolTypeTags(int argc, char **argv, struct TagItem *tags)
@@ -273,10 +206,9 @@ static void toolTypeTags(int argc, char **argv, struct TagItem *tags)
     CloseLibrary(IconBase);
 }
 
-/* With webbrowser.library 1.1 or newer installed, the browser window opens
- * in its resident engine: at once when the engine is already in memory.
- * Returns -1 when the library is not there (then the engine in this drawer
- * runs, as before). */
+/* The browser window opens in webbrowser.library's engine (1.1 or newer):
+ * at once when the engine is already in memory. Returns -1 when there is no
+ * such library, in LIBS: or in this drawer's Libs. */
 static LONG openInLibrary(int argc, char **argv, struct Task **splash)
 {
     struct TagItem tags[5];
@@ -306,10 +238,7 @@ int main(int argc, char **argv)
 {
     struct Process *self = (struct Process *)FindTask(NULL);
     struct Task *splash = NULL;
-    struct MsgPort *replyPort = NULL;
-    struct WBStartup *engineStartup = NULL;
-    BPTR segments;
-    LONG result = RETURN_FAIL;
+    LONG result;
 
     mainTask = &self->pr_Task;
     IntuitionBase = (struct IntuitionBase *)OpenLibrary((CONST_STRPTR)"intuition.library", 39);
@@ -324,42 +253,12 @@ int main(int argc, char **argv)
             Wait(SIGBREAKF_CTRL_F | SIGBREAKF_CTRL_E);
     }
 
-    if ((result = openInLibrary(argc, argv, &splash)) >= 0) {
-        segments = 0;
-    } else if (!(segments = loadEngine())) {
+    if ((result = openInLibrary(argc, argv, &splash)) < 0) {
         result = RETURN_FAIL;
-        ob_splash("OpenBrowser.engine is missing from this drawer", 0);
+        ob_splash("OpenBrowser needs webbrowser.library 1.1", 0);
         if (argc)
-            printf("OpenBrowser: cannot load %s\n", ENGINE);
+            printf("OpenBrowser: needs webbrowser.library 1.1 or newer in LIBS: or in this drawer's Libs\n");
         Delay(5 * TICKS_PER_SECOND);
-    } else {
-        ob_splash("Starting OpenBrowser", 70);
-        if (argc == 0) {
-            /* From Workbench: the engine's startup code waits for a
-             * Workbench message; hand it a copy of ours, so it finds the
-             * same icon, tool types and drawer. */
-            struct WBStartup *ours = (struct WBStartup *)argv;
-            replyPort = CreateMsgPort();
-            engineStartup = AllocVec(sizeof *engineStartup, MEMF_PUBLIC | MEMF_CLEAR);
-            if (replyPort && engineStartup) {
-                *engineStartup = *ours;
-                engineStartup->sm_Message.mn_Node.ln_Type = NT_MESSAGE;
-                engineStartup->sm_Message.mn_ReplyPort = replyPort;
-                engineStartup->sm_Message.mn_Length = sizeof *engineStartup;
-                engineStartup->sm_Process = &self->pr_MsgPort;
-                engineStartup->sm_Segment = segments;
-                PutMsg(&self->pr_MsgPort, &engineStartup->sm_Message);
-                result = RunCommand(segments, ENGINE_STACK, (CONST_STRPTR)"\n", 1);
-                /* The engine's exit code replies the copy. */
-                WaitPort(replyPort);
-                GetMsg(replyPort);
-            }
-        } else {
-            STRPTR arguments = GetArgStr();
-            result = RunCommand(segments, ENGINE_STACK, arguments ? arguments : (STRPTR)"\n",
-                arguments ? strlen((char *)arguments) : 1);
-        }
-        InternalUnLoadSeg(segments, (void (*)(void))freeFunction);
     }
 
     if (splash) {
@@ -371,13 +270,9 @@ int main(int argc, char **argv)
             Wait(SIGBREAKF_CTRL_E);
         Permit();
     }
-    if (engineStartup)
-        FreeVec(engineStartup);
-    if (replyPort)
-        DeleteMsgPort(replyPort);
     if (GfxBase)
         CloseLibrary((struct Library *)GfxBase);
     if (IntuitionBase)
         CloseLibrary((struct Library *)IntuitionBase);
-    return result < 0 ? RETURN_FAIL : result;
+    return result;
 }
