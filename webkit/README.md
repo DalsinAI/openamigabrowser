@@ -305,6 +305,16 @@ The patches, in order:
   `LIBS:json.library` (version 1) must be installed; without it
   `JSON.parse` throws an Error that says so. Also checks the stack in the
   fast `JSON.stringify` on the 68k (no guard page below the stack).
+- `0059-amiga-cold-code-for-size.patch`: code pages seldom run is built
+  for size. JavaScriptCore's Intl, Temporal and typed array prototype
+  functions, C API, debugger, profilers, tools, the inspector's console
+  part, the builtins' executables and the bytecode dumper get -Os and a
+  plain inline (`WTF_AMIGA_PLAIN_INLINE`, set per source by
+  JavaScriptCore's `PlatformAmiga.cmake`) while the rest of
+  JavaScriptCore keeps -O2; WebCore's `rendering/svg/`,
+  `rendering/mathml/` and `css/typedom/` lose the forced inlining 0056
+  keeps for style, layout and DOM code. The stripped engine is 1.87 MB
+  smaller folded (2.13 MB before folding); the DOM bench runs as fast.
 - `0070-amiga-public-suffixes-without-libpsl.patch`: public suffixes
   (cookies, sites, `document.domain`) from our own reader of Mozilla's
   Public Suffix List (`PublicSuffixAmiga.c`) in place of libpsl, which is

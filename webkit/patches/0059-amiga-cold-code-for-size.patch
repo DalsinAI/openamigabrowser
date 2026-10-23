@@ -1,0 +1,164 @@
+From 9f6b01f69ab4a5799e0e9dc2976b9598b30fed46 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 08:07:35 +0100
+Subject: [PATCH] JavaScriptCore and WebCore: cold code for size on the Amiga
+ port
+
+OB_OPTIMIZE=js builds JavaScriptCore at -O2 and the rest at -Os, and
+patch 0056 keeps forced inlining (ALWAYS_INLINE) in JavaScriptCore, WTF
+and WebCore's css/, dom/, layout/, rendering/ and style/. Some of that
+code pages seldom run. On the Amiga port:
+
+- JavaScriptCore's Intl, Temporal and typed array prototype functions,
+  the C API, the debugger, the profilers, the tools, the inspector's
+  console part, the builtins' executables (made once each) and the
+  bytecode dumper are built at -Os with a plain inline (a new
+  WTF_AMIGA_PLAIN_INLINE in wtf/Compiler.h), set per source by
+  JavaScriptCore's PlatformAmiga.cmake. A unified bundle counts as cold
+  when more than half of its files are. The interpreter, parser, bytecode
+  compiler, runtime, heap and regular expressions keep -O2 and forced
+  inlining.
+- WebCore's SVG and MathML renderers (rendering/svg/, rendering/mathml/)
+  and the CSS Typed OM (css/typedom/) have a plain inline, like the rest
+  of WebCore outside the style, layout and DOM code.
+
+JavaScriptCore's kept code is 2,120,672 bytes smaller (the typed array
+functions 1,055,928 of it), WebCore's 24,668. With openamigabrowser main
+at 8ba1e04 (pc-relative, hunkfold on) the stripped engine is 2,130,300
+bytes smaller before folding (79,894,348 to 77,764,048) and 1,870,080
+bytes smaller folded (75,787,960 to 73,917,880). The DOM bench's
+JavaScript time is unchanged within the 0.02 s timer step (1.558 s
+against 1.567 s, nine runs each, back to back on one lab copy).
+
+Team 3
+---
+ Source/JavaScriptCore/PlatformAmiga.cmake | 49 +++++++++++++++++++++++
+ Source/WTF/wtf/Compiler.h                 | 13 +++---
+ Source/WebCore/PlatformAmiga.cmake        | 14 ++++++-
+ 3 files changed, 70 insertions(+), 6 deletions(-)
+
+diff --git a/Source/JavaScriptCore/PlatformAmiga.cmake b/Source/JavaScriptCore/PlatformAmiga.cmake
+index ced0cb6c1ed..32bdaefbd1b 100644
+--- a/Source/JavaScriptCore/PlatformAmiga.cmake
++++ b/Source/JavaScriptCore/PlatformAmiga.cmake
+@@ -15,3 +15,52 @@ list(APPEND JavaScriptCore_UNIFIED_SOURCE_EXCLUDES
+     "^inspector/(ContentSearchUtilities|InjectedScript|InspectorAgentRegistry|InspectorBackendDispatcher|InspectorFrontendDispatchers|InspectorFrontendRouter|InspectorProtocolObjects|InspectorTarget)"
+     "^inspector/(JSGlobalObjectConsoleClient|JSGlobalObjectDebugger|JSGlobalObjectInspectorController|JSInjectedScriptHost|JSJavaScriptCallFrame|JavaScriptCallFrame|PerGlobalObjectWrapperWorld|ScriptFunctionCall)"
+ )
++
++# JavaScript that pages seldom run is built for size (-Os) with a plain
++# inline (WTF_AMIGA_PLAIN_INLINE, wtf/Compiler.h), whatever the rest of
++# JavaScriptCore is built with: Intl, Temporal, the typed array prototype
++# functions, the C API, the debugger, the profilers, the tools, the
++# inspector's console part, the builtins' executables (made once each) and
++# the bytecode dumper. A unified bundle (several .cpp files of one folder)
++# counts as cold when more than half of its files are. The JavaScriptCore
++# target exists only at the end of this folder, hence the deferred call.
++function(_amiga_cold_sources)
++    set(cold "^(API|builtins|debugger|inspector|profiler|tools|wasm)/|^runtime/(Intl|Temporal|temporal/|JSTypedArrayViewPrototypeFunctions)|^BytecodeDumperGenerated\\.cpp$")
++    get_target_property(sources JavaScriptCore SOURCES)
++    get_target_property(sourceDir JavaScriptCore SOURCE_DIR)
++    foreach (source IN LISTS sources)
++        if (IS_ABSOLUTE "${source}")
++            set(path "${source}")
++        else ()
++            set(path "${sourceDir}/${source}")
++        endif ()
++        set(isCold FALSE)
++        if (source MATCHES "UnifiedSource[^/]*\\.cpp$")
++            if (EXISTS "${path}")
++                file(STRINGS "${path}" includes REGEX "^#include \"")
++                list(LENGTH includes all)
++                set(coldFiles 0)
++                foreach (include IN LISTS includes)
++                    string(REGEX REPLACE "^#include \"([^\"]*)\".*$" "\\1" file "${include}")
++                    if (file MATCHES "${cold}")
++                        math(EXPR coldFiles "${coldFiles} + 1")
++                    endif ()
++                endforeach ()
++                math(EXPR coldFiles "${coldFiles} * 2")
++                if (coldFiles GREATER all)
++                    set(isCold TRUE)
++                endif ()
++            endif ()
++        elseif (source MATCHES "\\.cpp$")
++            file(RELATIVE_PATH relative "${sourceDir}" "${path}")
++            if (relative MATCHES "${cold}")
++                set(isCold TRUE)
++            endif ()
++        endif ()
++        if (isCold)
++            set_property(SOURCE "${path}" TARGET_DIRECTORY JavaScriptCore APPEND PROPERTY COMPILE_OPTIONS -Os)
++            set_property(SOURCE "${path}" TARGET_DIRECTORY JavaScriptCore APPEND PROPERTY COMPILE_DEFINITIONS WTF_AMIGA_PLAIN_INLINE=1)
++        endif ()
++    endforeach ()
++endfunction()
++cmake_language(DEFER CALL _amiga_cold_sources)
+diff --git a/Source/WTF/wtf/Compiler.h b/Source/WTF/wtf/Compiler.h
+index 3a16f0a7263..3a543ccb823 100644
+--- a/Source/WTF/wtf/Compiler.h
++++ b/Source/WTF/wtf/Compiler.h
+@@ -199,9 +199,12 @@
+  * those targets' own files) and WebCore's style, layout and DOM code
+  * (WTF_AMIGA_FORCE_INLINE, which PlatformAmiga.cmake defines for the sources
+  * in css/, dom/, layout/, rendering/ and style/). Most of what plain inlining
+- * saves is in the JavaScript bindings, page, html, Modules and platform. */
+-#if !defined(ALWAYS_INLINE) && defined(BUILDING_AMIGA__) && !defined(BUILDING_JavaScriptCore) \
+-    && !defined(BUILDING_WTF) && !defined(WTF_AMIGA_FORCE_INLINE)
++ * saves is in the JavaScript bindings, page, html, Modules and platform.
++ * WTF_AMIGA_PLAIN_INLINE, which PlatformAmiga.cmake defines for code that
++ * pages seldom run (JavaScriptCore's Intl, Temporal and typed array
++ * functions among others), asks for a plain inline even there. */
++#if !defined(ALWAYS_INLINE) && defined(BUILDING_AMIGA__) && (defined(WTF_AMIGA_PLAIN_INLINE) \
++    || (!defined(BUILDING_JavaScriptCore) && !defined(BUILDING_WTF) && !defined(WTF_AMIGA_FORCE_INLINE)))
+ #define ALWAYS_INLINE inline
+ #endif
+ 
+@@ -218,8 +221,8 @@
+ /* ALWAYS_INLINE_LAMBDA */
+ 
+ /* PLATFORM(AMIGA): as ALWAYS_INLINE above. */
+-#if !defined(ALWAYS_INLINE_LAMBDA) && defined(BUILDING_AMIGA__) && !defined(BUILDING_JavaScriptCore) \
+-    && !defined(BUILDING_WTF) && !defined(WTF_AMIGA_FORCE_INLINE)
++#if !defined(ALWAYS_INLINE_LAMBDA) && defined(BUILDING_AMIGA__) && (defined(WTF_AMIGA_PLAIN_INLINE) \
++    || (!defined(BUILDING_JavaScriptCore) && !defined(BUILDING_WTF) && !defined(WTF_AMIGA_FORCE_INLINE)))
+ #define ALWAYS_INLINE_LAMBDA
+ #endif
+ 
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index 6e25d85c2f3..c40e2dd3678 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -132,9 +132,13 @@ list(APPEND WebCore_LIBRARIES
+ # plain inline. WebCore is built from unified sources (each bundle includes
+ # several .cpp files of one folder), so the bundles are read to find their
+ # folder; the WebCore target exists only at the end of this folder, hence
+-# the deferred call.
++# the deferred call. Of those folders, what pages seldom run has a plain
++# inline too: SVG's and MathML's renderers (rendering/svg/,
++# rendering/mathml/) and the CSS Typed OM (css/typedom/), a bundle when more
++# than half of its files are there.
+ function(_amiga_force_inline_sources)
+     set(folders "(css|dom|layout|rendering|style)/")
++    set(cold "(css/typedom|rendering/mathml|rendering/svg)/")
+     get_target_property(sources WebCore SOURCES)
+     get_target_property(sourceDir WebCore SOURCE_DIR)
+     foreach (source IN LISTS sources)
+@@ -149,6 +153,14 @@ function(_amiga_force_inline_sources)
+                 file(STRINGS "${path}" includes REGEX "^#include \"${folders}")
+                 if (includes)
+                     set(force TRUE)
++                    file(STRINGS "${path}" all REGEX "^#include \"")
++                    file(STRINGS "${path}" coldIncludes REGEX "^#include \"${cold}")
++                    list(LENGTH all files)
++                    list(LENGTH coldIncludes coldFiles)
++                    math(EXPR coldFiles "${coldFiles} * 2")
++                    if (coldFiles GREATER files)
++                        set(force FALSE)
++                    endif ()
+                 endif ()
+             endif ()
+         elseif (source MATCHES "(^|/)${folders}[^/]*\\.cpp$")
+-- 
+2.53.0
+
