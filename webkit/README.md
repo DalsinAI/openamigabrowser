@@ -359,6 +359,11 @@ The patches, in order:
   glyph extents. cairo takes its scaled font's lock and then renderGlyph
   takes this one, so holding both the other way round could deadlock two
   tasks drawing the same font.
+- `0092-amiga-openfont-library-from-drawer.patch`: without
+  `LIBS:openfont.library`, the engine also opens the package's copy from
+  `PROGDIR:/`, the drawer's `Libs/` above the engine's `Libs/WebBrowser/`.
+  Before this it found no library there, so no face, and stopped at
+  `lastResortFallbackFont`'s assert on most pages.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
