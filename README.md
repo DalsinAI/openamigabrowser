@@ -105,15 +105,20 @@ AmiSSL 5). Then apply the patches in `webkit/` and run
 `WEBKIT_SOURCE=... OAB_DEPS=... scripts/build-webcore.sh`.
 For https:// the Amiga needs opentls.library 1.2 or newer and its CA bundle
 in `S:OpenTLS/ca-bundle.pem`.
-The programs are large (about 100 MB each, stripped) and need a 68040 with
-FPU (hard float, `-m68881`) and plenty of Fast RAM.
+The programs are large (about 76 MB each, stripped) and need a 68040 with
+FPU (hard float, `-m68881`) and plenty of Fast RAM. OpenBrowser's package
+(`scripts/package-browser.sh`) carries one of them: `WebBrowserEngine`,
+which webbrowser.library starts and which has OpenBrowser's window; the
+`OpenBrowser` icon starts a small launcher that asks the library for it.
 
 The build has two halves. The engine (WebKit's WebCore, JavaScriptCore,
 WTF, PAL and bmalloc) is built by `build-webcore.sh build-engine`, and only
 when its fingerprint changes: the WebKit tree, the compiler, the libraries'
 headers or the build options. OpenBrowser's own code is built by
-`build-webcore.sh build-browser` (and `build-tests` for `obcore-view` and
-`obcore-dump`), which compiles only OpenBrowser's files and relinks: about
+`build-webcore.sh build-browser` (`WebBrowserEngine` and the launcher;
+`build-tests` for `obcore-view` and `obcore-dump`; `build-window-engine`
+for `OpenBrowser.engine`, the same window as a program of its own, which
+the package no longer carries), which compiles only OpenBrowser's files and relinks: about
 15 seconds for a one-file change. The compiler runs through ccache when it is
 installed, and a new build folder uses Ninja when it is installed. Every
 build adds a line to `build-report.txt` in the build folder. The commands

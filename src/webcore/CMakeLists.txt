@@ -191,8 +191,11 @@ WEBKIT_EXECUTABLE_DECLARE(WebBrowserEngine)
 WEBKIT_EXECUTABLE(WebBrowserEngine)
 OB_LINK(WebBrowserEngine)
 
-# OpenBrowser.engine: the browser window (GadTools) around the page layer.
-# The launcher below loads and runs it.
+# OpenBrowser.engine: the browser window (GadTools) around the page layer, as
+# a program of its own that runs without webbrowser.library. The package
+# does not carry it: WebBrowserEngine above is the one engine there, with the
+# same window (ob_browser_engine.c). Kept for tests that run the window
+# directly (scripts/build-webcore.sh build-window-engine).
 set(OpenBrowser_SOURCES
     ${OB_PROGRAM_SOURCES}
     ob_blit.c
@@ -208,8 +211,8 @@ WEBKIT_EXECUTABLE(OpenBrowser)
 OB_LINK(OpenBrowser)
 
 # OpenBrowser: the small program the icon starts. It shows a title window at
-# once, loads OpenBrowser.engine (about 100 MB) with a progress bar and runs
-# it in its own process. It needs nothing of WebKit's, only the C library,
+# once and asks webbrowser.library (LIBS:, or the drawer's Libs before
+# Install) for a browser window, which WebBrowserEngine opens. It needs nothing of WebKit's, only the C library,
 # the stove's compat library (the toolchain wraps malloc) and libpthread
 # (the toolchain links with -fexceptions, whose frame tables use it).
 add_executable(OpenBrowserLauncher ob_launcher.c ob_splash.c)

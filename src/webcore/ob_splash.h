@@ -1,7 +1,7 @@
 /*
  * OpenBrowser's title window, shared by the launcher (ob_launcher.c, the
  * small OpenBrowser program the icon starts) and the browser itself
- * (OpenBrowser.engine). The launcher opens the window and a public message
+ * (WebBrowserEngine's window; OpenBrowser.engine). The launcher opens the window and a public message
  * port; the browser sends it what it is doing, and asks it to close when its
  * own window is open.
  * MIT, Copyright (c) 2026 AmigaChrome Team.
