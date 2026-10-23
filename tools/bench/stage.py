@@ -57,6 +57,8 @@ def job_script(page, opts, have_fetch, lite_gui):
     width, height = opts.size
     target = page["target"] if page["url"] else "pages/%s.html" % ident
     view = ["obcore-view", "-wait", str(wait)]
+    if page["settle"] is not None:
+        view += ["-settle", str(page["settle"])]
     if page["text"]:
         view.append("-text")
     if page["url"]:
