@@ -1,0 +1,309 @@
+From a18143451c8c22ff22bd9247c961a5750efc0a8c Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 06:37:16 +0000
+Subject: [PATCH] WebCore: PNG out through the PNG datatype's write, not libpng
+
+canvas toDataURL and toBlob (platformEncodeData) hand cairo's pixels to
+obdt_encode_png() in DatatypesDecode.c, which saves them the way any
+program saves a picture: the premultiplication is undone (RGB24 is written
+opaque), a picture object of a PNG datatype (openpng.datatype first, then
+png.datatype) gets them with PDTM_WRITEPIXELARRAY, and SaveDTObjectA()
+writes it with DTM_WRITE and DTWM_RAW to a file in T:, which is read back.
+Nothing in the browser writes PNG itself, and no datatype's own method is
+used, so any PNG datatype that writes will do. Without one the engine
+says so once and the picture is not encoded.
+
+WebCore no longer finds or links libpng; reading pictures was already the
+datatypes' job.
+---
+ Source/WebCore/PlatformAmiga.cmake            |   6 +-
+ .../graphics/cairo/ImageUtilitiesCairo.cpp    |  32 +++-
+ .../image-decoders/amiga/DatatypesDecode.c    | 151 +++++++++++++++++-
+ .../image-decoders/amiga/DatatypesDecode.h    |  14 ++
+ Source/cmake/OptionsAmiga.cmake               |   1 -
+ 5 files changed, 195 insertions(+), 9 deletions(-)
+
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index 08474367213..7a8b83a94ea 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -148,10 +148,10 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+     rendering/adwaita/RenderThemeAdwaita.h
+ )
+ 
+-# libpng only writes PNG (Cairo's encoder, for canvas.toDataURL); reading
+-# pictures is the datatypes' job. libamiga has DoMethod().
++# PNG is written by openpng.datatype (ImageUtilitiesCairo.cpp, canvas
++# toDataURL and toBlob) and read by the datatypes too: no libpng. libamiga
++# has DoMethod().
+ list(APPEND WebCore_LIBRARIES
+-    PNG::PNG
+     amiga
+ )
+ 
+diff --git a/Source/WebCore/platform/graphics/cairo/ImageUtilitiesCairo.cpp b/Source/WebCore/platform/graphics/cairo/ImageUtilitiesCairo.cpp
+index e6ad4980f9b..67fed711614 100644
+--- a/Source/WebCore/platform/graphics/cairo/ImageUtilitiesCairo.cpp
++++ b/Source/WebCore/platform/graphics/cairo/ImageUtilitiesCairo.cpp
+@@ -47,9 +47,39 @@
+ #include <wtf/glib/GUniquePtr.h>
+ #endif
+ 
++#if PLATFORM(AMIGA)
++#include "DatatypesDecode.h"
++#endif
++
+ namespace WebCore {
+ 
+-#if !PLATFORM(GTK)
++#if PLATFORM(AMIGA)
++
++// PNG through the system's datatypes (a PNG datatype's DTM_WRITE), not cairo's
++// libpng writer. Cairo's ARGB32 is premultiplied A, R, G, B in memory on
++// the 68k; obdt_encode_png() undoes the premultiplication.
++Vector<uint8_t> platformEncodeData(const NativeImage& nativeImage, const String& mimeType, std::optional<double>)
++{
++    ASSERT_UNUSED(mimeType, mimeType == "image/png"_s); // Only PNG output is supported for now.
++    auto platformImage = nativeImage.platformImage();
++    if (!platformImage || cairo_surface_get_type(platformImage.get()) != CAIRO_SURFACE_TYPE_IMAGE)
++        return { };
++    cairo_surface_t* surface = platformImage.get();
++    cairo_surface_flush(surface);
++    auto format = cairo_image_surface_get_format(surface);
++    if (format != CAIRO_FORMAT_ARGB32 && format != CAIRO_FORMAT_RGB24)
++        return { };
++    unsigned char* data = nullptr;
++    unsigned long size = 0;
++    if (!obdt_encode_png(cairo_image_surface_get_data(surface), cairo_image_surface_get_width(surface), cairo_image_surface_get_height(surface),
++        cairo_image_surface_get_stride(surface), format == CAIRO_FORMAT_ARGB32 ? OBDT_PNG_PREMULTIPLIED : OBDT_PNG_OPAQUE, &data, &size))
++        return { };
++    Vector<uint8_t> output(std::span<const uint8_t> { data, size });
++    obdt_free_encoded(data);
++    return output;
++}
++
++#elif !PLATFORM(GTK)
+ static cairo_status_t writeFunction(void* output, const unsigned char* data, unsigned length)
+ {
+     if (!reinterpret_cast<Vector<uint8_t>*>(output)->tryAppend(std::span { data, length }))
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+index 8041f4d3be4..27c07df0b42 100644
+--- a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+@@ -26,6 +26,7 @@
+ #include "DatatypesDecode.h"
+ 
+ #include <exec/types.h>
++#include <exec/memory.h>
+ #include <datatypes/datatypes.h>
+ #include <datatypes/datatypesclass.h>
+ #include <datatypes/pictureclass.h>
+@@ -80,18 +81,24 @@ static void disposePicture(Object* object, const char* fileName)
+ 
+ /* OS 3.2's picture datatypes read files, not memory (DTST_MEMORY gives
+  * ERROR_OBJECT_WRONG_TYPE), so the picture goes through a file in T:. */
+-static int writeTemporaryFile(const void* data, unsigned long size, char* name, size_t nameSize)
++static void temporaryName(char* name, size_t nameSize, const char* extension)
+ {
+     static unsigned long s_counter;
+     static pthread_mutex_t s_counterLock = PTHREAD_MUTEX_INITIALIZER;
+     unsigned long serial;
+-    BPTR file;
+-    LONG written;
+ 
+     pthread_mutex_lock(&s_counterLock);
+     serial = ++s_counter;
+     pthread_mutex_unlock(&s_counterLock);
+-    snprintf(name, nameSize, "T:OpenBrowser-%08lx-%lu.img", (unsigned long)FindTask(NULL), serial);
++    snprintf(name, nameSize, "T:OpenBrowser-%08lx-%lu.%s", (unsigned long)FindTask(NULL), serial, extension);
++}
++
++static int writeTemporaryFile(const void* data, unsigned long size, char* name, size_t nameSize)
++{
++    BPTR file;
++    LONG written;
++
++    temporaryName(name, nameSize, "img");
+     file = Open((CONST_STRPTR)name, MODE_NEWFILE);
+     if (!file)
+         return 0;
+@@ -229,3 +236,139 @@ void obdt_free(OBDTImage* image)
+     free(image->pixels);
+     image->pixels = NULL;
+ }
++
++/* The PNG datatypes tried for writing, ours first; any that writes PNG for
++ * DTM_WRITE with DTWM_RAW will do. */
++static const char* const s_pngDataTypes[] = { "openpng", "png" };
++
++/* Straight (not premultiplied) A, R, G, B, rows packed, from malloc. */
++static unsigned char* straightPixels(const unsigned char* pixels, unsigned width, unsigned height, unsigned stride, unsigned flags)
++{
++    unsigned char* out = malloc((size_t)width * height * 4);
++    unsigned char* to = out;
++    unsigned x, y;
++
++    if (!out)
++        return NULL;
++    for (y = 0; y < height; y++) {
++        const unsigned char* from = pixels + (size_t)y * stride;
++        for (x = 0; x < width; x++, from += 4, to += 4) {
++            unsigned a = (flags & OBDT_PNG_OPAQUE) ? 255 : from[0];
++            to[0] = (unsigned char)a;
++            if ((flags & OBDT_PNG_PREMULTIPLIED) && a != 255 && !(flags & OBDT_PNG_OPAQUE)) {
++                unsigned i;
++                for (i = 1; i < 4; i++) {
++                    unsigned c = a ? (from[i] * 255 + a / 2) / a : 0;
++                    to[i] = (unsigned char)(c > 255 ? 255 : c);
++                }
++            } else {
++                to[1] = from[1];
++                to[2] = from[2];
++                to[3] = from[3];
++            }
++        }
++    }
++    return out;
++}
++
++/* An empty picture object of the first PNG datatype there is, holding the
++ * pixels, or NULL. */
++static Object* pngPicture(unsigned char* argb, unsigned width, unsigned height, int alpha)
++{
++    unsigned i;
++
++    for (i = 0; i < sizeof s_pngDataTypes / sizeof s_pngDataTypes[0]; i++) {
++        struct BitMapHeader* bmh = NULL;
++        struct pdtBlitPixelArray blit;
++        Object* object = NewDTObject(NULL, DTA_SourceType, DTST_RAM, DTA_BaseName, (ULONG)s_pngDataTypes[i],
++            DTA_GroupID, GID_PICTURE, TAG_DONE);
++        if (!object)
++            continue;
++        if (GetDTAttrs(object, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE) < 1 || !bmh) {
++            DisposeDTObject(object);
++            continue;
++        }
++        bmh->bmh_Width = bmh->bmh_PageWidth = (UWORD)width;
++        bmh->bmh_Height = bmh->bmh_PageHeight = (UWORD)height;
++        bmh->bmh_Depth = alpha ? 32 : 24;
++        bmh->bmh_Masking = alpha ? mskHasAlpha : mskNone;
++        SetDTAttrs(object, NULL, NULL, DTA_NominalHoriz, width, DTA_NominalVert, height,
++            PDTA_SourceMode, PMODE_V43, PDTA_AlphaChannel, alpha ? TRUE : FALSE, TAG_DONE);
++        blit.MethodID = PDTM_WRITEPIXELARRAY;
++        blit.pbpa_PixelData = argb;
++        blit.pbpa_PixelFormat = PBPAFMT_ARGB;
++        blit.pbpa_PixelArrayMod = width * 4;
++        blit.pbpa_Left = blit.pbpa_Top = 0;
++        blit.pbpa_Width = width;
++        blit.pbpa_Height = height;
++        if (DoMethodA(object, (Msg)&blit))
++            return object;
++        DisposeDTObject(object);
++    }
++    return NULL;
++}
++
++/* The whole file, from AllocVec, or NULL. */
++static unsigned char* readFile(const char* name, unsigned long* size)
++{
++    BPTR file = Open((CONST_STRPTR)name, MODE_OLDFILE);
++    unsigned char* data = NULL;
++    LONG length;
++
++    if (!file)
++        return NULL;
++    Seek(file, 0, OFFSET_END);
++    length = Seek(file, 0, OFFSET_BEGINNING);
++    if (length > 0 && (data = AllocVec((ULONG)length, MEMF_ANY))) {
++        if (Read(file, data, length) != length) {
++            FreeVec(data);
++            data = NULL;
++        } else
++            *size = (unsigned long)length;
++    }
++    Close(file);
++    return data;
++}
++
++/* PNG through the system's datatypes, the way any program saves a picture:
++ * a picture object of a PNG datatype gets the pixels (PDTM_WRITEPIXELARRAY)
++ * and SaveDTObjectA() writes it (DTM_WRITE, DTWM_RAW) to a file in T:,
++ * which is read back. */
++int obdt_encode_png(const unsigned char* pixels, unsigned width, unsigned height, unsigned stride,
++    unsigned flags, unsigned char** data, unsigned long* size)
++{
++    static int s_toldNoWriter;
++    unsigned char* argb;
++    Object* object;
++    char name[64];
++    int alpha = !(flags & OBDT_PNG_OPAQUE);
++
++    *data = NULL;
++    *size = 0;
++    if (!pixels || !width || !height || width > 65535 || height > 65535)
++        return 0;
++    pthread_once(&s_openOnce, openDataTypes);
++    if (!DataTypesBase || DataTypesBase->lib_Version < 44)
++        return 0;
++    if (!(argb = straightPixels(pixels, width, height, stride, flags)))
++        return 0;
++    object = pngPicture(argb, width, height, alpha);
++    free(argb);
++    if (!object) {
++        resetFPCR();
++        if (!s_toldNoWriter++)
++            fprintf(stderr, "OpenBrowser: no PNG datatype in SYS:Classes/DataTypes: pictures can't be saved as PNG\n");
++        return 0;
++    }
++    temporaryName(name, sizeof name, "png");
++    if (SaveDTObjectA(object, NULL, NULL, (CONST_STRPTR)name, DTWM_RAW, FALSE, NULL))
++        *data = readFile(name, size);
++    disposePicture(object, name);
++    return *data != NULL;
++}
++
++void obdt_free_encoded(unsigned char* data)
++{
++    if (data)
++        FreeVec(data);
++}
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
+index 007cef22584..ddc940dea00 100644
+--- a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
+@@ -57,6 +57,20 @@ typedef int (*OBDTServiceDecoder)(const void* data, unsigned long size, OBDTImag
+ void obdt_set_service_decoder(OBDTServiceDecoder);
+ int obdt_has_service_decoder(void);
+ 
++/* PNG out (canvas toDataURL and toBlob, obcore-dump) through the system's
++ * datatypes: a PNG datatype's DTM_WRITE (DTWM_RAW), as SaveDTObjectA()
++ * does, openpng.datatype first, then png.datatype. width * height pixels of
++ * 4 bytes, alpha, red, green, blue, rows stride bytes apart; flags
++ * OBDT_PNG_PREMULTIPLIED when the colour is premultiplied, OBDT_PNG_OPAQUE
++ * to ignore alpha (an RGB file). 1 and the file in *data (free it with
++ * obdt_free_encoded()) and *size, or 0 when no PNG datatype writes or it
++ * failed. */
++#define OBDT_PNG_PREMULTIPLIED 1
++#define OBDT_PNG_OPAQUE 2
++int obdt_encode_png(const unsigned char* pixels, unsigned width, unsigned height, unsigned stride,
++    unsigned flags, unsigned char** data, unsigned long* size);
++void obdt_free_encoded(unsigned char* data);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
+index c0d1788a170..66562bed729 100644
+--- a/Source/cmake/OptionsAmiga.cmake
++++ b/Source/cmake/OptionsAmiga.cmake
+@@ -35,7 +35,6 @@ if (ENABLE_WEBCORE)
+     find_package(Freetype 2.9.0 REQUIRED)
+     find_package(HarfBuzz 2.7.4 REQUIRED COMPONENTS ICU)
+     find_package(OXP 0.1 REQUIRED)
+-    find_package(PNG REQUIRED)
+     find_package(SQLite3 3.23.1 REQUIRED)
+     if (NOT TARGET SQLite3::SQLite3) # CMake < 4.3
+         add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
+-- 
+2.43.0
+
