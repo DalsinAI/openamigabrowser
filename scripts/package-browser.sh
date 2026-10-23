@@ -86,7 +86,8 @@ JSI="$WEBKIT_BUILD/jsimage"
 if [ "${OB_JSIMAGE:-}" != 0 ] && [ -f "$JSI/WebBrowserEngine/WebBrowserEngine" ] \
         && ! [ "$JSI/WebBrowserEngine/WebBrowserEngine" -ot "$BIN/WebBrowserEngine" ]; then
     [ -f "$JSI/JavaScriptEngine" ] || { echo "missing: $JSI/JavaScriptEngine (the client's image)" >&2; exit 1; }
-    # the engine finds it at PROGDIR:/JavaScript/JavaScriptEngine
+    # the engine looks in LIBS:JavaScript/ first (where the Installer puts
+    # it with javascript.library), then at PROGDIR:/JavaScript/
     # (src/jslib/jsimage_client.c)
     mkdir -p "$D/Libs/JavaScript"
     "$STRIP" -o "$E/WebBrowserEngine" "$JSI/WebBrowserEngine/WebBrowserEngine"
