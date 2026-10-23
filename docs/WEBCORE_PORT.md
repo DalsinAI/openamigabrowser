@@ -215,7 +215,11 @@ bundle is built with `-mno-pcrel -fno-PIC` (`scripts/cmake/ob-pcrel.cmake`),
 the only file of the engine that is. Stripped and folded,
 OpenBrowser.engine goes from 78,371,520 to 75,787,212 bytes (82,757,480 to
 79,893,600 before folding): relocations 1,494,434 to 630,158, code
-72,220,512 to 72,922,500 bytes, and three hunks to one.
+72,220,512 to 72,922,500 bytes, and three hunks to one. `OB_PCREL` is on by
+default since 23 October 2026, when a clean build of main with it passed
+the test pages and the window on lab copies of Instance-32 and Instance-14;
+`OB_PCREL=0` gives the absolute, three-hunk build. It has been tested with
+`OB_GC_SECTIONS=1` only.
 
 **AmigaDOS names in fontconfig.** fontconfig joins its configuration
 directory and file name with a slash, so an empty directory turned

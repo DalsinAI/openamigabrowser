@@ -130,8 +130,11 @@ is done when its "done when" holds on the lab instance.
    (`OB_PCREL=1`: -mpcrel -fPIC, linked as one hunk; #85) takes it to
    75,787,212 (2,584,308 bytes less): 864,276 fewer relocations (1,494,434
    to 630,158), for 0.70 MB more code, with the DOM bench within timer
-   noise (1,527 against 1,567 ms, nine runs each). `OB_PCREL` is off by
-   default, like `OB_GC_SECTIONS`.
+   noise (1,527 against 1,567 ms, nine runs each). `OB_PCREL` is on by
+   default since 23 October: main d60ecb4 built from a clean tree with
+   it (and `OB_GC_SECTIONS=1`) passed the test pages on lab copies of
+   Instance-32 and Instance-14, the window showed Wikipedia on both, and
+   the DOM bench's JavaScript took 1,509 and 1,462 ms (nine runs each).
 
    Section GC (`OB_GC_SECTIONS`, #45) is off by default; the 22 October
    test build turned it on, and it saves almost nothing on its own; with

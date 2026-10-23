@@ -65,8 +65,10 @@
 #                   32-bit displacements on the 68040) linked as one hunk
 #                   (toolchain/amigaos3-onehunk.ld), so calls and addresses
 #                   inside the program need no relocation at load time;
-#                   .data and .bss move into the code hunk. For a new build
-#                   folder; an existing folder keeps its choice. (default 0)
+#                   .data and .bss move into the code hunk: about 2.6 MB
+#                   less engine. 0: absolute code in three hunks. For a new
+#                   build folder; an existing folder keeps its choice.
+#                                                              (default 1)
 #   OB_FOLD         1: after a program links, fold its duplicate template
 #                   copies (scripts/hunkfold.py) and link it again: about
 #                   6 MB less per program. Our ld keeps every object's copy
@@ -347,7 +349,7 @@ configure_engine() {
     # reach across a 70 MB program; with -fPIC they are 32-bit (bd,pc). Our
     # ld resolves pc-relative references only inside one hunk, hence the
     # one-hunk script.
-    case "${OB_PCREL:-0}" in
+    case "${OB_PCREL:-1}" in
         0) ;;
         1) export CFLAGS="${CFLAGS:+$CFLAGS }-mpcrel -fPIC"
            export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-mpcrel -fPIC"
