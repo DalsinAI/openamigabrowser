@@ -30,6 +30,13 @@ BSD-licensed Ruby scripts (Copyright (C) 2016-2023 Apple Inc.), and the
 Python forms of their templates (`*.pyerb`, from Apple's `*.erb`). They keep
 Apple's notices and licence, with a line for the AmigaChrome Team's port.
 
+`data/public-suffixes` is Mozilla's Public Suffix List
+(https://github.com/publicsuffix/list, taken 23 October 2026), rewritten by
+`tools/psl-compile.py` (Punycode, sorted, comments left out). It is data
+under the Mozilla Public License 2.0 (https://mozilla.org/MPL/2.0/); the
+list as published is its source form. `tests/public-suffix-cases.txt` is
+the list's own test file (public domain, CC0) in the same form.
+
 `third_party/openmail/` comes from OpenMail (AmigaChrome Team's mail client,
 MIT, same copyright); see its `FROM` and `LICENSE`.
 

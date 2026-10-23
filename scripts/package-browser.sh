@@ -29,7 +29,7 @@
 #                  Libs/json.library, which the Installer offers
 #
 # OUT_DIR/OpenBrowser/            the drawer: OpenBrowser, OpenBrowser.engine,
-#                                 Unicode/, Fonts/, fontconfig/, Libs/
+#                                 Unicode/, Network/, Fonts/, fontconfig/, Libs/
 #                                 (webbrowser.library, WebBrowser/, OpenTLS),
 #                                 S/OpenTLS/, Install, icons and readme
 # OUT_DIR/OpenBrowser.info        the drawer's icon
@@ -67,6 +67,9 @@ for t in "$D" "$E"; do
     cp "$HERE/src/webcore/fontconfig/fonts.conf" "$t/fontconfig/"
     cp "$HERE/src/webcore/blocklist" "$t/"
     cp "$ICU_DATA" "$t/Unicode/icudt78b.dat"
+    # the Public Suffix List for cookies and sites (WebKit patch 0070)
+    mkdir -p "$t/Network"
+    cp "$HERE/data/public-suffixes" "$t/Network/"
 done
 cp "$OPENTLS_LIBS/opentls.library" "$OPENTLS_LIBS/opencrypto.library" "$D/Libs/"
 JSONLIB=${JSON_LIB:-"$HERE/build/json-library/json.library"}

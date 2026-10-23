@@ -277,7 +277,7 @@ engine's link map.
 
 ### Step 5, network (first: it is smaller)
 
-1. **Public suffixes from a file.** `PublicSuffixStoreAmiga.cpp` in place
+1. **Public suffixes from a file** (patch 0070). `PublicSuffixStoreAmiga.cpp` in place
    of `PublicSuffixStoreCurl.cpp`, the host script and the data file in
    `PROGDIR:`. Map: `libpsl.a`. Needs nothing from openweb.fetch.
 2. **Unused curl code out.** `CurlStream` and `CurlStreamScheduler` (and
