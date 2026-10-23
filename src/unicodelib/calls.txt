@@ -269,3 +269,5 @@ uscript_getShortName
 # back through the program's stub, which goes round to the library's own.
 UCNV_FROM_U_CALLBACK_ESCAPE
 UCNV_TO_U_CALLBACK_SUBSTITUTE
+# The OpenFont text path (ComplexTextControllerOpenFont.cpp, 23 Oct).
+uscript_isRightToLeft
