@@ -197,6 +197,9 @@ is done when its "done when" holds on the lab instance.
    | Instance-14 | 1.473 s (median 1.48) | 1.496 s (median 1.48) | 1.46 s |
    | Instance-32 | median 1.58 s (1.52-1.60) | median 1.58 s (1.50-1.60) | 1.51 s |
 
+   The Instance-32 row's 0.8.1 time is an earlier day's: on one fresh
+   Instance-32 copy (REL82, 5 runs each) 0.8.1 has a median of 1.56 s and
+   0.8.2 1.52 s, so 0.8.2 is no slower than 0.8.1 either.
    Wikipedia and Reddit load on both copies; with `-settle 4` Wikipedia
    loads all 14 requests on both builds (15.50 s with the shared image,
    15.34 s plain, Instance-14).
