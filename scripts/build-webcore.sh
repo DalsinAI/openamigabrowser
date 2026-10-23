@@ -705,12 +705,12 @@ jsimage_program() {
     j_start=$(date +%s)
     rm -rf "$j_out"
     mkdir -p "$j_out/lib" "$j_out/1" "$j_out/2"
-    $JSIMAGE imports "$BUILD/jsimage/exports" "$BUILD/bin/$j_prog" "$j_map" "$j_out/imports" >> "$j_log" 2>&1 \
+    python3 "$HERE/hunkfold.py" winners "$j_plain" "$j_out/winners.txt" >> "$j_log" 2>&1 \
+        || die "jsimage: no winners from $j_plain (log: $j_log)"
+    $JSIMAGE imports "$BUILD/jsimage/exports" "$BUILD/bin/$j_prog" "$j_map" "$j_out/imports" "$j_out/winners.txt" >> "$j_log" 2>&1 \
         || die "jsimage: no imports for $j_prog (log: $j_log)"
     $JSIMAGE script "$j_out/imports" 0 "$j_out/1/jsimage-imports.ld" >> "$j_log" 2>&1
     $JSIMAGE script "$j_out/imports" 0x10000000 "$j_out/2/jsimage-imports.ld" >> "$j_log" 2>&1
-    python3 "$HERE/hunkfold.py" winners "$j_plain" "$j_out/winners.txt" >> "$j_log" 2>&1 \
-        || die "jsimage: no winners from $j_plain (log: $j_log)"
     for j_lib in "$BUILD"/lib/lib*.a; do
         j_name=$(basename "$j_lib")
         case "$j_name" in libJavaScriptCore.a|libWTF.a|libbmalloc.a) continue ;; esac
