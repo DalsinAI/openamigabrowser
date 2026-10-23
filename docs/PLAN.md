@@ -136,6 +136,17 @@ is done when its "done when" holds on the lab instance.
    Instance-32 and Instance-14, the window showed Wikipedia on both, and
    the DOM bench's JavaScript took 1,509 and 1,462 ms (nine runs each).
 
+   **One engine (0.8.2 test, 23 October).** The package carries only
+   `WebBrowserEngine` (75,811,000 bytes stripped), which webbrowser.library
+   starts and which has OpenBrowser's window; `OpenBrowser.engine` is no
+   longer packaged or built by `build-browser` (`build-window-engine` keeps
+   it for tests). Its fonts, fontconfig, blocklist and ICU data go once, in
+   `Libs/WebBrowser/` beside it. The drawer goes from 173,019,958 to
+   86,801,839 bytes, and the archive from 80,034,607 to about 47.3 MB
+   (measured on the 0.8.2 test package, built from main 8ba1e04 with this
+   change, before patches 0070-0074). With 0070 the drawer also carries
+   `Libs/WebBrowser/Network/public-suffixes`, once, beside the engine.
+
    Section GC (`OB_GC_SECTIONS`, #45) is off by default; the 22 October
    test build turned it on, and it saves almost nothing on its own; with
    the duplicate template copies folded (`OB_FOLD`, on with it) the

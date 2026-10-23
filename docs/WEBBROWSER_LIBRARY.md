@@ -69,11 +69,13 @@ engine.
 Since 0.8.2 this is the one engine OpenBrowser's package carries (there is
 no `OpenBrowser.engine` beside the launcher), and Install keeps it in the
 drawer: `Libs/WebBrowser/` holds `WebBrowserEngine` with the one copy of
-`Fonts/`, `fontconfig/fonts.conf`, `blocklist` and `Unicode/icudt78b.dat`.
+`Fonts/`, `fontconfig/fonts.conf`, `blocklist`, `Unicode/icudt78b.dat` and
+`Network/public-suffixes` (patch 0070).
 The engine finds them through its own `PROGDIR:` (fontconfig's
 `FONTCONFIG_PATH` is `PROGDIR:fontconfig`, the built-in fonts dir
 `PROGDIR:Fonts`; `AmigaFrameLoaderClient.cpp` reads `PROGDIR:blocklist`;
-`ob_icudata.c` tries `LOCALE:Unicode/`, then `PROGDIR:Unicode/`). Install
+`ob_icudata.c` tries `LOCALE:Unicode/`, then `PROGDIR:Unicode/`; patch 0070
+reads `PROGDIR:Network/public-suffixes`, then `ENVARC:OpenBrowser/`). Install
 renames an older `LIBS:WebBrowser/WebBrowserEngine` (an engine, or the
 two-line script 0.8.0 and 0.8.1 test wrote there) to
 `WebBrowserEngine.before-20261023b`, so the library runs the drawer's
