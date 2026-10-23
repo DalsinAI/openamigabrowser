@@ -163,5 +163,5 @@
              (cat "an older OpenBrowser was in that drawer; its" #renamed-drawer " is kept there as .before-" #stamp ", to rename back")
              "delete that drawer")
          (if (or #renamed (exists #backup)) (cat "; rename " #backup " back to WebBrowserEngine") "")
-         ". What the Installer added to LIBS:, S: and LOCALE: is listed in Install-OpenBrowser.log in that drawer (read it before deleting the drawer).")
+         ". What the Installer added to LIBS:, S: and LOCALE: is listed in the Installer's log in that drawer (Install-OpenBrowser.log from the icon; read it before deleting the drawer).")
     (quiet))

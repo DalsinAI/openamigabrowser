@@ -50,7 +50,8 @@ rename the *.before-20261023b files in it back). Rename
 LIBS:WebBrowser/WebBrowserEngine.before-20261023b, if there is one, back to
 WebBrowserEngine. Libraries kept as *.before-20261023b in LIBS: can be
 renamed back the same way. The Installer's
-log, Install-OpenBrowser.log in the drawer, lists everything it did.
+log in the drawer (Install-OpenBrowser.log, or install_log_file when the
+Installer is started from a Shell without LOGFILE), lists everything it did.
 
 Licences: OpenBrowser's own parts are MIT, Copyright (c) 2026 AmigaChrome
 Team. WebKit is LGPL-2/BSD and ICU is under the Unicode licence; see
