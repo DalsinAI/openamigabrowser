@@ -26,12 +26,14 @@ scripts/build-webcore.sh's "jsimage" command runs these steps.
                              (each program runs its own), and jsimage_id and
                              jsimage_client. One line each: offset name
                              member
-  imports EXPORTS PROGRAM MAP OUT
+  imports EXPORTS PROGRAM MAP OUT [WINNERS]
                              the exports a client takes: those it linked
-                             from the three archives, and those from an
+                             from the three archives, those from an
                              archive member it linked as well (the C and
                              C++ run-time, ICU: their state is then the
-                             image's alone)
+                             image's alone), and, with WINNERS, the inline
+                             functions and data it linked more than one
+                             copy of
   stamp IMAGE EXPORTS        write the image id (a CRC of the exports) into
                              the image's jsimage_id
   script IMPORTS SHIFT OUT   jsimage-imports.ld (toolchain/
@@ -46,6 +48,7 @@ scripts/build-webcore.sh's "jsimage" command runs these steps.
   id EXPORTS                 the image id
 """
 import bisect
+import os
 import re
 import struct
 import subprocess
@@ -153,43 +156,122 @@ def nm(path):
 
 # The hunk files' symbol tables cut long names (about 128 characters); the
 # archives, and so the client's references, have them whole. A cut name is
-# made whole again from the -Map: the input section that starts where the
-# symbol is (-ffunction-sections, -fdata-sections) is named after it.
+# made whole again from the files the link took (the -Map names them): the
+# whole names they define that start with it, told apart, when more than
+# one does, by the input section that starts at the symbol
+# (-ffunction-sections, -fdata-sections) and by the -Map's own (demangled)
+# symbol line at its address.
 LONG_NAME = 100
+SECTION = re.compile(r'^ \.(?:text|data\.rel\.ro\.local|data\.rel\.ro|data\.rel\.local|data\.rel|data|rodata|bss)\.(\S+)$')
 
 
-def section_names(path):
-    """{start: [names]} of the input sections of a -Map, each name without
-    its .text./.data./.rodata./.bss. prefix, as the symbol it holds"""
-    out = {}
-    sect = re.compile(r'^ \.(?:text|data\.rel\.ro\.local|data\.rel\.ro|data\.rel\.local|data\.rel|data|rodata|bss)\.(\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+) ')
+def map_names(path):
+    """From a -Map: {start: [names]} of its input sections, each as the
+    symbol it holds (the name without .text. and the like), {address:
+    [demangled names]} of its symbol lines, and the files the link took"""
+    sections, symbols, files = {}, {}, set()
+    sect = re.compile(r'^ (\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+) (\S.*)$')
+    sym = re.compile(r'^ {16}0x([0-9a-f]+) {2,}(\S.*)$')
     pending = None
     for line in open(path, errors='replace'):
+        line = line.rstrip('\n')
         if pending is not None and line.startswith('  '):
             line = pending + line
         pending = None
         m = sect.match(line)
         if m:
-            out.setdefault(int(m.group(2), 16), []).append('_' + m.group(1))
-        elif re.match(r'^ \S+$', line.rstrip('\n')):
-            pending = line.rstrip('\n')
+            n = SECTION.match(' ' + m.group(1))
+            if n:
+                sections.setdefault(int(m.group(2), 16), []).append('_' + n.group(1))
+            f = m.group(4).strip()
+            files.add(f[:f.index('(')] if f.endswith(')') and '(' in f else f)
+            continue
+        m = sym.match(line)
+        if m and '=' not in m.group(2) and not m.group(2).startswith('0x'):
+            symbols.setdefault(int(m.group(1), 16), []).append(m.group(2).strip())
+        elif re.match(r'^ \S+$', line):
+            pending = line
+    return sections, symbols, files
+
+
+def long_names(files, base):
+    """{first LONG_NAME characters: [whole names]} of the globals the files
+    define (nm on each archive and object)"""
+    out = {}
+    for f in sorted(files):
+        path = f if f.startswith('/') else os.path.join(base, f)
+        if not os.path.exists(path):
+            continue
+        r = subprocess.run([NM, '-g', '--defined-only', path], capture_output=True, text=True)
+        for line in r.stdout.splitlines():
+            p = line.split()
+            if len(p) == 3 and len(p[2]) > LONG_NAME:
+                out.setdefault(p[2][:LONG_NAME], set()).add(p[2])
     return out
 
 
-def nm_whole(path, mapfile, stats=None):
-    """nm, with the names the hunk file cut made whole from the -Map"""
-    names = None
-    for off, typ, name in nm(path):
-        if len(name) >= LONG_NAME:
-            if names is None:
-                names = section_names(mapfile)
-            whole = [n for n in names.get(off, ()) if n.startswith(name) and len(n) > len(name)]
-            if len(whole) == 1:
-                name = whole[0]
-                if stats is not None:
-                    stats['whole'] = stats.get('whole', 0) + 1
-            elif stats is not None and not any(n == name for n in names.get(off, ())):
-                stats['cut'] = stats.get('cut', 0) + 1
+def demangle(names):
+    """{name: demangled} (Amiga names carry one more leading underscore)"""
+    names = sorted(names)
+    if not names:
+        return {}
+    cxxfilt = NM[:-2] + 'c++filt' if NM.endswith('nm') else 'c++filt'
+    r = subprocess.run([cxxfilt], input='\n'.join(n[1:] if n.startswith('_') else n for n in names) + '\n',
+                       capture_output=True, text=True)
+    return dict(zip(names, r.stdout.splitlines()))
+
+
+def nm_whole(path, mapfile, stats=None, cut_out=None):
+    """nm, with the names the hunk file cut made whole"""
+    entries = list(nm(path))
+    cut_len = max((len(n) for _, _, n in entries), default=0)
+    if cut_len < LONG_NAME:
+        yield from entries
+        return
+    sections, symbols, files = map_names(mapfile)
+    base = os.path.dirname(os.path.dirname(os.path.abspath(mapfile)))
+    known = long_names(files, base)
+    groups = {}
+    for off, typ, name in entries:
+        if len(name) == cut_len:
+            groups.setdefault((off, name), []).append(typ)
+    # a name as long as the longest may be whole already
+    cands = {k: [] if k[1] in known.get(k[1][:LONG_NAME], ()) else
+             sorted(n for n in known.get(k[1][:LONG_NAME], ()) if n.startswith(k[1]))
+             for k in groups}
+    dem = demangle(set(n for c in cands.values() if len(c) > 1 for n in c))
+    whole = {}
+    for (off, name), types in groups.items():
+        c = cands[(off, name)]
+        if not c:
+            whole[(off, name)] = [name] * len(types)     # not cut, or not ours to know
+            continue
+        if len(c) > 1:
+            here = set(symbols.get(off, ()))
+            by_line = [n for n in c if dem.get(n) in here]
+            by_section = [n for n in c if n in sections.get(off, ())]
+            if len(by_line) == len(types):
+                c = by_line
+            elif len(by_section) == len(types):
+                c = by_section
+            elif len(types) == 1 and len(by_line) == 1:
+                c = by_line
+        if len(c) == len(types):
+            whole[(off, name)] = c
+            if stats is not None:
+                stats['whole'] = stats.get('whole', 0) + len(c)
+        else:
+            whole[(off, name)] = [name] * len(types)
+            if stats is not None:
+                stats['cut'] = stats.get('cut', 0) + len(types)
+            if cut_out is not None:
+                cut_out.append(f'{off:08x} {name} {len(types)} {" ".join(c)}')
+    used = {}
+    for off, typ, name in entries:
+        if (off, name) in whole:
+            i = used.get((off, name), 0)
+            used[(off, name)] = i + 1
+            name = whole[(off, name)][i]
         yield off, typ, name
 
 
@@ -227,8 +309,8 @@ def cmd_exports(image, mapfile, out):
     starts = [a for a, _, _ in sections]
     kept = skipped = 0
     with open(out, 'w') as f:
-        stats = {}
-        for off, typ, name in sorted(nm_whole(image, mapfile, stats)):
+        stats, cut = {}, []
+        for off, typ, name in sorted(nm_whole(image, mapfile, stats, cut)):
             member = owner(sections, starts, off)
             archive = re.match(r'.*/(lib[^/]*\.a)\((.*)\)$', member)
             # an archive member, or one of the image's own objects (whose
@@ -242,8 +324,10 @@ def cmd_exports(image, mapfile, out):
                 continue
             f.write(f'{off:08x} {name} {archive.group(1) + "(" + archive.group(2) + ")" if archive else member}\n')
             kept += 1
+    with open(out + '.cut', 'w') as f:
+        f.write(''.join(l + '\n' for l in cut))
     print(f'jsimage exports: {kept} names, {skipped} kept by each program; '
-          f'{stats.get("whole", 0)} long names made whole, {stats.get("cut", 0)} left cut')
+          f'{stats.get("whole", 0)} long names made whole, {stats.get("cut", 0)} left cut ({out}.cut)')
 
 
 MOVED = re.compile(r'(^|/)lib(JavaScriptCore|WTF|bmalloc)\.a\(')
@@ -274,7 +358,7 @@ def cmd_needs(out, pairs):
     print(f'jsimage needs: {len(names)} names')
 
 
-def cmd_imports(exports, program, mapfile, out):
+def cmd_imports(exports, program, mapfile, out, winners=None):
     """The names a client takes from the image: the image's exports that
     the client linked from libJavaScriptCore.a, libWTF.a or libbmalloc.a,
     or from an archive member the image has too (the C and C++ run-time,
@@ -290,7 +374,18 @@ def cmd_imports(exports, program, mapfile, out):
     # copy the image kept (an inline function's may be in the image's own
     # objects)
     client_moved = set(name for _, name, who in defined_by(program, mapfile) if MOVED.search(who))
-    moved = shared = 0
+    # with WINNERS (scripts/hunkfold.py winners of the client's link): the
+    # names of the sections the client linked more than one copy of, the
+    # inline functions and their statics, vtables and the like. Where the
+    # image has the name too, the client takes the image's copy, so that a
+    # function-local static, a guard or a singleton is one, not two.
+    inline = set()
+    if winners:
+        for line in open(winners):
+            m = SECTION.match(' ' + line.split('\t', 1)[0])
+            if m:
+                inline.add('_' + m.group(1))
+    moved = shared = shared_inline = 0
     with open(out, 'w') as f:
         for line in open(exports):
             off, name, member = line.rstrip('\n').split(' ', 2)
@@ -300,10 +395,13 @@ def cmd_imports(exports, program, mapfile, out):
                 moved += 1
             elif member in client_members:
                 shared += 1
+            elif name in inline:
+                shared_inline += 1
             else:
                 continue
             f.write(line)
-    print(f'jsimage imports: {moved} from JavaScriptCore, WTF and bmalloc, {shared} shared run-time names')
+    print(f'jsimage imports: {moved} from JavaScriptCore, WTF and bmalloc, {shared} shared run-time names, '
+          f'{shared_inline} inline copies')
 
 
 def read_exports(path):
@@ -397,7 +495,7 @@ if __name__ == '__main__':
         cmd_fixups(*args[1:])
     elif len(args) >= 4 and args[0] == 'needs' and len(args) % 2 == 0:
         cmd_needs(args[1], args[2:])
-    elif len(args) == 5 and args[0] == 'imports':
+    elif len(args) in (5, 6) and args[0] == 'imports':
         cmd_imports(*args[1:])
     elif len(args) == 3 and args[0] == 'stamp':
         cmd_stamp(*args[1:])
