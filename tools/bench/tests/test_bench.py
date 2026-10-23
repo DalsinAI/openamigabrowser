@@ -110,10 +110,11 @@ class Manifest(unittest.TestCase):
         self.assertTrue(acid3["text"])
         self.assertFalse(acid3["lite"])
         self.assertEqual(acid3["wait"], 180)
+        self.assertEqual(acid3["settle"], 0)
 
     def test_bad_lines(self):
         for text in ("a local", "a nowhere x.html", "a live tests/x.html", "a b c d e", "bad_id local x.html",
-                     "a local x.html wait=x", "a local x.html\na local y.html"):
+                     "a local x.html wait=x", "a local x.html settle=x", "a local x.html\na local y.html"):
             with self.assertRaises(benchlib.ManifestError, msg=text):
                 benchlib.parse_manifest(text)
 
@@ -162,7 +163,7 @@ class Stage(unittest.TestCase):
             self.assertNotIn("obfetch", job)
             self.assertTrue(all(len(line) < 400 for line in job.splitlines()))
             job.encode("ascii")
-        self.assertIn('obcore-view -wait 180 -text -url "http://acid3.acidtests.org/" 800 600 png/acid3.png', self.read("jobs", "acid3"))
+        self.assertIn('obcore-view -wait 180 -settle 0 -text -url "http://acid3.acidtests.org/" 800 600 png/acid3.png', self.read("jobs", "acid3"))
         self.assertIn('obcore-view -wait 120 "pages/text.html" 800 600 png/text.png', self.read("jobs", "text"))
         self.assertTrue(os.path.isfile(os.path.join(self.tmp, "Bench", "pages", "features.html")))
         self.assertEqual(len(self.read("bench-manifest.txt").splitlines()), len(benchlib.load_manifest()))

@@ -2,7 +2,7 @@ Short:        WebKit web browser for AmigaOS 3.2 (68040+FPU)
 Author:       AmigaChrome Team
 Uploader:     UPLOADER-PLACEHOLDER
 Type:         comm/www
-Version:      0.8
+Version:      0.8.2
 Architecture: m68k-amigaos >= 3.2
 Distribution: Aminet
 
@@ -12,25 +12,29 @@ the Team's 68k template JIT. Pages are fetched with HTTP/2 and https
 (OpenTLS), pictures are decoded by the system's datatypes, and pages seen
 before load from a disk cache.
 
-This is a test version (0.8 test, 22 October 2026). Things will still go
+This is a test version (0.8.2 test, 23 October 2026). Things will still go
 wrong; reports are welcome.
 
 Installing
 ----------
 Double-click Install-OpenBrowser (the Installer). It checks for AmigaOS 3.2
 and a 68040 or 68060 with its FPU, asks where the OpenBrowser drawer goes
-(about 195 MB; Work: rather than System:), and adds only what is missing or
+(about 90 MB; Work: rather than System:), and adds only what is missing or
 too old: opentls.library 1.2+, opencrypto.library 2.1+, json.library, and
-the certificates in S:OpenTLS. With webbrowser.library installed, the
-installed engine is kept as LIBS:WebBrowser/WebBrowserEngine.before-20261022
-and LIBS:WebBrowser/WebBrowserEngine becomes a small script that runs the
-new engine in the drawer. Nothing is deleted. Novice, Intermediate and
+the certificates in S:OpenTLS. The browser has one engine,
+Libs/WebBrowser/WebBrowserEngine in the drawer, which webbrowser.library
+starts; it stays there. An older LIBS:WebBrowser/WebBrowserEngine (the
+engine, or the small script 0.8.0 and 0.8.1 test put there) is kept as
+WebBrowserEngine.before-20261023b, and an older version's OpenBrowser.engine
+in the drawer as OpenBrowser.engine.before-20261023b. Nothing is deleted. Novice, Intermediate and
 Expert levels, pretend mode and the log all work.
 
 From a Shell instead: CD into the OpenBrowser drawer and type
 Execute Install.
 
-Reboot after installing, then double-click OpenBrowser.
+Reboot after installing, then double-click OpenBrowser. It also runs from
+the drawer as unpacked, before installing, when json.library, OpenTLS and
+the certificates are already on the Amiga.
 
 Requirements
 ------------
@@ -41,11 +45,13 @@ Requirements
 
 Undo
 ----
-Delete the OpenBrowser drawer. If webbrowser.library was installed, delete
-the small script LIBS:WebBrowser/WebBrowserEngine and rename
-WebBrowserEngine.before-20261022 back to WebBrowserEngine. Libraries kept as
-*.before-20261022 in LIBS: can be renamed back the same way. The Installer's
-log, Install-OpenBrowser.log in the drawer, lists everything it did.
+Delete the OpenBrowser drawer (or, if it was installed over an older one,
+rename the *.before-20261023b files in it back). Rename
+LIBS:WebBrowser/WebBrowserEngine.before-20261023b, if there is one, back to
+WebBrowserEngine. Libraries kept as *.before-20261023b in LIBS: can be
+renamed back the same way. The Installer's
+log in the drawer (Install-OpenBrowser.log, or install_log_file when the
+Installer is started from a Shell without LOGFILE), lists everything it did.
 
 Licences: OpenBrowser's own parts are MIT, Copyright (c) 2026 AmigaChrome
 Team. WebKit is LGPL-2/BSD and ICU is under the Unicode licence; see

@@ -11,8 +11,13 @@
 #                ICU, the OpenAmiga libraries and OpenTLS, the build options.
 #   the browser  OpenBrowser's own code (src/webcore): the page layer library
 #                OBCore and the programs
-#                  OpenBrowser   the launcher: a title window, then it loads
-#                                and runs OpenBrowser.engine, the browser
+#                  WebBrowserEngine  the browser: the one engine behind
+#                                webbrowser.library (src/webbrowser), with
+#                                OpenBrowser's window
+#                  OpenBrowser   the launcher: a title window, then it asks
+#                                webbrowser.library for a browser window
+#                  OpenBrowser.engine  the same window as a program of its
+#                                own (build-window-engine; not packaged)
 #                  obcore-view   the page layer without a window (tests)
 #                  obcore-dump   a local page's render tree, and a PNG of it
 #                A change here compiles the changed files and relinks; it
@@ -94,6 +99,14 @@
 #                   tables are linked in. A CMake option of src/webcore, so
 #                   an existing folder takes "file" at its next configure.
 #                   test-browser stages the file in Unicode/.  (default file)
+#                   "library": ICU's code and data are unicode.library's
+#                   (PLAN step 7); needs OB_ICU_DIR. Given here, it is
+#                   passed to CMake at the next configure-engine with the
+#                   matching ICU libraries, so an existing folder switches
+#                   either way with a relink.
+#   OB_ICU_DIR      with OB_ICU_DATA=library: the ICU folder
+#                   scripts/build-unicode-library.sh makes (ICU's headers,
+#                   and libraries that send each call to unicode.library).
 #   OB_CCACHE       the ccache program, or "none"  (default: ccache on PATH)
 #   OB_CCACHE_DIR   ccache's folder for this build
 #                   (default ~/.cache/ccache-openbrowser)
@@ -117,14 +130,19 @@
 #                        set the compiler cache (which recompiles nothing)
 #   build-bindings       generate WebCore's derived sources, one job at a time
 #   build-engine         build the engine, if its fingerprint has changed
-#   build-browser        build OBCore and OpenBrowser only
+#   build-browser        build OBCore, WebBrowserEngine and the OpenBrowser
+#                        launcher only
+#   build-window-engine  build OpenBrowser.engine, the browser window as a
+#                        program of its own, without webbrowser.library (for
+#                        tests that run it directly; the package does not
+#                        carry it)
 #   build-tests          build obcore-view and obcore-dump only
 #   fold [PROGRAM...]    fold and link again the programs ninja has linked
 #                        since they were last folded (OpenBrowser.engine,
 #                        obcore-view, obcore-dump, WebBrowserEngine; or the
-#                        ones named). build-browser and build-tests fold
-#                        their programs when OB_FOLD is 1; run this after
-#                        "ninja WebBrowserEngine"
+#                        ones named). build-browser, build-window-engine
+#                        and build-tests fold their programs when OB_FOLD
+#                        is 1
 #   test-browser         stage the programs, test pages and settings in
 #                        OB_TEST_DIR, with an AmigaDOS script that runs them
 #   clean-browser        remove the browser's objects and programs
@@ -233,7 +251,7 @@ engine_inputs() {
     echo "compiler $("$gcc" --version | head -n 1) $(sha256 < "$("$gcc" -print-prog-name=cc1plus)")"
     echo "binutils $("$GCC16/prefix/bin/m68k-amigaos-as" --version | head -n 1)"
     echo "toolchain-file $(sha256 < "$ROOT/toolchain/amigaos3-gcc16.cmake")"
-    echo "icu-headers $(tree_hash "$OAB_DEPS/icu78-m68k-amigaos/include")"
+    echo "icu-headers $(tree_hash "${OB_ICU_DIR:-$OAB_DEPS/icu78-m68k-amigaos}/include")"
     echo "openamiga-headers $(tree_hash "$OAB_DEPS/m68k-amigaos/include")"
     # opentls.library's API, as curl's OpenTLS backend was built against it
     # (curl's own headers are in openamiga-headers).
@@ -364,6 +382,23 @@ configure_engine() {
            set -- "$@" -DCMAKE_PROJECT_WebKit_INCLUDE="$ROOT/scripts/cmake/ob-pcrel.cmake" ;;
         *) echo "OB_PCREL must be 0 or 1" >&2; exit 2 ;;
     esac
+    # OB_ICU_DATA given: which ICU libraries the programs link, set in the
+    # cache too, so an existing folder switches with a relink (the headers
+    # are the same ICU 78.3 in both folders).
+    if [ -n "${OB_ICU_DATA:-}" ]; then
+        icu_dir="$OAB_DEPS/icu78-m68k-amigaos"
+        if [ "$OB_ICU_DATA" = library ]; then
+            [ -f "${OB_ICU_DIR:-}/include/ul_client.h" ] || die "OB_ICU_DATA=library needs OB_ICU_DIR (scripts/build-unicode-library.sh)"
+            export OB_ICU_DIR
+            icu_dir=$OB_ICU_DIR
+            set -- "$@" -DOB_UNICODE_DIR="$OB_ICU_DIR"
+        fi
+        set -- "$@" -DOB_ICU_DATA="$OB_ICU_DATA" \
+            -DICU_UC_LIBRARY_RELEASE="$icu_dir/lib/libicuuc.a" \
+            -DICU_I18N_LIBRARY_RELEASE="$icu_dir/lib/libicui18n.a" \
+            -DICU_DATA_LIBRARY_RELEASE="$icu_dir/lib/libicudata.a" \
+            -DCMAKE_CXX_STANDARD_LIBRARIES="$icu_dir/lib/libicudata.a -lpthread -latomic -lstdc++ -L$GCC16/compat -los32compat"
+    fi
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "$(generator)" "$@" \
       -DPORT=Amiga \
       -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain/amigaos3-gcc16.cmake" \
@@ -610,9 +645,18 @@ fold_programs() {
 }
 
 build_browser() {
-    browser_build browser OBCore OpenBrowser OpenBrowserLauncher
+    browser_build browser OBCore WebBrowserEngine OpenBrowserLauncher
+    if fold_wanted; then fold_programs WebBrowserEngine; fi
+    ls -l "$BUILD/bin/OpenBrowser" "$BUILD/bin/WebBrowserEngine"
+}
+
+# OpenBrowser.engine: the same browser window as a program of its own, which
+# runs without webbrowser.library. Not in the package (WebBrowserEngine is
+# the one engine there); kept for tests that run the window directly.
+build_window_engine() {
+    browser_build window-engine OBCore OpenBrowser
     if fold_wanted; then fold_programs OpenBrowser.engine; fi
-    ls -l "$BUILD/bin/OpenBrowser" "$BUILD/bin/OpenBrowser.engine"
+    ls -l "$BUILD/bin/OpenBrowser.engine"
 }
 
 build_tests() {
@@ -653,9 +697,13 @@ test_browser() {
     strip="$GCC16/prefix/bin/m68k-amigaos-strip"
     mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/Fonts"
     cp "$@" "$OB_TEST_DIR/Fonts/"
-    for program in OpenBrowser OpenBrowser.engine obcore-view obcore-dump; do
+    for program in obcore-view obcore-dump; do
         "$strip" -o "$OB_TEST_DIR/$program" "$BUILD/bin/$program"
     done
+    # the window as a program of its own, when build-window-engine made it
+    if [ -f "$BUILD/bin/OpenBrowser.engine" ]; then
+        "$strip" -o "$OB_TEST_DIR/OpenBrowser.engine" "$BUILD/bin/OpenBrowser.engine"
+    fi
     cp "$ROOT"/tests/pages/*.html "$OB_TEST_DIR/pages/"
     cp "$ROOT/src/webcore/blocklist" "$OB_TEST_DIR/"
     if [ "$(sed -n 's/^OB_ICU_DATA:STRING=//p' "$BUILD/CMakeCache.txt")" != linked ]; then
@@ -685,9 +733,9 @@ test_browser() {
 
 clean_browser() {
     rm -rf "$BUILD"/OpenBrowser/CMakeFiles/OBCore.dir "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowser.dir \
-        "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowserLauncher.dir \
+        "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowserLauncher.dir "$BUILD"/OpenBrowser/CMakeFiles/WebBrowserEngine.dir \
         "$BUILD"/OpenBrowser/CMakeFiles/obcore-view.dir "$BUILD"/OpenBrowser/CMakeFiles/obcore-dump.dir
-    rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/OpenBrowser.engine \
+    rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/OpenBrowser.engine "$BUILD"/bin/WebBrowserEngine \
         "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump "$BUILD"/bin/*.plain.map
     rm -rf "$BUILD"/lib-folded
     echo "Removed the browser's objects and programs from $BUILD"
@@ -711,6 +759,7 @@ case "$MODE" in
     build-bindings) need_sources; build_bindings ;;
     build-engine) build_engine ;;
     build-browser) build_browser ;;
+    build-window-engine) build_window_engine ;;
     build-tests) build_tests ;;
     fold) shift; [ $# -gt 0 ] || set -- $FOLD_PROGRAMS; fold_programs "$@" ;;
     test-browser) test_browser ;;
