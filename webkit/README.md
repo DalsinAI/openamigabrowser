@@ -354,6 +354,11 @@ The patches, in order:
   openfont.library 1.4's `OF_GlyphColorBitmap`, which decodes them through
   the PNG datatype, so neither FreeType nor libpng is linked.
   `LIBS:openfont.library` 1.3 must be installed; 1.4 for emoji.
+- `0091-amiga-openfont-shape-lock.patch`: the complex text path holds
+  `OpenFontFace::lock()` only while it shapes, not while it asks cairo for
+  glyph extents. cairo takes its scaled font's lock and then renderGlyph
+  takes this one, so holding both the other way round could deadlock two
+  tasks drawing the same font.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
