@@ -25,6 +25,7 @@
 
 #include "jsl_os.h"
 #include "jsl_engine_amiga.h"
+#include "jsimage.h"
 #if OB_ICU_DATA_FILE
 #include "ob_icudata.h"
 #endif
@@ -72,6 +73,11 @@ int main(void)
     struct timerequest *timer;
     LONG idle = idleSeconds(), quiet = 0;
     int quit = 0;
+
+    /* Loaded by a jsimage client (the browser's engine) for its code: run
+     * the client, in this process, and nothing else */
+    if (jsimage_client)
+        return (int)jsimage_run_client();
 
     Forbid();
     if (FindPort((CONST_STRPTR)JAVASCRIPT_ENGINE_PORT)) {
