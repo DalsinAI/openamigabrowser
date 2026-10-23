@@ -18,7 +18,8 @@
 ;  - LIBS:json.library (the engine's JSON.parse needs it) and
 ;    S:OpenTLS/ca-bundle.pem when missing;
 ;  - LOCALE:Unicode/icudt78b.dat, as the Installer does: when missing, or
-;    one of another size, which is renamed icudt78b.dat.before-20261023b;
+;    one of another size, which is renamed icudt78b.dat.before-20261023b,
+;    and only when LOCALE: has more than 25,000,000 bytes free;
 ;  - the engine stays in this drawer (Libs/WebBrowser/WebBrowserEngine,
 ;    with its fonts, blocklist and Unicode data); the 76 MB
 ;    engine is not copied to System:. webbrowser.library (LIBS:, or this
@@ -137,15 +138,60 @@ If NOT EXISTS S:OpenTLS/ca-bundle.pem
 EndIf
 
 ; the Unicode data in LOCALE:Unicode/, for every program that reads it (the
-; engine reads it there first, then from Libs/WebBrowser/Unicode/); one of
-; another size is kept as icudt78b.dat.before-20261023b
-Set icunew `List Libs/WebBrowser/Unicode/icudt78b.dat LFORMAT "%L"`
+; engine reads it there first, then from Libs/WebBrowser/Unicode/), when
+; LOCALE: has more than 25,000,000 bytes free, as the Installer asks; one of
+; another size is kept as icudt78b.dat.before-20261023b. Without the room
+; nothing in LOCALE: is touched.
+; A command's output goes into a variable through a small .KEY script in T:
+; and a one-line script that runs it with that output as its arguments (no
+; backquotes: some Shells, such as Instance-32's, do not expand them).
+Echo ".KEY a,b,c,d,e,f,g,h/F" >T:ob-set-icunew
+Echo ".BRA {" >>T:ob-set-icunew
+Echo ".KET }" >>T:ob-set-icunew
+Copy T:ob-set-icunew T:ob-set-icuold QUIET
+Copy T:ob-set-icunew T:ob-set-icufree QUIET
+Echo "Set icunew {a}" >>T:ob-set-icunew
+Echo "Set icuold {a}" >>T:ob-set-icuold
+Echo ".KEY a,b/F" >T:ob-set-icudir
+Echo ".BRA {" >>T:ob-set-icudir
+Echo ".KET }" >>T:ob-set-icudir
+Echo "Set icudir *"{b}*"" >>T:ob-set-icudir
+Echo "Set icufree {d}" >>T:ob-set-icufree
+Set icunew 0
+Set icuold 0
+Set icufree 0
+Set icudir ""
+Echo "Execute T:ob-set-icunew " NOLINE >T:ob-icu-run
+List Libs/WebBrowser/Unicode/icudt78b.dat LFORMAT "%L" >>T:ob-icu-run
+Execute T:ob-icu-run
 If EXISTS LOCALE:Unicode/icudt78b.dat
-  Set icuold `List LOCALE:Unicode/icudt78b.dat LFORMAT "%L"`
-  If "$icuold" EQ "$icunew"
+  Echo "Execute T:ob-set-icuold " NOLINE >T:ob-icu-run
+  List LOCALE:Unicode/icudt78b.dat LFORMAT "%L" >>T:ob-icu-run
+  Execute T:ob-icu-run
+  If $icuold EQ $icunew
     Echo "LOCALE:Unicode/icudt78b.dat is there, kept"
     Skip icudone
   EndIf
+EndIf
+; LOCALE:'s free blocks. Info takes a volume or a path on one, not an
+; assign: Assign's list gives LOCALE:'s path (its first directory), and
+; Info's disk line (the one with the "%" of Full) its Free column. Info
+; counts blocks; at 512 bytes or more each, 48,829 free blocks are at least
+; 25,000,000 bytes (a disk with larger blocks may be skipped with less room
+; needed, never filled).
+Assign LIST >T:ob-icu-assign
+Echo "Execute T:ob-set-icudir " NOLINE >T:ob-icu-run
+Search T:ob-icu-assign "LOCALE #?" PATTERN NONUM >>T:ob-icu-run
+Execute T:ob-icu-run
+Info "$icudir" >T:ob-icu-info
+Echo "Execute T:ob-set-icufree " NOLINE >T:ob-icu-run
+Search T:ob-icu-info "%" NONUM >>T:ob-icu-run
+Execute T:ob-icu-run
+If NOT VAL $icufree GT 48828
+  Echo "Not copying the Unicode data to LOCALE:Unicode: LOCALE: ($icudir) has $icufree blocks free, not more than 25,000,000 bytes. The engine reads the drawer's copy, Libs/WebBrowser/Unicode/icudt78b.dat, instead."
+  Skip icudone
+EndIf
+If EXISTS LOCALE:Unicode/icudt78b.dat
   If EXISTS LOCALE:Unicode/icudt78b.dat.before-20261023b
     Echo "LOCALE:Unicode has both icudt78b.dat and icudt78b.dat.before-20261023b: move one of them away and run Install again."
     Quit 20
@@ -169,6 +215,8 @@ EndIf
 Lab icudone
 UnSet icunew
 UnSet icuold
+UnSet icufree
+UnSet icudir
 
 If EXISTS LIBS:WebBrowser/WebBrowserEngine
   If EXISTS LIBS:WebBrowser/WebBrowserEngine.before-20261023b
