@@ -137,6 +137,15 @@
 #                        tests that run it directly; the package does not
 #                        carry it)
 #   build-tests          build obcore-view and obcore-dump only
+#   jsimage [PROGRAM...] build the programs (default WebBrowserEngine) as
+#                        jsimage clients: they take JavaScriptCore, WTF,
+#                        bmalloc and the run-time they share from
+#                        JavaScriptEngine at load time instead of linking
+#                        their own (scripts/jsimage.py, src/jslib/jsimage.h).
+#                        Writes BUILD/jsimage/JavaScriptEngine (the image)
+#                        and BUILD/jsimage/PROGRAM/PROGRAM (each client),
+#                        with stripped copies and sizes in the report;
+#                        bin/ keeps the programs as they link today
 #   build-javascript     build JavaScriptEngine, the program behind
 #                        javascript.library (src/jslib), on this folder's
 #                        JavaScriptCore, and fold it like the browser
@@ -673,6 +682,115 @@ build_javascript() {
     ls -l "$BUILD/bin/JavaScriptEngine" "$BUILD/bin/JavaScriptEngine.stripped"
 }
 
+# program_map NAME: the -Map file NAME's link writes (named after its
+# CMake target: bin/OpenBrowser.map for bin/OpenBrowser.engine)
+program_map() {
+    pm_cmd=$(cd "$BUILD" && ninja -t commands -s "bin/$1") || die "no link command for bin/$1"
+    pm_map=$(printf '%s\n' "$pm_cmd" | sed -n 's/.*-Wl,-Map=\([^ ]*\).*/\1/p')
+    [ -n "$pm_map" ] || die "the link command of $1 writes no -Map"
+    echo "$BUILD/bin/$(basename "$pm_map")"
+}
+
+# jsimage_program NAME: link one client against the image (jsimage.py):
+# its archives folded with every copy of an imported name made local,
+# without JavaScriptCore, WTF and bmalloc, twice (the image at
+# __jsimage_base, and 0x10000000 further), then the fixup table added.
+jsimage_program() {
+    j_prog=$1
+    j_out="$BUILD/jsimage/$j_prog"
+    j_map=$(program_map "$j_prog")
+    j_plain="${j_map%.map}.plain.map"
+    [ -f "$j_plain" ] || j_plain=$j_map
+    j_log="$BUILD/logs/jsimage-$j_prog-$(date -u +%Y%m%dT%H%M%SZ).log"
+    j_start=$(date +%s)
+    rm -rf "$j_out"
+    mkdir -p "$j_out/lib" "$j_out/1" "$j_out/2"
+    $JSIMAGE imports "$BUILD/jsimage/exports" "$BUILD/bin/$j_prog" "$j_map" "$j_out/imports" >> "$j_log" 2>&1 \
+        || die "jsimage: no imports for $j_prog (log: $j_log)"
+    $JSIMAGE script "$j_out/imports" 0 "$j_out/1/jsimage-imports.ld" >> "$j_log" 2>&1
+    $JSIMAGE script "$j_out/imports" 0x10000000 "$j_out/2/jsimage-imports.ld" >> "$j_log" 2>&1
+    python3 "$HERE/hunkfold.py" winners "$j_plain" "$j_out/winners.txt" >> "$j_log" 2>&1 \
+        || die "jsimage: no winners from $j_plain (log: $j_log)"
+    for j_lib in "$BUILD"/lib/lib*.a; do
+        j_name=$(basename "$j_lib")
+        case "$j_name" in libJavaScriptCore.a|libWTF.a|libbmalloc.a) continue ;; esac
+        echo "== $j_name" >> "$j_log"
+        python3 "$HERE/hunkfold.py" fold "$j_lib" "$j_out/lib/$j_name" --name "lib/$j_name" \
+            --winners "$j_out/winners.txt" --imports "$j_out/imports" >> "$j_log" 2>&1 \
+            || die "jsimage: folding $j_name failed (log: $j_log)"
+    done
+    j_client=$(find "$BUILD/OpenBrowser/CMakeFiles/JSImageClient.dir" -name 'jsimage_client.c.obj' -o -name 'jsimage_client.c.o' | head -1)
+    [ -f "$j_client" ] || die "jsimage: JSImageClient was not built"
+    j_cmd=$(cd "$BUILD" && ninja -t commands -s "bin/$j_prog") || die "jsimage: ninja has no link command for bin/$j_prog"
+    # JavaScriptCore, WTF and bmalloc out; the other archives folded; the
+    # jsimage link script and the client's first code in
+    j_cmd=$(printf '%s\n' "$j_cmd" | sed \
+        -e "s#[^ ]*lib\(JavaScriptCore\|WTF\|bmalloc\)\.a##g" \
+        -e "s# lib/\(lib[^ /]*\.a\)# $j_out/lib/\1#g" \
+        -e "s#$BUILD/lib/\(lib[^ /]*\.a\)#$j_out/lib/\1#g" \
+        -e "s#-Wl,-T,[^ ]*amigaos3-onehunk\.ld#-Wl,-T,$ROOT/toolchain/amigaos3-onehunk-jsimage.ld#" \
+        -e "s#-Wl,-Map=[^ ]*#-Wl,-Map=$j_out/link1.map#" \
+        -e "s# -o bin/$j_prog # $j_client -L$j_out/1 -o $j_out/link1 #")
+    case "$j_cmd" in
+        *amigaos3-onehunk-jsimage.ld*"-o $j_out/link1 "*) ;;
+        *) die "jsimage: cannot rewrite the link command of $j_prog (it must link one hunk, OB_PCREL=1)" ;;
+    esac
+    echo "== link 1" >> "$j_log"
+    printf '%s\n' "$j_cmd" >> "$j_log"
+    (cd "$BUILD" && sh -c "$j_cmd") >> "$j_log" 2>&1 || die "jsimage: linking $j_prog failed (log: $j_log)"
+    j_cmd=$(printf '%s\n' "$j_cmd" | sed -e "s#-L$j_out/1 -o $j_out/link1 #-L$j_out/2 -o $j_out/link2 #" \
+        -e "s#-Wl,-Map=[^ ]*#-Wl,-Map=$j_out/link2.map#")
+    echo "== link 2" >> "$j_log"
+    (cd "$BUILD" && sh -c "$j_cmd") >> "$j_log" 2>&1 || die "jsimage: the second link of $j_prog failed (log: $j_log)"
+    $JSIMAGE fixups "$j_out/link1" "$j_out/link2" "$BUILD/jsimage/exports" "$j_out/$j_prog" >> "$j_log" 2>&1 \
+        || die "jsimage: no fixups for $j_prog (log: $j_log)"
+    rm -f "$j_out/link2" "$j_out/link2.map"
+    "$GCC16/prefix/bin/m68k-amigaos-strip" -o "$j_out/$j_prog.stripped" "$j_out/$j_prog"
+    "$GCC16/prefix/bin/m68k-amigaos-strip" -o "$j_out/plain.stripped" "$BUILD/bin/$j_prog"
+    j_line="$(date -u +%Y-%m-%dT%H:%M:%SZ) jsimage $j_prog: stripped $(file_size "$j_out/plain.stripped") -> $(file_size "$j_out/$j_prog.stripped") bytes, $(tail -1 "$j_log"), $(( $(date +%s) - j_start )) s"
+    rm -f "$j_out/plain.stripped"
+    echo "$j_line" >> "$BUILD/build-report.txt"
+    echo "$j_line"
+    echo "  log: $j_log"
+}
+
+build_jsimage() {
+    [ $# -gt 0 ] || set -- WebBrowserEngine
+    [ "$(generator)" = Ninja ] || die "jsimage needs a build folder made with Ninja: $BUILD"
+    JSIMAGE="python3 $HERE/jsimage.py --nm=$GCC16/prefix/bin/m68k-amigaos-nm"
+    mkdir -p "$BUILD/jsimage" "$BUILD/logs"
+    # 1. the clients as they link today (folded), and the client's first code
+    targets=JSImageClient
+    for prog; do
+        case "$prog" in OpenBrowser.engine) targets="$targets OBCore OpenBrowser" ;; *) targets="$targets $prog" ;; esac
+    done
+    browser_build jsimage-clients $targets
+    if fold_wanted; then fold_programs "$@"; fi
+    # 2. the image keeps all of JavaScriptCore, WTF and bmalloc the clients linked
+    pairs=
+    for prog; do pairs="$pairs $BUILD/bin/$prog $(program_map "$prog")"; done
+    $JSIMAGE needs "$BUILD/jsimage/needs.ld.new" $pairs
+    if ! cmp -s "$BUILD/jsimage/needs.ld.new" "$BUILD/jsimage/needs.ld"; then
+        mv "$BUILD/jsimage/needs.ld.new" "$BUILD/jsimage/needs.ld"
+    else
+        rm -f "$BUILD/jsimage/needs.ld.new"
+    fi
+    # 3. the image: JavaScriptEngine, folded, its exports, stamped
+    browser_build jsimage-image JavaScriptEngine
+    if fold_wanted; then fold_programs JavaScriptEngine; fi
+    $JSIMAGE exports "$BUILD/bin/JavaScriptEngine" "$(program_map JavaScriptEngine)" "$BUILD/jsimage/exports"
+    cp "$BUILD/bin/JavaScriptEngine" "$BUILD/jsimage/JavaScriptEngine"
+    $JSIMAGE stamp "$BUILD/jsimage/JavaScriptEngine" "$BUILD/jsimage/exports"
+    "$GCC16/prefix/bin/m68k-amigaos-strip" -o "$BUILD/jsimage/JavaScriptEngine.stripped" "$BUILD/jsimage/JavaScriptEngine"
+    line="$(date -u +%Y-%m-%dT%H:%M:%SZ) jsimage image: JavaScriptEngine stripped $(file_size "$BUILD/jsimage/JavaScriptEngine.stripped") bytes, image $($JSIMAGE id "$BUILD/jsimage/exports")"
+    echo "$line" >> "$BUILD/build-report.txt"
+    echo "$line"
+    # 4. each client against it
+    for prog; do
+        jsimage_program "$prog"
+    done
+}
+
 build_tests() {
     browser_build tests OBCore obcore-view obcore-dump
     if fold_wanted; then fold_programs obcore-view obcore-dump; fi
@@ -778,6 +896,7 @@ case "$MODE" in
     build-window-engine) build_window_engine ;;
     build-tests) build_tests ;;
     build-javascript) build_javascript ;;
+    jsimage) shift; build_jsimage "$@" ;;
     fold) shift; [ $# -gt 0 ] || set -- $FOLD_PROGRAMS; fold_programs "$@" ;;
     test-browser) test_browser ;;
     clean-browser) clean_browser ;;

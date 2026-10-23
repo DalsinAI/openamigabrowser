@@ -245,6 +245,7 @@ set(JavaScriptEngine_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_engine.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_os_exec.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsimage_host.c
 )
 if (OB_ICU_DATA STREQUAL "file")
     list(APPEND JavaScriptEngine_SOURCES ob_icudata.c ob_icustub.c)
@@ -268,6 +269,15 @@ if (OB_ICU_DATA STREQUAL "library")
 endif ()
 target_link_directories(JavaScriptEngine PRIVATE ${AC_WEBKIT_DEPS}/lib)
 target_link_options(JavaScriptEngine PRIVATE -Wl,-Map=${CMAKE_BINARY_DIR}/bin/JavaScriptEngine.map)
+# As a jsimage (scripts/jsimage.py, "build-webcore.sh jsimage"), the engine
+# keeps every name of JavaScriptCore, WTF and bmalloc that its clients
+# linked: jsimage/needs.ld, an EXTERN list (empty until then).
+set(OB_JSIMAGE_NEEDS ${CMAKE_BINARY_DIR}/jsimage/needs.ld)
+if (NOT EXISTS ${OB_JSIMAGE_NEEDS})
+    file(WRITE ${OB_JSIMAGE_NEEDS} "/* jsimage: no clients yet */\n")
+endif ()
+target_link_options(JavaScriptEngine PRIVATE ${OB_JSIMAGE_NEEDS})
+set_property(TARGET JavaScriptEngine APPEND PROPERTY LINK_DEPENDS ${OB_JSIMAGE_NEEDS})
 target_link_libraries(JavaScriptEngine PRIVATE
     -Wl,--start-group
     JavaScriptCore WTF bmalloc
@@ -275,6 +285,11 @@ target_link_libraries(JavaScriptEngine PRIVATE
     amiga pthread atomic stdc++ m
     -Wl,--end-group
 )
+
+# A jsimage client's first code (src/jslib/jsimage_client.c): it runs
+# before the C library is set up, so it is built without it.
+add_library(JSImageClient OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsimage_client.c)
+target_compile_options(JSImageClient PRIVATE -ffreestanding -fno-builtin)
 
 # OpenBrowser: the small program the icon starts. It shows a title window at
 # once and asks webbrowser.library (LIBS:, or the drawer's Libs before
