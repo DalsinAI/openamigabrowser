@@ -342,6 +342,20 @@ port. Once the window is open, the status line names each file being
 fetched, since one can take seconds (a secure connection to a new site,
 about ten).
 
+**One engine (0.8.2 test, 23 October 2026).** The package used to carry two
+76 MB engines with the same window: `OpenBrowser.engine`, which the launcher
+loaded itself, and `Libs/WebBrowser/WebBrowserEngine`, which
+webbrowser.library starts (`ob_browser_engine.c` is `ob_browser.c` built
+with `OB_BROWSER_IN_ENGINE`), with the fonts, fontconfig, blocklist and ICU
+data twice. The launcher now only asks webbrowser.library for the window
+(`WB_OpenBrowser`), from `LIBS:` or, before Install, from the drawer's
+`PROGDIR:Libs/`, and the library starts `LIBS:WebBrowser/WebBrowserEngine`
+or else the drawer's `PROGDIR:Libs/WebBrowser/WebBrowserEngine`. The
+engine's files go once, in `Libs/WebBrowser/`, its `PROGDIR:`. The title
+window is unchanged; the engine reports to it as before.
+`OpenBrowser.engine` is still a target (`build-webcore.sh
+build-window-engine`) for tests that run the window directly.
+
 ## Experiments, 5 October 2026
 
 **Drawing commands instead of pixels.** `obcore-view -dl` paints a page
