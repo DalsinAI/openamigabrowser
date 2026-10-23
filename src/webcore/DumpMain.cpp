@@ -1,7 +1,8 @@
 /*
  * obcore-dump: load a local HTML file into WebCore, print its render tree
  * (milestone 2a) and, given a file name, paint the page into an offscreen
- * bitmap saved as PNG (milestone 2b). The page has no network yet.
+ * bitmap saved as PNG (milestone 2b) through openpng.datatype. The page has
+ * no network yet.
  *
  *   obcore-dump <file.html> [width] [page.png]
  *
@@ -40,6 +41,10 @@
 extern "C" {
 #include "oam_stack.h"
 void ob_quiet_requesters(void);
+// WebCore's datatypes glue (platform/image-decoders/amiga/DatatypesDecode.h)
+int obdt_encode_png(const unsigned char* pixels, unsigned width, unsigned height, unsigned stride,
+    unsigned flags, unsigned char** data, unsigned long* size);
+void obdt_free_encoded(unsigned char* data);
 }
 #if OB_ICU_DATA_FILE
 #include "ob_icudata.h"
@@ -132,9 +137,19 @@ static int dumpMain(int argc, char** argv)
             view->paintContents(context, IntRect(0, 0, width, height));
         }
         cairo_surface_flush(surface);
-        cairo_status_t status = cairo_surface_write_to_png(surface, argv[3]);
+        unsigned char* png = nullptr;
+        unsigned long pngSize = 0;
+        const char* status = "no openpng.datatype 47.4";
+        if (obdt_encode_png(cairo_image_surface_get_data(surface), width, height, cairo_image_surface_get_stride(surface),
+            1 /* premultiplied */, &png, &pngSize)) {
+            FILE* file = std::fopen(argv[3], "wb");
+            status = file && std::fwrite(png, 1, pngSize, file) == pngSize ? "success" : "write error";
+            if (file)
+                std::fclose(file);
+            obdt_free_encoded(png);
+        }
         std::printf("OBCORE_PAINTED %dx%d (page %dx%d) png=%s\n", width, height,
-            contentsSize.width(), contentsSize.height(), cairo_status_to_string(status));
+            contentsSize.width(), contentsSize.height(), status);
         cairo_surface_destroy(surface);
     }
 

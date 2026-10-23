@@ -1,0 +1,223 @@
+From af6de2dcac291ce2d7610ef541c590e1f4f67d7e Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 04:44:04 +0000
+Subject: [PATCH] WebCore: PNG out through openpng.datatype, not libpng
+
+canvas toDataURL and toBlob (platformEncodeData) hand cairo's ARGB32
+pixels, premultiplied (RGB24 as opaque), to openpng.datatype 47.4's
+OIM_ENCODEPNG through obdt_encode_png() in DatatypesDecode.c, which makes
+a DTST_RAM object of the datatype, encodes, and gives the file back in
+memory. The datatype's deflate is z.library's. Without openpng.datatype
+47.4 the engine says so once and the picture is not encoded.
+
+WebCore no longer finds or links libpng; reading pictures was already the
+datatypes' job.
+---
+ Source/WebCore/PlatformAmiga.cmake            |  6 +-
+ .../graphics/cairo/ImageUtilitiesCairo.cpp    | 32 ++++++-
+ .../image-decoders/amiga/DatatypesDecode.c    | 92 +++++++++++++++++++
+ .../image-decoders/amiga/DatatypesDecode.h    | 12 +++
+ Source/cmake/OptionsAmiga.cmake               |  1 -
+ 5 files changed, 138 insertions(+), 5 deletions(-)
+
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index 08474367213..7a8b83a94ea 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -148,10 +148,10 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+     rendering/adwaita/RenderThemeAdwaita.h
+ )
+ 
+-# libpng only writes PNG (Cairo's encoder, for canvas.toDataURL); reading
+-# pictures is the datatypes' job. libamiga has DoMethod().
++# PNG is written by openpng.datatype (ImageUtilitiesCairo.cpp, canvas
++# toDataURL and toBlob) and read by the datatypes too: no libpng. libamiga
++# has DoMethod().
+ list(APPEND WebCore_LIBRARIES
+-    PNG::PNG
+     amiga
+ )
+ 
+diff --git a/Source/WebCore/platform/graphics/cairo/ImageUtilitiesCairo.cpp b/Source/WebCore/platform/graphics/cairo/ImageUtilitiesCairo.cpp
+index e6ad4980f9b..849afd2fc31 100644
+--- a/Source/WebCore/platform/graphics/cairo/ImageUtilitiesCairo.cpp
++++ b/Source/WebCore/platform/graphics/cairo/ImageUtilitiesCairo.cpp
+@@ -47,9 +47,39 @@
+ #include <wtf/glib/GUniquePtr.h>
+ #endif
+ 
++#if PLATFORM(AMIGA)
++#include "DatatypesDecode.h"
++#endif
++
+ namespace WebCore {
+ 
+-#if !PLATFORM(GTK)
++#if PLATFORM(AMIGA)
++
++// PNG through openpng.datatype (the system's datatypes), not cairo's
++// libpng writer. Cairo's ARGB32 is premultiplied A, R, G, B in memory on
++// the 68k, which is what the datatype takes.
++Vector<uint8_t> platformEncodeData(const NativeImage& nativeImage, const String& mimeType, std::optional<double>)
++{
++    ASSERT_UNUSED(mimeType, mimeType == "image/png"_s); // Only PNG output is supported for now.
++    auto platformImage = nativeImage.platformImage();
++    if (!platformImage || cairo_surface_get_type(platformImage.get()) != CAIRO_SURFACE_TYPE_IMAGE)
++        return { };
++    cairo_surface_t* surface = platformImage.get();
++    cairo_surface_flush(surface);
++    auto format = cairo_image_surface_get_format(surface);
++    if (format != CAIRO_FORMAT_ARGB32 && format != CAIRO_FORMAT_RGB24)
++        return { };
++    unsigned char* data = nullptr;
++    unsigned long size = 0;
++    if (!obdt_encode_png(cairo_image_surface_get_data(surface), cairo_image_surface_get_width(surface), cairo_image_surface_get_height(surface),
++        cairo_image_surface_get_stride(surface), format == CAIRO_FORMAT_ARGB32 ? OBDT_PNG_PREMULTIPLIED : OBDT_PNG_OPAQUE, &data, &size))
++        return { };
++    Vector<uint8_t> output(std::span<const uint8_t> { data, size });
++    obdt_free_encoded(data);
++    return output;
++}
++
++#elif !PLATFORM(GTK)
+ static cairo_status_t writeFunction(void* output, const unsigned char* data, unsigned length)
+ {
+     if (!reinterpret_cast<Vector<uint8_t>*>(output)->tryAppend(std::span { data, length }))
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+index 8041f4d3be4..9d813004315 100644
+--- a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+@@ -229,3 +229,95 @@ void obdt_free(OBDTImage* image)
+     free(image->pixels);
+     image->pixels = NULL;
+ }
++
++/* openpng.datatype's own method (openamigaimage's
++ * include/datatypes/openimage.h, OIM_ENCODEPNG), kept here so the build
++ * needs no header from that repository. */
++#define OBDT_OIM_ENCODEPNG (TAG_USER + 0x0DA15901)
++#define OBDT_OIEF_PREMULTIPLIED 1UL
++#define OBDT_OIEF_OPAQUE 2UL
++
++struct obdtEncodePNG {
++    ULONG MethodID;
++    struct GadgetInfo* oiep_GInfo;
++    const UBYTE* oiep_Pixels;
++    ULONG oiep_Width, oiep_Height;
++    ULONG oiep_Stride;
++    ULONG oiep_Flags;
++    LONG oiep_Level;
++    UBYTE* oiep_Data;
++    ULONG oiep_Size;
++    LONG oiep_Error;
++};
++
++/* openpng.datatype opened once, to check it is 47.4 or newer (the first
++ * that encodes); it stays open for the rest of the run. */
++static struct Library* s_pngClassBase;
++static pthread_once_t s_pngOnce = PTHREAD_ONCE_INIT;
++
++static void closePNGClass(void)
++{
++    if (s_pngClassBase) {
++        CloseLibrary(s_pngClassBase);
++        s_pngClassBase = NULL;
++    }
++}
++
++static void openPNGClass(void)
++{
++    s_pngClassBase = OpenLibrary((CONST_STRPTR)"datatypes/openpng.datatype", 47);
++    if (s_pngClassBase && s_pngClassBase->lib_Version == 47 && s_pngClassBase->lib_Revision < 4) {
++        CloseLibrary(s_pngClassBase);
++        s_pngClassBase = NULL;
++    }
++    if (s_pngClassBase)
++        atexit(closePNGClass);
++    else
++        fprintf(stderr, "OpenBrowser: no openpng.datatype 47.4 in SYS:Classes/DataTypes: pictures can't be saved as PNG\n");
++    resetFPCR();
++}
++
++int obdt_encode_png(const unsigned char* pixels, unsigned width, unsigned height, unsigned stride,
++    unsigned flags, unsigned char** data, unsigned long* size)
++{
++    struct obdtEncodePNG m;
++    Object* object;
++    int ok;
++
++    *data = NULL;
++    *size = 0;
++    if (!pixels || !width || !height)
++        return 0;
++    pthread_once(&s_openOnce, openDataTypes);
++    pthread_once(&s_pngOnce, openPNGClass);
++    if (!DataTypesBase || !s_pngClassBase)
++        return 0;
++    object = NewDTObject(NULL, DTA_SourceType, DTST_RAM, DTA_BaseName, (ULONG)"openpng", DTA_GroupID, GID_PICTURE, TAG_DONE);
++    if (!object) {
++        resetFPCR();
++        return 0;
++    }
++    memset(&m, 0, sizeof m);
++    m.MethodID = OBDT_OIM_ENCODEPNG;
++    m.oiep_Pixels = pixels;
++    m.oiep_Width = width;
++    m.oiep_Height = height;
++    m.oiep_Stride = stride;
++    m.oiep_Flags = ((flags & OBDT_PNG_PREMULTIPLIED) ? OBDT_OIEF_PREMULTIPLIED : 0)
++        | ((flags & OBDT_PNG_OPAQUE) ? OBDT_OIEF_OPAQUE : 0);
++    m.oiep_Level = -1;
++    ok = DoMethodA(object, (Msg)&m) && m.oiep_Data;
++    DisposeDTObject(object);
++    resetFPCR();
++    if (!ok)
++        return 0;
++    *data = m.oiep_Data;
++    *size = m.oiep_Size;
++    return 1;
++}
++
++void obdt_free_encoded(unsigned char* data)
++{
++    if (data)
++        FreeVec(data);
++}
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
+index 007cef22584..6ae59f87723 100644
+--- a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.h
+@@ -57,6 +57,18 @@ typedef int (*OBDTServiceDecoder)(const void* data, unsigned long size, OBDTImag
+ void obdt_set_service_decoder(OBDTServiceDecoder);
+ int obdt_has_service_decoder(void);
+ 
++/* PNG out through openpng.datatype 47.4 or newer (canvas toDataURL and
++ * toBlob): width * height pixels of 4 bytes, alpha, red, green, blue, rows
++ * stride bytes apart; flags OBDT_PNG_PREMULTIPLIED when the colour is
++ * premultiplied, OBDT_PNG_OPAQUE to ignore alpha (an RGB file). 1 and the
++ * file in *data (free it with obdt_free_encoded()) and *size, or 0 when
++ * there is no such datatype or it failed. */
++#define OBDT_PNG_PREMULTIPLIED 1
++#define OBDT_PNG_OPAQUE 2
++int obdt_encode_png(const unsigned char* pixels, unsigned width, unsigned height, unsigned stride,
++    unsigned flags, unsigned char** data, unsigned long* size);
++void obdt_free_encoded(unsigned char* data);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
+index c0d1788a170..66562bed729 100644
+--- a/Source/cmake/OptionsAmiga.cmake
++++ b/Source/cmake/OptionsAmiga.cmake
+@@ -35,7 +35,6 @@ if (ENABLE_WEBCORE)
+     find_package(Freetype 2.9.0 REQUIRED)
+     find_package(HarfBuzz 2.7.4 REQUIRED COMPONENTS ICU)
+     find_package(OXP 0.1 REQUIRED)
+-    find_package(PNG REQUIRED)
+     find_package(SQLite3 3.23.1 REQUIRED)
+     if (NOT TARGET SQLite3::SQLite3) # CMake < 4.3
+         add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
+-- 
+2.43.0
+

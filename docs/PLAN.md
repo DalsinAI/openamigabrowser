@@ -187,6 +187,11 @@ is done when its "done when" holds on the lab instance.
    - glyphs: OpenGPU MASK (add a batched glyph run and a glyph cache);
    - shadows: openamigagfx `oc_shadow()`.
 
+   Done so far: PNG encoding through openpng.datatype 47.4 (patch 0074,
+   openamigaimage #27); OpenGPU 0.18's stream v1.6 (openamigartg #109) has
+   anti-aliased path fill (non-zero and even-odd), strokes, gradients,
+   image patterns, blur and the blend modes, on its CPU core.
+
    Still to write: anti-aliased strokes, even-odd fill, linear, radial and
    conic gradients, blur, the PDF/HSL blend modes, OpenGfx bitmaps deeper
    than 8 planes, PNG encoding through the PNG datatype (canvas

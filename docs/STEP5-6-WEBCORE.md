@@ -316,7 +316,7 @@ page's painting is still cairo's, beside `OBVIEW_BENCH`'s `paint_ms`, and
 the pictures are compared with cairo's pixel for pixel as in the display-list
 experiment (`WEBCORE_PORT.md`).
 
-1. **PNG through the PNG datatype.** `platformEncodeData()` and
+1. **PNG through the PNG datatype** (patch 0074). `platformEncodeData()` and
    `DumpMain.cpp` write PNG through datatypes.library. Map: `libpng.a` and
    cairo's PNG object, as long as nothing else in cairo pulls that object
    in (to be checked on the map).

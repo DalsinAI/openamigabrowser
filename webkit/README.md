@@ -334,6 +334,11 @@ The patches, in order:
   (the card); the native transport sends `Accept-Encoding: identity` until
   the datatypes stream decodes. Needs openamigaservice with the
   asynchronous calls (protocol 2); without them the engine has curl only.
+- `0074-amiga-png-out-through-datatype.patch`: canvas `toDataURL` and
+  `toBlob` write PNG through openpng.datatype 47.4's `OIM_ENCODEPNG`
+  (openamigaimage), not cairo's libpng writer; WebCore no longer finds or
+  links libpng. Without openpng.datatype 47.4 the picture is not encoded.
+  `obcore-dump` writes its page PNG the same way.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
