@@ -1,0 +1,1439 @@
+From 90785df0d7a2d7a06bd0c94aa3f3aff045bec247 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 05:06:16 +0000
+Subject: [PATCH] WebCore: loads through openweb.fetch beside curl on the Amiga
+
+ResourceHandleAmiga.cpp gets a second backend, picked at run time with
+the Shell variable OB_NET: curl (the default) or openweb. The cookies,
+redirects, the HTTP cache hook, file: URLs and synchronous loads stay
+where they were and serve both; the curl delegate and the new backend
+reach the handle through the same calls (amigaDidReceiveResponse with a
+plain request, header lines and response, amigaDidReceiveData,
+amigaDidFinish, amigaDidFail, amigaCancelRequest).
+
+WebFetchAmiga.cpp is the request on the wire: one network thread opens
+openweb.fetch (the card, a Cradle, or this Amiga's own TCP/IP and
+OpenTLS) and moves every load on with asynchronous calls
+(wf_async_start, wf_wait), waking on the network or on a signal from
+the main thread. The request text comes from the ResourceRequest
+(method, URL without its fragment, headers with the cookie jar's
+Cookie, Accept-Language as curl added it); a body is read from FormData
+(bytes, files, resolved blobs) and sent in 64 KB parts through wf_send,
+CurlFormDataStream's job; the head becomes a ResourceResponse through
+AmigaResponseHead; body parts go to the client as they come, after it
+has taken the response. Credentials from the URL go in the request's
+URL, for the transport's Basic or Digest answer to a 401, and only to
+the URL's own server. Proxies are the transport's (its environment
+variables). Errors are AmigaNetworkErrorDomain's. The card's host
+decodes compressed bodies (WF_DECODE); the native transport has no
+decoder until the datatypes' stream classes are there, so it asks for
+"Accept-Encoding: identity".
+
+OpenWebFetchAmiga.c holds the calls to openamigaservice's client in
+plain C. It finds the client's headers when the browser's build gives
+them; without them it builds empty, OB_NET=openweb is ignored and curl
+loads.
+---
+ Source/WebCore/PlatformAmiga.cmake            |   6 +
+ .../WebCore/platform/network/ResourceHandle.h |  12 +-
+ .../platform/network/ResourceHandleInternal.h |   3 +
+ .../network/amiga/OpenWebFetchAmiga.c         | 366 +++++++++++++
+ .../network/amiga/OpenWebFetchAmiga.h         |  78 +++
+ .../network/amiga/ResourceHandleAmiga.cpp     | 120 +++--
+ .../platform/network/amiga/WebFetchAmiga.cpp  | 501 ++++++++++++++++++
+ .../platform/network/amiga/WebFetchAmiga.h    |  89 ++++
+ 8 files changed, 1128 insertions(+), 47 deletions(-)
+ create mode 100644 Source/WebCore/platform/network/amiga/OpenWebFetchAmiga.c
+ create mode 100644 Source/WebCore/platform/network/amiga/OpenWebFetchAmiga.h
+ create mode 100644 Source/WebCore/platform/network/amiga/WebFetchAmiga.cpp
+ create mode 100644 Source/WebCore/platform/network/amiga/WebFetchAmiga.h
+
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index 8522452a3a2..08474367213 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -111,6 +111,12 @@ list(APPEND WebCore_SOURCES
+     platform/network/amiga/PublicSuffixAmiga.c
+     platform/network/amiga/PublicSuffixStoreAmiga.cpp
+ 
++    # Loads through openweb.fetch beside curl (OB_NET=openweb). The browser's
++    # build gives OpenWebFetchAmiga.c openamigaservice's client headers and
++    # links its client; without them the file builds empty and curl loads.
++    platform/network/amiga/OpenWebFetchAmiga.c
++    platform/network/amiga/WebFetchAmiga.cpp
++
+     platform/text/Hyphenation.cpp
+     platform/text/LocaleICU.cpp
+ 
+diff --git a/Source/WebCore/platform/network/ResourceHandle.h b/Source/WebCore/platform/network/ResourceHandle.h
+index 7277675e1e7..3514199b585 100644
+--- a/Source/WebCore/platform/network/ResourceHandle.h
++++ b/Source/WebCore/platform/network/ResourceHandle.h
+@@ -65,8 +65,7 @@ template<typename T> class MessageQueue;
+ namespace WebCore {
+ 
+ #if PLATFORM(AMIGA)
+-class CurlRequest;
+-class CurlResponse;
++class SharedBuffer;
+ #endif
+ 
+ class AuthenticationChallenge;
+@@ -194,10 +193,15 @@ private:
+     bool start();
+ #if PLATFORM(AMIGA)
+     friend class ResourceHandleCurlDelegate;
+-    void amigaStartCurlRequest(ResourceRequest&&);
++    friend class AmigaWebFetch;
++    void amigaStartRequest(ResourceRequest&&);
+     void amigaLoadFile();
+     void amigaLoadFromHttpCache();
+-    void amigaDidReceiveResponse(CurlRequest&, CurlResponse&&);
++    void amigaCancelRequest();
++    void amigaDidReceiveResponse(const ResourceRequest& sentRequest, const Vector<String>& headerLines, ResourceResponse&&);
++    void amigaDidReceiveData(Ref<SharedBuffer>&&);
++    void amigaDidFinish(const NetworkLoadMetrics&);
++    void amigaDidFail(const ResourceError&);
+ #endif
+     static void platformLoadResourceSynchronously(NetworkingContext*, const ResourceRequest&, StoredCredentialsPolicy, SecurityOrigin*, ResourceError&, ResourceResponse&, Vector<uint8_t>& data);
+ 
+diff --git a/Source/WebCore/platform/network/ResourceHandleInternal.h b/Source/WebCore/platform/network/ResourceHandleInternal.h
+index b648c02a2cb..d6f47b32eaf 100644
+--- a/Source/WebCore/platform/network/ResourceHandleInternal.h
++++ b/Source/WebCore/platform/network/ResourceHandleInternal.h
+@@ -48,6 +48,7 @@ typedef const struct __CFURLStorageSession* CFURLStorageSessionRef;
+ 
+ #if PLATFORM(AMIGA)
+ #include "amiga/AmigaNetwork.h"
++#include "amiga/WebFetchAmiga.h"
+ #include "CurlRequest.h"
+ #include "CurlRequestClient.h"
+ #endif
+@@ -110,6 +111,8 @@ public:
+     // A ResourceHandleCurlDelegate (ResourceHandleAmiga.cpp), kept by its base
+     // so this header needs no complete type for it.
+     RefPtr<CurlRequestClient> m_curlDelegate;
++    // The request when it goes through openweb.fetch (OB_NET=openweb).
++    RefPtr<AmigaWebFetch> m_webFetch;
+     // The disk cache's part in the current request (AmigaNetwork.h).
+     std::unique_ptr<AmigaHttpCacheRequest> m_httpCache;
+     bool m_skipHttpCache { false };
+diff --git a/Source/WebCore/platform/network/amiga/OpenWebFetchAmiga.c b/Source/WebCore/platform/network/amiga/OpenWebFetchAmiga.c
+new file mode 100644
+index 00000000000..c7d9d7265c0
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/OpenWebFetchAmiga.c
+@@ -0,0 +1,366 @@
++/*
++ * openweb.fetch for WebCore's network thread (OpenWebFetchAmiga.h).
++ *
++ * Each fetch keeps one call in flight once it has started: its HEAD until
++ * the head comes, then a READ. A "not yet" answer (the card's held call
++ * ran out its wait) is asked again at once, so on the card wf_wait() is
++ * always woken by an answer within the wait, and on the native transport
++ * wf_wait() moves every fetch on. Body bytes come in two buffers by turns:
++ * the next READ goes into one while WebCore copies the other.
++ * MIT, Copyright (c) 2026 AmigaChrome Team.
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "OpenWebFetchAmiga.h"
++
++#if defined(__has_include)
++#if __has_include(<openweb/webfetch.h>)
++#define OBWF_TRANSPORT 1
++#endif
++#endif
++
++#ifdef OBWF_TRANSPORT
++
++#include <string.h>
++#include <exec/types.h>
++#include <exec/memory.h>
++#include <exec/tasks.h>
++#include <dos/dos.h>
++#include <proto/exec.h>
++#include <openweb/webfetch.h>
++
++#define OBWF_HEAD_ROOM (8UL << 10)
++#define OBWF_READ_ROOM (32UL << 10)
++/* How long the card may hold a HEAD or READ; the native transport asks
++ * without waiting and wf_wait() does the waiting. */
++#define OBWF_HOLD_MS 2000UL
++/* How long a SEND may wait for room in the upload queue. */
++#define OBWF_SEND_MS 100UL
++
++struct OBWFNet {
++    struct wf_service s;
++    int open;
++    struct Task *task;
++    BYTE bit;
++};
++
++struct OBWFFetch {
++    OBWFNet *net;
++    ULONG fetch;
++    int opened;
++    int busy;                   /* a is in flight */
++    struct wf_async a;
++    UBYTE *head;
++    ULONG headRoom;
++    UBYTE *buf[2];
++    int cur;                    /* the buffer the READ in flight writes */
++};
++
++/* openweb.fetch's error for a call that failed. */
++static unsigned long error_of(LONG status)
++{
++    if (status == OSERR_CANCELLED)
++        return WF_E_CANCELLED;
++    if (status == OSERR_LOST)
++        return WF_E_CLOSED;
++    if (status == OSERR_BADREQUEST)
++        return WF_E_PROTOCOL;
++    return WF_E_HOST;
++}
++
++int obwf_available(void)
++{
++    return 1;
++}
++
++OBWFNet *obwf_net_new(void)
++{
++    OBWFNet *n = AllocVec(sizeof *n, MEMF_ANY | MEMF_CLEAR);
++    if (!n)
++        return NULL;
++    n->task = FindTask(NULL);
++    if ((n->bit = AllocSignal(-1)) < 0) {
++        FreeVec(n);
++        return NULL;
++    }
++    n->open = wf_service_open(&n->s) == OSERR_OK;
++    return n;
++}
++
++void obwf_net_free(OBWFNet *n)
++{
++    if (!n)
++        return;
++    if (n->open)
++        wf_service_close(&n->s);
++    FreeSignal(n->bit);
++    FreeVec(n);
++}
++
++int obwf_net_decodes(OBWFNet *n)
++{
++    /* The card's host library decodes; the native transport hands coded
++     * bodies to the datatypes' hook, which is empty until stream.datatype
++     * is there, and then sends them as they came. */
++    return n->open && n->s.where != WF_WHERE_NATIVE;
++}
++
++void obwf_net_wait(OBWFNet *n, unsigned long ms)
++{
++    ULONG mask = 1UL << n->bit;
++    if (n->open)
++        wf_wait(&n->s, ms, mask);
++    else
++        Wait(mask);
++    /* The caller looks at its work after this, so a wake that came
++     * meanwhile is not lost. Ctrl-C, which the native transport leaves
++     * set, means nothing to this task. */
++    SetSignal(0, mask | SIGBREAKF_CTRL_C);
++}
++
++void obwf_net_wake(OBWFNet *n)
++{
++    Signal(n->task, 1UL << n->bit);
++}
++
++OBWFFetch *obwf_fetch_new(OBWFNet *n, const char *request, unsigned long length, int decode, int hasBody,
++                          unsigned long bodyLength, const void *part, unsigned long partLength,
++                          unsigned long timeout, unsigned long *error)
++{
++    OBWFFetch *f;
++    LONG status;
++    ULONG flags = (decode ? WF_DECODE : 0) | (hasBody ? WF_BODY : 0);
++    *error = WF_E_HOST;
++    if (!n->open) {
++        *error = WF_E_CONNECT;
++        return NULL;
++    }
++    if (!(f = AllocVec(sizeof *f, MEMF_ANY | MEMF_CLEAR)))
++        return NULL;
++    f->net = n;
++    f->headRoom = OBWF_HEAD_ROOM;
++    f->head = AllocVec(f->headRoom, MEMF_ANY);
++    f->buf[0] = AllocVec(OBWF_READ_ROOM, MEMF_ANY);
++    f->buf[1] = AllocVec(OBWF_READ_ROOM, MEMF_ANY);
++    if (!f->head || !f->buf[0] || !f->buf[1]) {
++        obwf_fetch_free(f);
++        return NULL;
++    }
++    status = wf_open(&n->s, request, length, flags, bodyLength, timeout, part, partLength, &f->fetch);
++    if (status != OSERR_OK) {
++        *error = error_of(status);
++        obwf_fetch_free(f);
++        return NULL;
++    }
++    f->opened = 1;
++    return f;
++}
++
++int obwf_fetch_send(OBWFFetch *f, const void *data, unsigned long length, int last)
++{
++    ULONG taken = 0;
++    if (wf_send(&f->net->s, f->fetch, data, length, last ? TRUE : FALSE, OBWF_SEND_MS, &taken) != OSERR_OK)
++        return -1;
++    return taken || (!length && last) ? 1 : 0;
++}
++
++/* Starts op into buf unless a call is in flight; 0 when it could not. */
++static int start(OBWFFetch *f, UWORD op, UBYTE *buf, ULONG room)
++{
++    if (f->busy)
++        return 1;
++    if (wf_async_start(&f->net->s, &f->a, op, f->fetch, buf, room, OBWF_HOLD_MS) != OSERR_OK)
++        return 0;
++    f->busy = 1;
++    return 1;
++}
++
++/* The call in flight, answered: 1 with its answer in f->a, 0 not yet. */
++static int answered(OBWFFetch *f)
++{
++    if (!wf_async_check(&f->a))
++        return 0;
++    f->busy = 0;
++    return 1;
++}
++
++int obwf_fetch_head(OBWFFetch *f, OBWFHead *out)
++{
++    struct wf_head h;
++    memset(out, 0, sizeof *out);
++    for (;;) {
++        if (!start(f, WF_OP_HEAD, f->head, f->headRoom)) {
++            out->error = WF_E_HOST;
++            return -1;
++        }
++        if (!answered(f))
++            return 0;
++        if (f->a.status == OSERR_TOOSMALL && f->a.result > f->headRoom) {
++            /* The head stays on the service's side: ask again with room for it. */
++            UBYTE *bigger = AllocVec(f->a.result, MEMF_ANY);
++            if (!bigger) {
++                out->error = WF_E_HOST;
++                return -1;
++            }
++            FreeVec(f->head);
++            f->head = bigger;
++            f->headRoom = f->a.result;
++            continue;
++        }
++        if (f->a.status != OSERR_OK) {
++            out->error = error_of(f->a.status);
++            return -1;
++        }
++        if (!f->a.result && !f->a.aux)
++            continue;                           /* not yet: ask again */
++        if (wf_head_parse(f->head, f->headRoom, &h) != OSERR_OK) {
++            out->error = WF_E_PROTOCOL;
++            return -1;
++        }
++        out->error = h.error;
++        out->status = h.status;
++        out->version = h.version;
++        out->lengthKnown = (h.flags & WF_H_LENGTH) != 0;
++        out->length = h.length;
++        out->text = h.text;
++        out->textLength = h.text_length;
++        out->info = h.info;
++        out->infoLength = h.info_length;
++        return 1;
++    }
++}
++
++long obwf_fetch_read(OBWFFetch *f, const void **data, int *end, unsigned long *error)
++{
++    ULONG got;
++    *data = NULL;
++    *end = 0;
++    *error = 0;
++    for (;;) {
++        if (!start(f, WF_OP_READ, f->buf[f->cur], OBWF_READ_ROOM)) {
++            *end = 1;
++            *error = WF_E_HOST;
++            return 0;
++        }
++        if (!answered(f))
++            return 0;
++        if (f->a.status != OSERR_OK) {
++            *end = 1;
++            *error = error_of(f->a.status);
++            return 0;
++        }
++        if (!f->a.result && !f->a.aux)
++            continue;                           /* not yet: ask again */
++        got = f->a.result;
++        *data = f->buf[f->cur];
++        if (f->a.aux & 1) {
++            *end = 1;
++            *error = (f->a.aux >> 8) & 0xff;
++            return (long)got;
++        }
++        /* The next READ goes into the other buffer while these bytes are copied. */
++        f->cur ^= 1;
++        start(f, WF_OP_READ, f->buf[f->cur], OBWF_READ_ROOM);
++        return (long)got;
++    }
++}
++
++void obwf_fetch_free(OBWFFetch *f)
++{
++    if (!f)
++        return;
++    if (f->busy)
++        wf_async_abort(&f->a);
++    if (f->opened)
++        wf_close(&f->net->s, f->fetch);
++    if (f->head)
++        FreeVec(f->head);
++    if (f->buf[0])
++        FreeVec(f->buf[0]);
++    if (f->buf[1])
++        FreeVec(f->buf[1]);
++    FreeVec(f);
++}
++
++#else /* no openweb.fetch client in this build */
++
++int obwf_available(void)
++{
++    return 0;
++}
++
++OBWFNet *obwf_net_new(void)
++{
++    return 0;
++}
++
++void obwf_net_free(OBWFNet *n)
++{
++    (void)n;
++}
++
++int obwf_net_decodes(OBWFNet *n)
++{
++    (void)n;
++    return 0;
++}
++
++void obwf_net_wait(OBWFNet *n, unsigned long ms)
++{
++    (void)n;
++    (void)ms;
++}
++
++void obwf_net_wake(OBWFNet *n)
++{
++    (void)n;
++}
++
++OBWFFetch *obwf_fetch_new(OBWFNet *n, const char *request, unsigned long length, int decode, int hasBody,
++                          unsigned long bodyLength, const void *part, unsigned long partLength,
++                          unsigned long timeout, unsigned long *error)
++{
++    (void)n;
++    (void)request;
++    (void)length;
++    (void)decode;
++    (void)hasBody;
++    (void)bodyLength;
++    (void)part;
++    (void)partLength;
++    (void)timeout;
++    *error = 9;
++    return 0;
++}
++
++int obwf_fetch_send(OBWFFetch *f, const void *data, unsigned long length, int last)
++{
++    (void)f;
++    (void)data;
++    (void)length;
++    (void)last;
++    return -1;
++}
++
++int obwf_fetch_head(OBWFFetch *f, OBWFHead *head)
++{
++    (void)f;
++    head->error = 9;
++    return -1;
++}
++
++long obwf_fetch_read(OBWFFetch *f, const void **data, int *end, unsigned long *error)
++{
++    (void)f;
++    *data = 0;
++    *end = 1;
++    *error = 9;
++    return 0;
++}
++
++void obwf_fetch_free(OBWFFetch *f)
++{
++    (void)f;
++}
++
++#endif
+diff --git a/Source/WebCore/platform/network/amiga/OpenWebFetchAmiga.h b/Source/WebCore/platform/network/amiga/OpenWebFetchAmiga.h
+new file mode 100644
+index 00000000000..06076e21e81
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/OpenWebFetchAmiga.h
+@@ -0,0 +1,78 @@
++/*
++ * openweb.fetch for WebCore's network thread (OpenWebFetchAmiga.c): the
++ * service opened once, fetches started, their bodies sent, their heads and
++ * bodies collected without blocking (wf_async_start and wf_wait, from
++ * openamigaservice's include/openweb/webfetch.h). Plain C, so that AmigaOS
++ * headers and their macros stay out of WebCore's C++.
++ *
++ * Every call but obwf_net_wake runs on the one task that called
++ * obwf_net_new. A build without openamigaservice's headers has no
++ * transport: obwf_available() is 0 and obwf_net_new answers NULL.
++ * MIT, Copyright (c) 2026 AmigaChrome Team.
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef OpenWebFetchAmiga_h
++#define OpenWebFetchAmiga_h
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct OBWFNet OBWFNet;
++typedef struct OBWFFetch OBWFFetch;
++
++/* A response head, in the fetch's own memory until its next call. */
++typedef struct {
++    unsigned long error;        /* 0, or openweb.fetch's error, 1 to 9 */
++    unsigned long status;       /* the HTTP status */
++    unsigned long version;      /* the HTTP version times ten */
++    int lengthKnown;
++    unsigned long length;       /* the body's length, when lengthKnown */
++    const char *text;           /* the status line and the headers, each line ending in LF */
++    unsigned long textLength;
++    const char *info;           /* key=value lines: the TLS summary, or error= */
++    unsigned long infoLength;
++} OBWFHead;
++
++/* 1 when the engine was built with openamigaservice's client. */
++int obwf_available(void);
++
++/* Opens openweb.fetch (the card, a Cradle, or this Amiga's own TCP/IP
++ * and OpenTLS) and a signal to wake the task with. NULL when there is no
++ * transport or no signal; without a service every fetch fails. */
++OBWFNet *obwf_net_new(void);
++void obwf_net_free(OBWFNet *);
++/* 1 when the transport undoes gzip, deflate and br itself (WF_DECODE). */
++int obwf_net_decodes(OBWFNet *);
++/* Sleeps until a fetch may have moved on, for at most ms (on the card,
++ * until an answer comes back), or until obwf_net_wake. */
++void obwf_net_wait(OBWFNet *, unsigned long ms);
++/* From any task. */
++void obwf_net_wake(OBWFNet *);
++
++/* Starts a fetch: request is "METHOD URL\n" and "Name: value\n" lines.
++ * With hasBody, bodyLength is the body's whole length and part (partLength
++ * bytes, maybe 0) its first part. timeout in seconds (0: 30). NULL with
++ * *error (openweb.fetch's) when it could not start. */
++OBWFFetch *obwf_fetch_new(OBWFNet *, const char *request, unsigned long length, int decode, int hasBody,
++                          unsigned long bodyLength, const void *part, unsigned long partLength,
++                          unsigned long timeout, unsigned long *error);
++/* The body's next part: 1 taken, 0 not taken (the queue is full: send the
++ * same part again later), -1 the fetch failed. */
++int obwf_fetch_send(OBWFFetch *, const void *data, unsigned long length, int last);
++/* 1 with *head filled when the head is there (head->error non-zero when
++ * the fetch failed), 0 not yet, -1 failed (head->error says why). */
++int obwf_fetch_head(OBWFFetch *, OBWFHead *head);
++/* Body bytes: how many, at *data (the fetch's memory, until its next
++ * call); 0 when none came yet. *end is 1 when the body has ended, with
++ * *error 0 when it ended well, else openweb.fetch's error. */
++long obwf_fetch_read(OBWFFetch *, const void **data, int *end, unsigned long *error);
++/* Stops the fetch if it still runs, and frees it. */
++void obwf_fetch_free(OBWFFetch *);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* OpenWebFetchAmiga_h */
+diff --git a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+index 8461ff03966..8f172d92dd5 100644
+--- a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
++++ b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+@@ -24,8 +24,10 @@
+  */
+ 
+ // ResourceHandle for the single-process Amiga port: http and https through
+-// WebCore's curl backend (CurlRequest), local files read directly. The
+-// redirect and cookie handling follows WebKit's NetworkDataTaskCurl.
++// WebCore's curl backend (CurlRequest), or through openweb.fetch
++// (WebFetchAmiga.cpp) with the Shell variable OB_NET=openweb; local files
++// read directly. The redirect, cookie and HTTP cache handling is the same
++// for both, and follows WebKit's NetworkDataTaskCurl.
+ 
+ #include "config.h"
+ #include "ResourceHandle.h"
+@@ -95,7 +97,9 @@ void amigaNetworkThreadFinished()
+ 
+ void stopAmigaNetwork()
+ {
+-    CurlContext::singleton().scheduler().stopThread();
++    AmigaWebFetch::stopThread();
++    if (!AmigaWebFetch::isWanted())
++        CurlContext::singleton().scheduler().stopThread();
+ }
+ 
+ // Receives CurlRequest's callbacks (on the main thread) for one handle.
+@@ -114,42 +118,31 @@ public:
+             handle->client()->didSendData(handle.get(), sent, total);
+     }
+ 
+-    void curlDidReceiveResponse(CurlRequest& request, CurlResponse&& response) final
++    void curlDidReceiveResponse(CurlRequest& request, CurlResponse&& curlResponse) final
+     {
+-        if (RefPtr handle = m_handle)
+-            handle->amigaDidReceiveResponse(request, WTF::move(response));
++        RefPtr handle = m_handle;
++        if (!handle)
++            return;
++        ResourceResponse response(curlResponse);
++        handle->amigaDidReceiveResponse(request.resourceRequest(), curlResponse.headers, WTF::move(response));
+     }
+ 
+     void curlDidReceiveData(CurlRequest&, Ref<SharedBuffer>&& buffer) final
+     {
+-        RefPtr handle = m_handle;
+-        if (!handle)
+-            return;
+-        if (auto& cache = handle->d->m_httpCache)
+-            cache->storeData(buffer.get());
+-        if (handle->client())
+-            handle->client()->didReceiveBuffer(handle.get(), buffer.get(), buffer->size());
++        if (RefPtr handle = m_handle)
++            handle->amigaDidReceiveData(WTF::move(buffer));
+     }
+ 
+     void curlDidComplete(CurlRequest&, NetworkLoadMetrics&& metrics) final
+     {
+-        RefPtr handle = m_handle;
+-        if (!handle)
+-            return;
+-        if (auto cache = std::exchange(handle->d->m_httpCache, nullptr))
+-            cache->storeFinished();
+-        if (handle->client())
+-            handle->client()->didFinishLoading(handle.get(), metrics);
++        if (RefPtr handle = m_handle)
++            handle->amigaDidFinish(metrics);
+     }
+ 
+     void curlDidFailWithError(CurlRequest&, ResourceError&& error, CertificateInfo&&) final
+     {
+-        RefPtr handle = m_handle;
+-        if (!handle)
+-            return;
+-        handle->d->m_httpCache = nullptr;
+-        if (handle->client())
+-            handle->client()->didFail(handle.get(), error);
++        if (RefPtr handle = m_handle)
++            handle->amigaDidFail(error);
+     }
+ 
+ private:
+@@ -167,6 +160,8 @@ ResourceHandleInternal::~ResourceHandleInternal()
+         static_cast<ResourceHandleCurlDelegate&>(*m_curlDelegate).releaseHandle();
+     if (m_curlRequest)
+         m_curlRequest->invalidateClient();
++    if (m_webFetch)
++        m_webFetch->cancel();
+ }
+ 
+ ResourceHandle::~ResourceHandle() = default;
+@@ -180,7 +175,7 @@ static void appendCookieHeader(ResourceRequest& request)
+         request.setHTTPHeaderField(HTTPHeaderName::Cookie, cookies);
+ }
+ 
+-void ResourceHandle::amigaStartCurlRequest(ResourceRequest&& request)
++void ResourceHandle::amigaStartRequest(ResourceRequest&& request)
+ {
+     appendCookieHeader(request);
+     d->m_httpCache = nullptr;
+@@ -190,6 +185,13 @@ void ResourceHandle::amigaStartCurlRequest(ResourceRequest&& request)
+         amigaLoadFromHttpCache();
+         return;
+     }
++    if (AmigaWebFetch::isWanted()) {
++        // The URL's credentials go to its own server only, not to another
++        // one a redirect leads to.
++        bool sameServer = protocolHostAndPortAreEqual(request.url(), d->m_firstRequest.url());
++        d->m_webFetch = AmigaWebFetch::start(*this, request, sameServer ? d->m_user : String(), sameServer ? d->m_password : String());
++        return;
++    }
+     if (!d->m_curlDelegate)
+         d->m_curlDelegate = ResourceHandleCurlDelegate::create(*this);
+     d->m_curlRequest = CurlRequest::create(request, *d->m_curlDelegate);
+@@ -266,14 +268,44 @@ bool ResourceHandle::start()
+         amigaLoadFile();
+         return true;
+     }
+-    amigaStartCurlRequest(WTF::move(request));
++    amigaStartRequest(WTF::move(request));
+     return true;
+ }
+ 
+ void ResourceHandle::cancel()
++{
++    amigaCancelRequest();
++}
++
++void ResourceHandle::amigaCancelRequest()
+ {
+     if (d->m_curlRequest)
+         d->m_curlRequest->cancel();
++    if (auto webFetch = std::exchange(d->m_webFetch, nullptr))
++        webFetch->cancel();
++}
++
++void ResourceHandle::amigaDidReceiveData(Ref<SharedBuffer>&& buffer)
++{
++    if (auto& cache = d->m_httpCache)
++        cache->storeData(buffer.get());
++    if (client())
++        client()->didReceiveBuffer(this, buffer.get(), buffer->size());
++}
++
++void ResourceHandle::amigaDidFinish(const NetworkLoadMetrics& metrics)
++{
++    if (auto cache = std::exchange(d->m_httpCache, nullptr))
++        cache->storeFinished();
++    if (client())
++        client()->didFinishLoading(this, metrics);
++}
++
++void ResourceHandle::amigaDidFail(const ResourceError& error)
++{
++    d->m_httpCache = nullptr;
++    if (client())
++        client()->didFail(this, error);
+ }
+ 
+ void ResourceHandle::platformSetDefersLoading(bool)
+@@ -305,7 +337,7 @@ static bool shouldRedirectAsGET(const ResourceRequest& request, const ResourceRe
+     return false;
+ }
+ 
+-void ResourceHandle::amigaDidReceiveResponse(CurlRequest& curlRequest, CurlResponse&& curlResponse)
++void ResourceHandle::amigaDidReceiveResponse(const ResourceRequest& sentRequest, const Vector<String>& headerLines, ResourceResponse&& response)
+ {
+     if (!client())
+         return;
+@@ -313,29 +345,27 @@ void ResourceHandle::amigaDidReceiveResponse(CurlRequest& curlRequest, CurlRespo
+     // Cookies first, so a redirect's request already carries them.
+     static constexpr auto setCookieHeader = "set-cookie: "_s;
+     if (cookieHooks().storeFromResponse) {
+-        for (auto& header : curlResponse.headers) {
++        for (auto& header : headerLines) {
+             if (header.startsWithIgnoringASCIICase(setCookieHeader))
+-                cookieHooks().storeFromResponse(curlRequest.resourceRequest().firstPartyForCookies(), curlResponse.url, header.substring(setCookieHeader.length()));
++                cookieHooks().storeFromResponse(sentRequest.firstPartyForCookies(), response.url(), header.substring(setCookieHeader.length()));
+         }
+     }
+ 
+-    ResourceResponse response(curlResponse);
+-
+     if (auto& cache = d->m_httpCache) {
+         if (response.httpStatusCode() == 304) {
+             if (cache->notModified(response)) {
+-                d->m_curlRequest->cancel();
++                amigaCancelRequest();
+                 amigaLoadFromHttpCache();
+                 return;
+             }
+             // The stored copy went missing: ask again, without validators.
+-            ResourceRequest request = curlRequest.resourceRequest();
++            ResourceRequest request = sentRequest;
+             request.removeHTTPHeaderField(HTTPHeaderName::IfNoneMatch);
+             request.removeHTTPHeaderField(HTTPHeaderName::IfModifiedSince);
+             request.removeHTTPHeaderField(HTTPHeaderName::Cookie);
+-            d->m_curlRequest->cancel();
++            amigaCancelRequest();
+             d->m_skipHttpCache = true;
+-            amigaStartCurlRequest(WTF::move(request));
++            amigaStartRequest(WTF::move(request));
+             return;
+         }
+         cache->willStore(response);
+@@ -344,17 +374,19 @@ void ResourceHandle::amigaDidReceiveResponse(CurlRequest& curlRequest, CurlRespo
+     if (shouldStartHTTPRedirection(response)) {
+         static constexpr unsigned maxRedirects = 20;
+         if (d->m_redirectCount++ > maxRedirects) {
+-            client()->didFail(this, ResourceError(CURLE_TOO_MANY_REDIRECTS, response.url()));
++            amigaCancelRequest();
++            client()->didFail(this, ResourceError(ResourceError::AmigaCode::TooManyRedirects, response.url()));
+             return;
+         }
+ 
+         URL redirectedURL { response.url(), response.httpHeaderField(HTTPHeaderName::Location) };
+         if (redirectedURL.protocolIsFile()) {
+-            client()->didFail(this, ResourceError(CURLE_FILE_COULDNT_READ_FILE, response.url()));
++            amigaCancelRequest();
++            client()->didFail(this, ResourceError(ResourceError::AmigaCode::RedirectToFile, response.url()));
+             return;
+         }
+ 
+-        ResourceRequest request = curlRequest.resourceRequest();
++        ResourceRequest request = sentRequest;
+         if (!redirectedURL.hasFragmentIdentifier() && request.url().hasFragmentIdentifier())
+             redirectedURL.setFragmentIdentifier(request.url().fragmentIdentifier());
+         bool crossOrigin = !protocolHostAndPortAreEqual(request.url(), redirectedURL);
+@@ -373,11 +405,11 @@ void ResourceHandle::amigaDidReceiveResponse(CurlRequest& curlRequest, CurlRespo
+         }
+         incrementRedirectCount();
+ 
+-        d->m_curlRequest->cancel();
++        amigaCancelRequest();
+         client()->willSendRequestAsync(this, WTF::move(request), WTF::move(response), [protectedThis = Ref { *this }](ResourceRequest&& newRequest) mutable {
+             if (newRequest.isNull() || !protectedThis->client())
+                 return;
+-            protectedThis->amigaStartCurlRequest(WTF::move(newRequest));
++            protectedThis->amigaStartRequest(WTF::move(newRequest));
+         });
+         return;
+     }
+@@ -385,11 +417,13 @@ void ResourceHandle::amigaDidReceiveResponse(CurlRequest& curlRequest, CurlRespo
+     client()->didReceiveResponseAsync(this, WTF::move(response), [protectedThis = Ref { *this }] {
+         if (auto& curlRequest = protectedThis->d->m_curlRequest)
+             curlRequest->completeDidReceiveResponse();
++        if (auto& webFetch = protectedThis->d->m_webFetch)
++            webFetch->continueAfterResponse();
+     });
+ }
+ 
+ // Synchronous loads (synchronous XMLHttpRequest): run the request and spin the
+-// run loop until it ends. CurlRequest calls back through the main run loop.
++// run loop until it ends. Both backends call back through the main run loop.
+ namespace {
+ class SynchronousClient final : public ResourceHandleClient {
+ public:
+diff --git a/Source/WebCore/platform/network/amiga/WebFetchAmiga.cpp b/Source/WebCore/platform/network/amiga/WebFetchAmiga.cpp
+new file mode 100644
+index 00000000000..8a4f2b65df1
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/WebFetchAmiga.cpp
+@@ -0,0 +1,501 @@
++/*
++ * One load on openweb.fetch (WebFetchAmiga.h), and the network thread that
++ * runs every one of them.
++ *
++ * The thread opens openweb.fetch once (the card, a Cradle, or this Amiga's
++ * own TCP/IP and OpenTLS: the transport chooses, and reads the proxies
++ * from the environment itself) and moves each load on in turn: OPEN with
++ * the request text and the body's first part, the rest of the body through
++ * SEND, then the head, then, once the client has taken the response, the
++ * body. Between turns it sleeps in wf_wait() on the network and on a
++ * signal the main thread sends it. Everything the client hears goes to it
++ * through the main thread's run loop, in order, as curl's thread does.
++ *
++ * Compressed bodies: the card's host undoes them (WF_DECODE). The native
++ * transport leaves that to the datatypes' stream classes, which are not
++ * there yet, so on it the request asks for "Accept-Encoding: identity".
++ * MIT, Copyright (c) 2026 AmigaChrome Team.
++ * SPDX-License-Identifier: MIT
++ */
++#include "config.h"
++#include "WebFetchAmiga.h"
++
++#include "AmigaNetwork.h"
++#include "BlobRegistry.h"
++#include "FormData.h"
++#include "HTTPHeaderNames.h"
++#include "ResourceError.h"
++#include "ResourceHandle.h"
++#include "ResourceHandleClient.h"
++#include "ResourceResponse.h"
++#include "SharedBuffer.h"
++#include <stdlib.h>
++#include <string.h>
++#include <string_view>
++#include <wtf/FileSystem.h>
++#include <wtf/Language.h>
++#include <wtf/Lock.h>
++#include <wtf/MainThread.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/Threading.h>
++#include <wtf/text/StringBuilder.h>
++
++namespace WebCore {
++
++// The size of each upload part.
++static constexpr size_t partSize = 64 * 1024;
++// Without a timeout of the request's own: a TLS handshake on a 68k takes
++// seconds, as curl's 120 s connect timeout allowed for (patch 0004).
++static constexpr unsigned defaultTimeout = 120;
++// openweb.fetch's longest timeout.
++static constexpr unsigned maximumTimeout = 300;
++// openweb.fetch's own errors (docs/OPENWEB_FETCH.md).
++static constexpr unsigned long errorTLS = 3;
++static constexpr unsigned long errorProtocol = 5;
++static constexpr unsigned long errorClosed = 7;
++static constexpr unsigned long errorHost = 9;
++
++// ---- the network thread ----
++
++struct FetchThread {
++    Lock lock;
++    Vector<Ref<AmigaWebFetch>> incoming;
++    OBWFNet* net { nullptr };
++    bool stopping { false };
++    bool broken { false };
++    RefPtr<Thread> thread;
++};
++
++static FetchThread& fetchThread()
++{
++    static NeverDestroyed<FetchThread> thread;
++    return thread;
++}
++
++static void wakeFetchThread()
++{
++    auto& thread = fetchThread();
++    Locker locker { thread.lock };
++    if (thread.net)
++        obwf_net_wake(thread.net);
++}
++
++static void runFetchThread()
++{
++    auto& thread = fetchThread();
++    amigaNetworkThreadStarted();
++    OBWFNet* net = obwf_net_new();
++    Vector<Ref<AmigaWebFetch>> active;
++    {
++        Locker locker { thread.lock };
++        thread.net = net;
++        if (!net) {
++            // No signal or no transport: every load fails, now and later.
++            thread.broken = true;
++            active = std::exchange(thread.incoming, { });
++        }
++    }
++    if (!net) {
++        for (auto& fetch : active)
++            fetch->failWithoutNetwork();
++        amigaNetworkThreadFinished();
++        return;
++    }
++
++    while (true) {
++        {
++            Locker locker { thread.lock };
++            if (thread.stopping)
++                break;
++            for (auto& fetch : std::exchange(thread.incoming, { }))
++                active.append(WTF::move(fetch));
++        }
++        for (size_t i = 0; i < active.size();) {
++            if (active[i]->step(net)) {
++                ++i;
++                continue;
++            }
++            active[i]->close();
++            active.removeAt(i);
++        }
++        obwf_net_wait(net, 1000);
++    }
++
++    for (auto& fetch : active)
++        fetch->close();
++    active.clear();
++    {
++        Locker locker { thread.lock };
++        thread.net = nullptr;
++    }
++    obwf_net_free(net);
++    amigaNetworkThreadFinished();
++}
++
++static void addToFetchThread(Ref<AmigaWebFetch>&& fetch)
++{
++    auto& thread = fetchThread();
++    {
++        Locker locker { thread.lock };
++        if (thread.broken) {
++            fetch->failWithoutNetwork();
++            return;
++        }
++        if (thread.stopping)
++            return;
++        thread.incoming.append(WTF::move(fetch));
++        if (thread.net)
++            obwf_net_wake(thread.net);
++    }
++    if (!thread.thread)
++        thread.thread = Thread::create("openweb.fetch"_s, runFetchThread, ThreadType::Network);
++}
++
++void AmigaWebFetch::stopThread()
++{
++    auto& thread = fetchThread();
++    {
++        Locker locker { thread.lock };
++        thread.stopping = true;
++        if (thread.net)
++            obwf_net_wake(thread.net);
++    }
++    if (auto running = std::exchange(thread.thread, nullptr))
++        running->waitForCompletion();
++}
++
++// ---- one load: the main thread ----
++
++bool AmigaWebFetch::isWanted()
++{
++    static const bool wanted = [] {
++        const char* value = getenv("OB_NET");
++        return obwf_available() && value && equalLettersIgnoringASCIICase(String::fromLatin1(value), "openweb"_s);
++    }();
++    return wanted;
++}
++
++// "METHOD URL" and the headers, one a line. Accept-Encoding is the
++// network thread's, as it depends on the transport.
++static Vector<char> requestText(const ResourceRequest& request, const String& user, const String& password)
++{
++    URL url = request.url();
++    url.removeFragmentIdentifier();
++    if (!user.isEmpty() || !password.isEmpty()) {
++        url.setUser(user);
++        url.setPassword(password);
++    }
++
++    StringBuilder text;
++    text.append(request.httpMethod(), ' ', url.string(), '\n');
++    bool hasLanguage = false;
++    for (auto& header : request.httpHeaderFields()) {
++        if (header.keyAsHTTPHeaderName == HTTPHeaderName::AcceptEncoding)
++            continue;
++        if (header.keyAsHTTPHeaderName == HTTPHeaderName::AcceptLanguage)
++            hasLanguage = true;
++        text.append(header.key, ": "_s, header.value, '\n');
++    }
++    if (!hasLanguage) {
++        // As curl's requests had it (CurlRequest::appendAcceptLanguageHeaderIfNeeded).
++        auto languages = userPreferredLanguages();
++        if (!languages.isEmpty()) {
++            text.append("Accept-Language: "_s);
++            for (size_t i = 0; i < languages.size(); ++i) {
++                if (i)
++                    text.append(", "_s);
++                text.append(languages[i]);
++            }
++            text.append('\n');
++        }
++    }
++    auto utf8 = text.toString().utf8();
++    return Vector<char>(byteCast<char>(utf8.span()));
++}
++
++AmigaWebFetch::AmigaWebFetch(ResourceHandle& handle, const ResourceRequest& request)
++    : m_handle(&handle)
++    , m_request(request)
++{
++}
++
++AmigaWebFetch::~AmigaWebFetch() = default;
++
++Ref<AmigaWebFetch> AmigaWebFetch::start(ResourceHandle& handle, const ResourceRequest& request, const String& user, const String& password)
++{
++    Ref fetch = adoptRef(*new AmigaWebFetch(handle, request));
++    fetch->m_requestText = requestText(request, user, password);
++    if (RefPtr body = request.httpBody(); body && !body->isEmpty()) {
++        // The network thread's own copy, with blobs made into their data and files.
++        fetch->m_body = body->isolatedCopy()->resolveBlobReferences(blobRegistry()->blobRegistryImpl());
++        fetch->m_bodyLength = fetch->m_body->lengthInBytes();
++    }
++    auto& method = request.httpMethod();
++    fetch->m_hasBody = fetch->m_body || (method != "GET"_s && method != "HEAD"_s);
++    double timeout = request.timeoutInterval();
++    fetch->m_timeout = timeout > 0 ? static_cast<unsigned>(std::clamp(timeout, 1.0, static_cast<double>(maximumTimeout))) : defaultTimeout;
++    addToFetchThread(fetch.copyRef());
++    return fetch;
++}
++
++void AmigaWebFetch::continueAfterResponse()
++{
++    m_mayRead = true;
++    wakeFetchThread();
++}
++
++void AmigaWebFetch::cancel()
++{
++    m_handle = nullptr;
++    m_cancelled = true;
++    wakeFetchThread();
++}
++
++void AmigaWebFetch::didReceiveHead(AmigaResponseHead&& head)
++{
++    RefPtr handle = m_handle;
++    if (!handle || m_cancelled)
++        return;
++    head.url = m_request.url();
++    ResourceResponse response(head);
++    handle->amigaDidReceiveResponse(m_request, head.headers, WTF::move(response));
++}
++
++void AmigaWebFetch::didFail(unsigned long error, bool certificateNotTrusted)
++{
++    RefPtr handle = m_handle;
++    if (!handle || m_cancelled)
++        return;
++    m_handle = nullptr;
++    static constexpr auto lastCode = static_cast<unsigned long>(ResourceError::AmigaCode::UploadFailed);
++    auto code = static_cast<ResourceError::AmigaCode>(error >= 1 && error <= lastCode ? error : errorProtocol);
++    if (certificateNotTrusted)
++        code = ResourceError::AmigaCode::CertificateNotTrusted;
++    auto type = code == ResourceError::AmigaCode::Timeout && m_request.timeoutInterval() ? ResourceError::Type::Timeout : ResourceError::Type::General;
++    handle->amigaDidFail(ResourceError(code, m_request.url(), { }, type));
++}
++
++// ---- one load: the network thread ----
++
++void AmigaWebFetch::failWithoutNetwork()
++{
++    callOnMainThread([protectedThis = Ref { *this }] {
++        protectedThis->didFail(errorHost, false);
++    });
++}
++
++bool AmigaWebFetch::fail(unsigned long error, bool certificateNotTrusted)
++{
++    callOnMainThread([protectedThis = Ref { *this }, error, certificateNotTrusted] {
++        protectedThis->didFail(error, certificateNotTrusted);
++    });
++    return false;
++}
++
++void AmigaWebFetch::close()
++{
++    obwf_fetch_free(std::exchange(m_fetch, nullptr));
++    m_file = { };
++    m_body = nullptr;
++}
++
++// The next part of the body into m_part (CurlFormDataStream's job): false
++// when it could not be read.
++bool AmigaWebFetch::readPart()
++{
++    size_t room = static_cast<size_t>(std::min<uint64_t>(partSize, m_bodyLeft));
++    m_part.resize(room);
++    size_t filled = 0;
++    auto& elements = m_body->elements();
++    while (filled < room && m_element < elements.size()) {
++        auto into = m_part.mutableSpan().subspan(filled);
++        std::optional<size_t> got = WTF::switchOn(elements[m_element].data,
++            [&](const Vector<uint8_t>& bytes) -> std::optional<size_t> {
++                size_t count = std::min(into.size(), bytes.size() - m_offset);
++                memcpy(into.data(), bytes.span().data() + m_offset, count);
++                m_offset += count;
++                if (m_offset == bytes.size()) {
++                    m_offset = 0;
++                    ++m_element;
++                }
++                return count;
++            }, [&](const FormDataElement::EncodedFileData& file) -> std::optional<size_t> {
++                if (!m_file) {
++                    m_file = FileSystem::openFile(file.filename, FileSystem::FileOpenMode::Read);
++                    if (!m_file)
++                        return std::nullopt;
++                    if (file.fileStart > 0 && !m_file.seek(file.fileStart, FileSystem::FileSeekOrigin::Beginning))
++                        return std::nullopt;
++                    m_fileLeft = file.fileLength < 0 ? std::numeric_limits<uint64_t>::max() : static_cast<uint64_t>(file.fileLength);
++                }
++                auto read = m_file.read(into.first(static_cast<size_t>(std::min<uint64_t>(into.size(), m_fileLeft))));
++                if (!read)
++                    return std::nullopt;
++                m_fileLeft -= *read;
++                if (!*read || !m_fileLeft) {
++                    m_file = { };
++                    ++m_element;
++                }
++                return static_cast<size_t>(*read);
++            }, [](const FormDataElement::EncodedBlobData&) -> std::optional<size_t> {
++                return std::nullopt;
++            }, [](const FormDataElement::PendingStreamData&) -> std::optional<size_t> {
++                return std::nullopt;
++            });
++        if (!got)
++            return false;
++        filled += *got;
++    }
++    // Less than the length said (a file that shrank) cannot be sent.
++    return filled == room;
++}
++
++// The rest of the body, as far as the transport takes it now: false when
++// the load failed.
++bool AmigaWebFetch::sendBody()
++{
++    while (m_bodyLeft) {
++        if (m_part.isEmpty() && !readPart())
++            return fail(static_cast<unsigned long>(ResourceError::AmigaCode::UploadFailed));
++        bool last = m_part.size() >= m_bodyLeft;
++        int taken = obwf_fetch_send(m_fetch, m_part.span().data(), m_part.size(), last);
++        if (taken < 0)
++            return fail(errorClosed);
++        if (!taken)
++            return true;
++        m_bodyLeft -= m_part.size();
++        m_part.clear();
++        callOnMainThread([protectedThis = Ref { *this }, sent = m_bodyLength - m_bodyLeft, total = m_bodyLength] {
++            if (RefPtr handle = protectedThis->m_handle; handle && handle->client())
++                handle->client()->didSendData(handle.get(), sent, total);
++        });
++    }
++    m_body = nullptr;
++    return true;
++}
++
++bool AmigaWebFetch::open(OBWFNet* net)
++{
++    static constexpr char identity[] = "Accept-Encoding: identity\n";
++    bool decode = obwf_net_decodes(net);
++    if (!decode)
++        m_requestText.append(std::span<const char> { identity, sizeof identity - 1 });
++    m_requestText.append('\0');
++
++    m_bodyLeft = m_body ? m_bodyLength : 0;
++    if (m_bodyLeft && !readPart())
++        return fail(static_cast<unsigned long>(ResourceError::AmigaCode::UploadFailed));
++    unsigned long error = 0;
++    m_fetch = obwf_fetch_new(net, m_requestText.span().data(), m_requestText.size() - 1, decode, m_hasBody,
++        static_cast<unsigned long>(m_bodyLength), m_part.span().data(), m_part.size(), m_timeout, &error);
++    m_requestText.clear();
++    if (!m_fetch)
++        return fail(error);
++    if (m_bodyLeft) {
++        m_bodyLeft -= m_part.size();
++        m_part.clear();
++    }
++    m_state = State::Head;
++    return true;
++}
++
++static AmigaResponseHead responseHead(const OBWFHead& head)
++{
++    AmigaResponseHead response;
++    response.statusCode = static_cast<int>(head.status);
++    response.httpVersion = static_cast<unsigned>(head.version);
++    response.expectedContentLength = head.lengthKnown ? static_cast<long long>(head.length) : 0;
++    auto text = unsafeMakeSpan(head.text, head.textLength);
++    while (!text.empty()) {
++        size_t end = 0;
++        while (end < text.size() && text[end] != '\n')
++            ++end;
++        size_t length = end;
++        if (length && text[length - 1] == '\r')
++            --length;
++        if (length)
++            response.headers.append(String::fromLatin1(text.first(length)));
++        text = text.subspan(std::min(end + 1, text.size()));
++    }
++    return response;
++}
++
++bool AmigaWebFetch::readBody()
++{
++    // A few parts at a time, so that every load moves on.
++    for (unsigned i = 0; i < 8; ++i) {
++        const void* data = nullptr;
++        int end = 0;
++        unsigned long error = 0;
++        long got = obwf_fetch_read(m_fetch, &data, &end, &error);
++        if (got > 0) {
++            auto buffer = SharedBuffer::create(unsafeMakeSpan(static_cast<const uint8_t*>(data), static_cast<size_t>(got)));
++            callOnMainThread([protectedThis = Ref { *this }, buffer = WTF::move(buffer)]() mutable {
++                if (RefPtr handle = protectedThis->m_handle; handle && !protectedThis->m_cancelled)
++                    handle->amigaDidReceiveData(WTF::move(buffer));
++            });
++        }
++        if (end) {
++            if (error)
++                return fail(error);
++            callOnMainThread([protectedThis = Ref { *this }] {
++                RefPtr handle = protectedThis->m_handle;
++                if (!handle || protectedThis->m_cancelled)
++                    return;
++                protectedThis->m_handle = nullptr;
++                NetworkLoadMetrics metrics;
++                metrics.responseEnd = MonotonicTime::now();
++                metrics.markComplete();
++                handle->amigaDidFinish(metrics);
++            });
++            return false;
++        }
++        if (got <= 0)
++            break;
++    }
++    return true;
++}
++
++bool AmigaWebFetch::step(OBWFNet* net)
++{
++    if (m_cancelled)
++        return false;
++    switch (m_state) {
++    case State::Start:
++        if (!open(net))
++            return false;
++        [[fallthrough]];
++    case State::Head: {
++        if (m_bodyLeft && !sendBody())
++            return false;
++        OBWFHead head;
++        int got = obwf_fetch_head(m_fetch, &head);
++        if (!got)
++            return true;
++        if (got < 0 || head.error) {
++            // A certificate the transport does not trust comes back with its summary.
++            bool untrusted = got > 0 && head.error == errorTLS && head.info
++                && std::string_view { head.info, static_cast<size_t>(head.infoLength) }.find("subject=") != std::string_view::npos;
++            return fail(head.error ? head.error : errorHost, untrusted);
++        }
++        // The body stops going out once the server has answered.
++        m_bodyLeft = 0;
++        m_body = nullptr;
++        callOnMainThread([protectedThis = Ref { *this }, response = responseHead(head)]() mutable {
++            protectedThis->didReceiveHead(WTF::move(response));
++        });
++        m_state = State::WaitForClient;
++        [[fallthrough]];
++    }
++    case State::WaitForClient:
++        if (!m_mayRead)
++            return true;
++        m_state = State::Body;
++        [[fallthrough]];
++    case State::Body:
++        return readBody();
++    }
++    return false;
++}
++
++} // namespace WebCore
+diff --git a/Source/WebCore/platform/network/amiga/WebFetchAmiga.h b/Source/WebCore/platform/network/amiga/WebFetchAmiga.h
+new file mode 100644
+index 00000000000..e22d1d7166c
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/WebFetchAmiga.h
+@@ -0,0 +1,89 @@
++/*
++ * One load on openweb.fetch (WebFetchAmiga.cpp): the second backend of
++ * ResourceHandleAmiga.cpp beside curl, picked with the Shell variable
++ * OB_NET (curl, the default, or openweb). ResourceHandleAmiga.cpp keeps
++ * the cookies, redirects and the HTTP cache for both; this is only the
++ * request on the wire, run from one network thread.
++ * MIT, Copyright (c) 2026 AmigaChrome Team.
++ * SPDX-License-Identifier: MIT
++ */
++
++#pragma once
++
++#include "OpenWebFetchAmiga.h"
++#include "ResourceRequest.h"
++#include <atomic>
++#include <wtf/FileHandle.h>
++#include <wtf/ThreadSafeRefCounted.h>
++#include <wtf/Vector.h>
++
++namespace WebCore {
++
++class FormData;
++class ResourceHandle;
++struct AmigaResponseHead;
++
++class AmigaWebFetch final : public ThreadSafeRefCounted<AmigaWebFetch, WTF::DestructionThread::Main> {
++public:
++    // OB_NET=openweb (read once), in an engine built with openweb.fetch.
++    static bool isWanted();
++    // On the main thread: request goes out for handle, which hears of it
++    // through its amigaDid... calls. user and password, when given, go in
++    // the URL, for the transport to answer a 401 with (Basic or Digest).
++    static Ref<AmigaWebFetch> start(ResourceHandle&, const ResourceRequest&, const String& user, const String& password);
++    // Stops the network thread, whatever it is loading (at exit).
++    static void stopThread();
++
++    ~AmigaWebFetch();
++
++    // On the main thread: the client has taken the response, so the body
++    // may come; or the load is no longer wanted.
++    void continueAfterResponse();
++    void cancel();
++
++    // On the network thread: moves the load on, false once it has ended;
++    // then close() frees its fetch.
++    bool step(OBWFNet*);
++    void close();
++    void failWithoutNetwork();
++
++private:
++    AmigaWebFetch(ResourceHandle&, const ResourceRequest&);
++
++    bool open(OBWFNet*);
++    bool sendBody();
++    bool readPart();
++    bool readBody();
++    bool fail(unsigned long error, bool certificateNotTrusted = false);
++
++    // On the main thread.
++    void didReceiveHead(AmigaResponseHead&&);
++    void didFail(unsigned long error, bool certificateNotTrusted);
++
++    // The main thread's.
++    ResourceHandle* m_handle;
++    const ResourceRequest m_request;
++
++    // Made on the main thread before the start, then the network thread's.
++    Vector<char> m_requestText;
++    RefPtr<FormData> m_body;
++    uint64_t m_bodyLength { 0 };
++    bool m_hasBody { false };
++    unsigned m_timeout { 0 };
++
++    std::atomic<bool> m_cancelled { false };
++    std::atomic<bool> m_mayRead { false };
++
++    // The network thread's.
++    enum class State : uint8_t { Start, Head, WaitForClient, Body };
++    State m_state { State::Start };
++    OBWFFetch* m_fetch { nullptr };
++    uint64_t m_bodyLeft { 0 };
++    Vector<uint8_t> m_part;
++    size_t m_element { 0 };
++    size_t m_offset { 0 };
++    FileSystem::FileHandle m_file;
++    uint64_t m_fileLeft { 0 };
++};
++
++} // namespace WebCore
+-- 
+2.43.0
+

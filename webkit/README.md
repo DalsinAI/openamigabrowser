@@ -305,6 +305,42 @@ The patches, in order:
   `LIBS:json.library` (version 1) must be installed; without it
   `JSON.parse` throws an Error that says so. Also checks the stack in the
   fast `JSON.stringify` on the 68k (no guard page below the stack).
+- `0070-amiga-public-suffixes-without-libpsl.patch`: public suffixes
+  (cookies, sites, `document.domain`) from our own reader of Mozilla's
+  Public Suffix List (`PublicSuffixAmiga.c`) in place of libpsl, which is
+  no longer linked. The list is `PROGDIR:Network/public-suffixes`, made by
+  `tools/psl-compile.py` (`data/public-suffixes`, in the package); a newer
+  list needs no new engine. Host test: `tests/test_public_suffixes.c`,
+  the list's own checks, in `tests/run-host-tests.sh`.
+- `0071-amiga-no-curl-websocket-stream.patch`: curl's WebSocket stream
+  (`CurlStream`, `CurlStreamScheduler`) is not built. It serves WebKit's
+  network process, which the port does not have; pages get no WebSocket
+  channel today (`EmptySocketProvider`), so nothing changes.
+- `0072-amiga-network-types-without-curl.patch`: `ResourceError` gets an
+  Amiga domain (`AmigaNetworkErrorDomain`, `ResourceError::AmigaCode`):
+  openweb.fetch's errors 1 to 9 and the loader's own, with curl's codes
+  mapped onto them; `isCertificationVerificationError` reads it.
+  `ResourceResponse` is built from a plain response head
+  (`AmigaResponseHead`) and `AuthenticationChallenge` from a
+  `ResourceResponse`. curl still does every load, as before.
+- `0073-amiga-openweb-fetch-backend.patch`: loads through openweb.fetch
+  beside curl (`platform/network/amiga/`): `WebFetchAmiga.cpp` runs them on
+  one network thread with `wf_async_start` and `wf_wait`, through a plain C
+  glue (`OpenWebFetchAmiga.c`); `FormData` bodies go through `wf_send`.
+  `ResourceHandleAmiga.cpp` keeps redirects, cookies and the HTTP cache for
+  both. The Shell variable `OB_NET` picks it (`SetEnv OB_NET openweb`);
+  curl is the default. Basic and Digest credentials go in the URL; proxies
+  are the transport's. Bodies are decoded only when the transport decodes
+  (the card); the native transport sends `Accept-Encoding: identity` until
+  the datatypes stream decodes. Needs openamigaservice with the
+  asynchronous calls (protocol 2); without them the engine has curl only.
+- `0074-amiga-png-out-through-datatype.patch`: canvas `toDataURL` and
+  `toBlob` write PNG through a PNG datatype's write (`DTM_WRITE` with
+  `DTWM_RAW`, by `SaveDTObjectA()`, openpng.datatype first, then
+  png.datatype), not cairo's libpng writer; the browser writes no PNG itself
+  and WebCore no longer finds or links libpng. Without a PNG datatype that
+  writes, the picture is not encoded. `obcore-dump` writes its page PNG the
+  same way.
 - `0090-amiga-text-openfont.patch`: text on openfont.library 1.3
   (`USE_OPENFONT`) in place of FreeType, fontconfig and HarfBuzz, which are
   no longer found or linked. Families are matched with OpenFont's

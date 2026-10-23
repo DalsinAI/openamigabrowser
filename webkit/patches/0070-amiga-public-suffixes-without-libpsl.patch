@@ -1,0 +1,369 @@
+From 30717e34a112da05f880a0ca0c5ba139ce7be4de Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 04:26:11 +0000
+Subject: [PATCH] WebCore: public suffixes from our own list reader, not libpsl
+
+PublicSuffixStore's two platform calls (is a name a public suffix, and
+what is its registrable domain) are answered by PublicSuffixAmiga.c in
+place of PublicSuffixStoreCurl.cpp and libpsl. It reads Mozilla's Public
+Suffix List once, from PROGDIR:Network/public-suffixes (then
+ENVARC:OpenBrowser/public-suffixes), as openamigabrowser's
+tools/psl-compile.py writes it: one rule a line, names in Punycode,
+sorted, so the file is searched as it is. The lookup is the list's own
+algorithm: an exception rule wins, then the longest rule, then "*" for
+the registrable domain only. "ck" is a suffix when "*.ck" is a rule, as
+libpsl had it. Without the file nothing is a public suffix and a name's
+site is its last two labels, and the engine says so once on stderr.
+
+libpsl is no longer found or linked. A newer list needs no new engine.
+---
+ Source/WebCore/PlatformAmiga.cmake            |  12 ++
+ .../network/amiga/PublicSuffixAmiga.c         | 201 ++++++++++++++++++
+ .../network/amiga/PublicSuffixAmiga.h         |  30 +++
+ .../network/amiga/PublicSuffixStoreAmiga.cpp  |  46 ++++
+ Source/cmake/OptionsAmiga.cmake               |   1 -
+ 5 files changed, 289 insertions(+), 1 deletion(-)
+ create mode 100644 Source/WebCore/platform/network/amiga/PublicSuffixAmiga.c
+ create mode 100644 Source/WebCore/platform/network/amiga/PublicSuffixAmiga.h
+ create mode 100644 Source/WebCore/platform/network/amiga/PublicSuffixStoreAmiga.cpp
+
+diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
+index 6e25d85c2f3..8efd2fd6438 100644
+--- a/Source/WebCore/PlatformAmiga.cmake
++++ b/Source/WebCore/PlatformAmiga.cmake
+@@ -19,6 +19,16 @@ list(REMOVE_ITEM WebCore_LIBRARIES
+     OpenSSL::SSL
+ )
+ 
++# Public suffixes (cookies, sites, document.domain) come from Mozilla's list
++# in PROGDIR:Network/public-suffixes, read by our own lookup
++# (PublicSuffixAmiga.c), not from libpsl.
++list(REMOVE_ITEM WebCore_SOURCES
++    platform/network/curl/PublicSuffixStoreCurl.cpp
++)
++list(REMOVE_ITEM WebCore_LIBRARIES
++    LibPSL::LibPSL
++)
++
+ # Form controls and scrollbars are drawn by the Adwaita theme, which paints
+ # with GraphicsContext only; the media controls it also carries are left out.
+ list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
+@@ -87,6 +97,8 @@ list(APPEND WebCore_SOURCES
+ 
+     platform/network/amiga/CurlSSLHandleAmiga.cpp
+     platform/network/amiga/NetworkStateNotifierAmiga.cpp
++    platform/network/amiga/PublicSuffixAmiga.c
++    platform/network/amiga/PublicSuffixStoreAmiga.cpp
+ 
+     platform/text/Hyphenation.cpp
+     platform/text/LocaleICU.cpp
+diff --git a/Source/WebCore/platform/network/amiga/PublicSuffixAmiga.c b/Source/WebCore/platform/network/amiga/PublicSuffixAmiga.c
+new file mode 100644
+index 00000000000..e5b8413ad89
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/PublicSuffixAmiga.c
+@@ -0,0 +1,201 @@
++/*
++ * Public suffixes without libpsl (PublicSuffixAmiga.h).
++ *
++ * The list is Mozilla's Public Suffix List, compiled on the host by
++ * openamigabrowser's tools/psl-compile.py into one rule a line, sorted by
++ * byte, under an "OBPSL1 <rules>" line. It is read once into one block and
++ * searched as it is. The lookup is the list's own algorithm
++ * (https://github.com/publicsuffix/list/wiki/Format): an exception rule
++ * wins, otherwise the longest matching rule, otherwise "*" (the last label)
++ * when the caller allows it.
++ * MIT, Copyright (c) 2026 AmigaChrome Team.
++ */
++#include "PublicSuffixAmiga.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define OB_PSL_MAX_NAME 256
++
++static const char *const pslFiles[] = {
++    "PROGDIR:Network/public-suffixes",
++    "ENVARC:OpenBrowser/public-suffixes",
++};
++
++static char *pslText;
++static const char **pslRules;
++static unsigned long pslCount;
++
++/* The file's text, NUL-terminated, or NULL. */
++static char *readFile(const char *path)
++{
++    FILE *f = fopen(path, "rb");
++    char *text = NULL;
++    long size;
++
++    if (!f)
++        return NULL;
++    if (fseek(f, 0, SEEK_END) == 0 && (size = ftell(f)) > 0 && fseek(f, 0, SEEK_SET) == 0
++        && (text = malloc((size_t)size + 1))) {
++        if (fread(text, 1, (size_t)size, f) != (size_t)size) {
++            free(text);
++            text = NULL;
++        } else
++            text[size] = 0;
++    }
++    fclose(f);
++    return text;
++}
++
++/* Splits the text into the rule table; 0 when it isn't a sorted OBPSL1 file. */
++static int takeText(char *text)
++{
++    unsigned long count, i = 0;
++    char *p = text, *end;
++
++    if (strncmp(p, "OBPSL1 ", 7))
++        return 0;
++    count = strtoul(p + 7, &end, 10);
++    if (!count || *end != '\n')
++        return 0;
++    if (!(pslRules = malloc(count * sizeof *pslRules)))
++        return 0;
++    p = end + 1;
++    while (*p && i < count) {
++        char *nl = strchr(p, '\n');
++        if (nl)
++            *nl = 0;
++        pslRules[i] = p;
++        if (i && strcmp(pslRules[i - 1], p) >= 0)
++            break;
++        i++;
++        if (!nl)
++            break;
++        p = nl + 1;
++    }
++    if (i != count) {
++        free(pslRules);
++        pslRules = NULL;
++        return 0;
++    }
++    pslCount = count;
++    return 1;
++}
++
++int ob_psl_load(void)
++{
++    unsigned i;
++
++    if (pslCount)
++        return 1;
++    for (i = 0; i < sizeof pslFiles / sizeof pslFiles[0]; i++) {
++        char *text = readFile(pslFiles[i]);
++        if (!text)
++            continue;
++        if (takeText(text)) {
++            pslText = text;
++            return 1;
++        }
++        fprintf(stderr, "OpenBrowser: %s is not a public suffix list from tools/psl-compile.py\n", pslFiles[i]);
++        free(text);
++    }
++    fprintf(stderr, "OpenBrowser: no public suffix list (Network/public-suffixes): every name is its own site\n");
++    return 0;
++}
++
++int ob_psl_load_text(char *text)
++{
++    if (pslCount || !takeText(text))
++        return 0;
++    pslText = text;
++    return 1;
++}
++
++/* Whether mark + name (len bytes) is a rule. */
++static int isRule(const char *mark, const char *name, size_t len)
++{
++    char key[OB_PSL_MAX_NAME + 4];
++    size_t m = strlen(mark);
++    unsigned long lo = 0, hi = pslCount;
++
++    if (m + len >= sizeof key)
++        return 0;
++    memcpy(key, mark, m);
++    memcpy(key + m, name, len);
++    key[m + len] = 0;
++    while (lo < hi) {
++        unsigned long mid = lo + (hi - lo) / 2;
++        int c = strcmp(pslRules[mid], key);
++        if (!c)
++            return 1;
++        if (c < 0)
++            lo = mid + 1;
++        else
++            hi = mid;
++    }
++    return 0;
++}
++
++/* The public suffix of name: a pointer into name, or NULL when no rule
++ * matches and star is 0. *listed says whether a rule (not "*") matched. */
++static const char *suffixOf(const char *name, int star, int *listed)
++{
++    const char *end = name + strlen(name), *p = end, *best = NULL;
++
++    *listed = 0;
++    while (p > name) {
++        const char *label = p, *parent;
++        while (label > name && label[-1] != '.')
++            label--;
++        parent = p == end ? NULL : p + 1;   /* the labels after this one */
++        if (isRule("!", label, (size_t)(end - label))) {
++            *listed = 1;
++            return parent;
++        }
++        if (isRule("", label, (size_t)(end - label)) || (parent && isRule("*.", parent, (size_t)(end - parent)))) {
++            *listed = 1;
++            best = label;
++        }
++        if (label == name)
++            break;
++        p = label - 1;
++    }
++    if (!best && star) {
++        best = end;
++        while (best > name && best[-1] != '.')
++            best--;
++    }
++    return best;
++}
++
++int ob_psl_is_public_suffix(const char *name)
++{
++    int listed;
++    size_t len = strlen(name);
++
++    if (!len || len > OB_PSL_MAX_NAME || name[0] == '.' || name[len - 1] == '.')
++        return 0;
++    /* "ck" is a suffix when "*.ck" is a rule, as libpsl has it. */
++    if (isRule("*.", name, len))
++        return 1;
++    return suffixOf(name, 0, &listed) == name && listed;
++}
++
++const char *ob_psl_registrable_domain(const char *name)
++{
++    const char *suffix, *p;
++    int listed;
++    size_t len = strlen(name);
++
++    if (!len || len > OB_PSL_MAX_NAME || name[0] == '.' || name[len - 1] == '.')
++        return NULL;
++    suffix = suffixOf(name, 1, &listed);
++    if (!suffix || suffix == name)
++        return NULL;
++    /* One label more than the suffix. */
++    p = suffix - 1;
++    while (p > name && p[-1] != '.')
++        p--;
++    return p;
++}
+diff --git a/Source/WebCore/platform/network/amiga/PublicSuffixAmiga.h b/Source/WebCore/platform/network/amiga/PublicSuffixAmiga.h
+new file mode 100644
+index 00000000000..287e6ee97d2
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/PublicSuffixAmiga.h
+@@ -0,0 +1,30 @@
++/*
++ * Public suffixes without libpsl: Mozilla's Public Suffix List, read from
++ * PROGDIR:Network/public-suffixes (PublicSuffixAmiga.c).
++ * MIT, Copyright (c) 2026 AmigaChrome Team.
++ */
++#ifndef PublicSuffixAmiga_h
++#define PublicSuffixAmiga_h
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Reads the list once; 0 when there is none (then nothing is a public
++ * suffix and every name's site is its last two labels). */
++int ob_psl_load(void);
++/* For tests: the list from text in memory, kept and split in place. */
++int ob_psl_load_text(char *text);
++/* Whether name (lower case, ASCII, no leading or trailing dot) is a public
++ * suffix by a rule of the list; "*" alone does not count. */
++int ob_psl_is_public_suffix(const char *name);
++/* The registrable domain: the public suffix and one label more, as a pointer
++ * into name, or NULL when name is a public suffix itself. A name no rule
++ * matches has its last label as its suffix. */
++const char *ob_psl_registrable_domain(const char *name);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff --git a/Source/WebCore/platform/network/amiga/PublicSuffixStoreAmiga.cpp b/Source/WebCore/platform/network/amiga/PublicSuffixStoreAmiga.cpp
+new file mode 100644
+index 00000000000..326be0ed728
+--- /dev/null
++++ b/Source/WebCore/platform/network/amiga/PublicSuffixStoreAmiga.cpp
+@@ -0,0 +1,46 @@
++/*
++ * PublicSuffixStore's two platform calls on our own list reader
++ * (PublicSuffixAmiga.c) in place of libpsl.
++ * MIT, Copyright (c) 2026 AmigaChrome Team.
++ */
++#include "config.h"
++#include "PublicSuffixStore.h"
++
++#include "PublicSuffixAmiga.h"
++#include <wtf/text/CString.h>
++
++namespace WebCore {
++
++static void loadPublicSuffixes()
++{
++    // Once, on whichever thread asks first; C++ makes the static's
++    // initialisation safe across threads.
++    static const bool loaded = ob_psl_load();
++    UNUSED_VARIABLE(loaded);
++}
++
++bool PublicSuffixStore::platformIsPublicSuffix(StringView domain) const
++{
++    if (domain.isEmpty())
++        return false;
++    loadPublicSuffixes();
++    return ob_psl_is_public_suffix(reinterpret_cast<const char*>(domain.convertToASCIILowercase().utf8().data()));
++}
++
++String PublicSuffixStore::platformTopPrivatelyControlledDomain(StringView domain) const
++{
++    // This works with the format cookies use, so leading dots are skipped.
++    unsigned position = 0;
++    while (position < domain.length() && domain[position] == '.')
++        position++;
++    if (position == domain.length())
++        return String();
++
++    loadPublicSuffixes();
++    auto name = domain.substring(position).convertToASCIILowercase().utf8();
++    if (const char* registrable = ob_psl_registrable_domain(reinterpret_cast<const char*>(name.data())))
++        return String::fromLatin1(registrable);
++    return String();
++}
++
++} // namespace WebCore
+diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
+index a0736dabcd7..c0d1788a170 100644
+--- a/Source/cmake/OptionsAmiga.cmake
++++ b/Source/cmake/OptionsAmiga.cmake
+@@ -34,7 +34,6 @@ if (ENABLE_WEBCORE)
+     find_package(Fontconfig 2.13.0 REQUIRED)
+     find_package(Freetype 2.9.0 REQUIRED)
+     find_package(HarfBuzz 2.7.4 REQUIRED COMPONENTS ICU)
+-    find_package(LibPSL 0.20.2 REQUIRED)
+     find_package(OXP 0.1 REQUIRED)
+     find_package(PNG REQUIRED)
+     find_package(SQLite3 3.23.1 REQUIRED)
+-- 
+2.43.0
+

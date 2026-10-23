@@ -57,6 +57,27 @@ if (EXISTS "${OB_OPENSERVICE_DIR}/include/devices/openservice.h")
     set(OB_OPENSERVICE 1)
 endif ()
 
+# openweb.fetch's client and its native transport (openamigaservice's
+# src/webfetch.c and src/wfnet*.c), for WebCore's second network backend
+# (patch 0073: the Shell variable OB_NET=openweb, curl otherwise). WebCore's
+# OpenWebFetchAmiga.c is given the client's headers; without them it builds
+# empty and curl does every load, as it does with a checkout older than
+# the asynchronous calls (wf_async_start, protocol v2). The native
+# transport reaches opentls.library through OpenTLS's headers.
+set(OB_WEBFETCH_ASYNC "")
+if (OB_OPENSERVICE AND EXISTS "${OB_OPENSERVICE_DIR}/src/webfetch.c")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${OB_OPENSERVICE_DIR}/include/openweb/webfetch.h")
+    file(STRINGS "${OB_OPENSERVICE_DIR}/include/openweb/webfetch.h" OB_WEBFETCH_ASYNC REGEX "wf_async_start")
+endif ()
+if (OB_WEBFETCH_ASYNC)
+    file(GLOB OB_WFNET_SOURCES "${OB_OPENSERVICE_DIR}/src/wfnet*.c")
+    list(APPEND OB_CORE_SOURCES "${OB_OPENSERVICE_DIR}/src/webfetch.c" ${OB_WFNET_SOURCES})
+    set_property(SOURCE "${OB_OPENSERVICE_DIR}/src/wfnet_amiga.c" APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/opentls/include")
+    set_property(SOURCE "${WEBCORE_DIR}/platform/network/amiga/OpenWebFetchAmiga.c" TARGET_DIRECTORY WebCore APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${OB_OPENSERVICE_DIR}/include")
+endif ()
+
 set(OB_FRAMEWORKS
     JavaScriptCore
     PAL
@@ -103,7 +124,7 @@ macro(OB_LINK _target)
     target_link_libraries(${_target} PRIVATE
         -Wl,--start-group
         OBCore WebCore PAL JavaScriptCore WTF bmalloc
-        cairo pixman-1 png z oxp sqlite3 curl ${OB_NGHTTP2} psl
+        cairo pixman-1 png z oxp sqlite3 curl ${OB_NGHTTP2}
         icui18n icuuc icudata
         amiga pthread atomic stdc++ m
         -Wl,--end-group

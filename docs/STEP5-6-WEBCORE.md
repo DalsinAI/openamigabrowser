@@ -277,17 +277,17 @@ engine's link map.
 
 ### Step 5, network (first: it is smaller)
 
-1. **Public suffixes from a file.** `PublicSuffixStoreAmiga.cpp` in place
+1. **Public suffixes from a file** (patch 0070). `PublicSuffixStoreAmiga.cpp` in place
    of `PublicSuffixStoreCurl.cpp`, the host script and the data file in
    `PROGDIR:`. Map: `libpsl.a`. Needs nothing from openweb.fetch.
-2. **Unused curl code out.** `CurlStream` and `CurlStreamScheduler` (and
+2. **Unused curl code out** (patch 0071; patch 0010 stays until curl goes in 5). `CurlStream` and `CurlStreamScheduler` (and
    `CurlContext::streamScheduler()`), and patch 0010's proxy experiment if
    no one still uses it. Map: their objects (559 lines of source for the
    first two).
-3. **The types without curl.** `ResourceError` with its own domain,
+3. **The types without curl** (patch 0072). `ResourceError` with its own domain,
    `ResourceResponse` and `AuthenticationChallenge` built from a plain
    response head. curl still does the work. Map: nothing; this is what makes 4 and 5 small.
-4. **The openweb.fetch backend beside curl.** The request half of
+4. **The openweb.fetch backend beside curl** (patch 0073; `OB_NET=openweb`). The request half of
    `ResourceHandleAmiga.cpp` on `wf_*` (asynchronous, as above), with
    `CurlFormDataStream`'s job done by a `FormData` reader feeding
    `wf_send()`. A switch picks curl or openweb.fetch, so both are measured
@@ -316,7 +316,7 @@ page's painting is still cairo's, beside `OBVIEW_BENCH`'s `paint_ms`, and
 the pictures are compared with cairo's pixel for pixel as in the display-list
 experiment (`WEBCORE_PORT.md`).
 
-1. **PNG through the PNG datatype.** `platformEncodeData()` and
+1. **PNG through the PNG datatype** (patch 0074). `platformEncodeData()` and
    `DumpMain.cpp` write PNG through datatypes.library. Map: `libpng.a` and
    cairo's PNG object, as long as nothing else in cairo pulls that object
    in (to be checked on the map).

@@ -48,6 +48,11 @@ OS32M="-D_DEFAULT_SOURCE -Daligned_alloc=os32_aligned_alloc -Dmemalign=os32_mema
 # opendir(), stat() and setenv(): POSIX
 "$CC" $FLAGS -D_DEFAULT_SOURCE -I"$HERE/src/webcore" "$HERE/src/webcore/ob_httpcache.c" \
     "$HERE/tests/test_ob_httpcache.c" -o "$OUT/test_ob_httpcache"
+# the engine's public suffix lookup, which lives in WebKit patch 0070
+python3 "$HERE/tools/patch-files.py" "$HERE/webkit/patches/0070-amiga-public-suffixes-without-libpsl.patch" \
+    "$OUT/psl" PublicSuffixAmiga.c PublicSuffixAmiga.h
+"$CC" $FLAGS -I"$OUT/psl" "$OUT/psl/PublicSuffixAmiga.c" "$HERE/tests/test_public_suffixes.c" \
+    -o "$OUT/test_public_suffixes"
 "$OUT/test_wl_html" > "$OUT/test_wl_html.log" || { cat "$OUT/test_wl_html.log"; exit 1; }
 tail -1 "$OUT/test_wl_html.log"
 "$OUT/test_wl_css"
@@ -57,6 +62,7 @@ tail -1 "$OUT/test_wl_html.log"
 "$OUT/test_oam_html"
 rm -rf "$OUT/httpcache"
 "$OUT/test_ob_httpcache" "$OUT/httpcache"
+"$OUT/test_public_suffixes" "$HERE/data/public-suffixes" "$HERE/tests/public-suffix-cases.txt"
 # fewer operations under the sanitizers, which are slower
 R=200000
 [ "${SANITIZE:-0}" = 1 ] && R=50000

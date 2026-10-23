@@ -60,7 +60,7 @@ The design documents disagree with each other (inventory of 22 October
 | Decision | Our part | State of our part | In today's engine? | What still links the old one |
 | --- | --- | --- | --- | --- |
 | XML is OXP | OXP, openamigaxml #7-#9 (passes the W3C suite) | done | **yes** (patch 0030, #13) | nothing |
-| Text is OpenFont | openfont.library 1.0 (20 calls): own font reader and rasteriser (openamigafont #9), shaper (#10, HarfBuzz 14.5.1 still inside), font index and fallback (#8) | built only in lab t4-a (17 Oct), in no release; OpenFontLibTest not yet passed on a lab. Short of what WebCore needs: UTF-8 input only, no script, language, direction or feature settings, A8 coverage only, no glyph outlines, no fonts from memory (web fonts), no colour or variable fonts | **no** | WebCore's FreeType, fontconfig and HarfBuzz files: FontCacheFreeType, FontSetCache, FontPlatformDataFreeType, FontCustomPlatformDataFreeType, GlyphPageTreeNodeFreeType, ComplexTextControllerHarfBuzz |
+| Text is OpenFont | openfont.library 1.4 (openamigafont #15, #16): own reader, rasteriser and shaper (HarfBuzz out of the library, 1,054,068 to 252,368 bytes), UTF-16 shaping with script, language, direction and features, outlines, metrics, tables, web fonts from memory, a face for a character, exact family matching (OFA_Exact), and colour emoji (CBDT, sbix) decoded through the PNG datatype (256,700 bytes) | done: OpenFontLibTest passed on lab copies of Instance-14 and Instance-32 (1.3, 23 Oct); WebKit patch 0090 (`USE_OPENFONT`) is the font backend: FontCache, FontPlatformData, glyph pages, web fonts and the shaping path, glyphs drawn through cairo user fonts | **yes** (patch 0090, #94) | nothing: FreeType, HarfBuzz, fontconfig and Expat are 0 bytes in the engine's map (dev build, 23 Oct); cairo is built without its FreeType backend (openamigacairo `CAIRO_FONTS=user`) |
 | Drawing is OpenGfx/OpenGPU | OpenGfx (openamigagfx: graphics.library 47.100 and layers.library 47.102, clean room), opengpu.library 0.16 (openamigartg), pixman.library 2.0 (25 calls over OpenGPU; builds from openamigapixman main, e4bd3ec) | OpenGfx has graphics.library's API: no anti-aliased paths, gradients, alpha compositing or glyph runs, and nothing deeper than 8 planes yet. OpenGPU's command stream has fill, copy, mask, premultiplied compositing, bilinear and affine scaled images and the 13 Porter-Duff operators (not yet on Vulkan), but no anti-aliased paths, gradients, blur or the PDF/HSL blend modes. openamigagfx main builds graphics.library 47.100 and layers.library 47.102 (rebuilt on the dev machine 22 Oct). No GraphicsContext exists on either; GraphicsContextOpenGfx and DrawGlyphRun are in design documents only | **no** | WebCore's cairo GraphicsContext and image surfaces |
 | Network is openweb.fetch | openweb.fetch/1 (openamigaservice `src/webfetch.c`, `docs/OPENWEB_FETCH.md`, v1 12 Oct) | runs on the services card only, and its TLS is the host's OpenSSL 3, not OpenTLS. It has cookies (passes every Set-Cookie through), keep-alive pooling, host-side gzip, deflate and Brotli, and 64 fetches at once. It lacks HTTP/2, WebSocket, proxies, HTTP auth and a LAN transport. No `OWFetch` binary on any drive; no WebCore network backend on it | **no**: today curl 8.22 on opentls.library 1.3 (patch 0022), HTTP/2 through nghttp2 (0023), bsdsocket.library from OpenSocket | WebCore's CurlContext and curl loader |
 | Decoders are datatypes | picture datatypes (openamigaimage); stream.datatype, gzip.datatype, brotli.datatype | pictures: yes. The stream class and the gzip and Brotli datatypes are a design only (JIT-on-core 0.5 §5.1), with no code in any repo | partly | libpng (for cairo) and zlib are still linked; curl decodes compressed bodies |
@@ -73,9 +73,9 @@ What the old libraries cost in today's engine, from its link map (MiB):
 | Library | Size | Goes when |
 | --- | --- | --- |
 | ICU (code 3.4 + data 5.2) | 8.6 | data: step 2; code: step 7 |
-| HarfBuzz | 1.16 | step 3 |
-| FreeType | 0.50 | step 3 |
-| fontconfig, with Expat | 0.45 | step 3 |
+| HarfBuzz | 1.16 | step 3 (gone, #94) |
+| FreeType | 0.50 | step 3 (gone, #94) |
+| fontconfig, with Expat | 0.45 | step 3 (gone, #94) |
 | cairo, pixman, libpng | 0.94 | step 6 |
 | curl, nghttp2, libpsl | 0.54 | step 5 |
 | JavaScriptCore | 21.1 | step 4, into javascript.library |
@@ -151,6 +151,13 @@ is done when its "done when" holds on the lab instance.
    font backend (FontCache, FontPlatformData, GlyphPage and the shaping
    path) that calls it. Done when FreeType, HarfBuzz, fontconfig and Expat
    are gone from the engine's map and the benchmark pages render the same.
+   **Done 23 October 2026** (openamigafont #15 and #16, openamigacairo #8,
+   #94, WebKit patch 0090): the engine built on dev in 1,792 s with
+   FreeType, HarfBuzz, harfbuzz-icu, fontconfig and Expat at 0 bytes in
+   both maps. Emoji come from openfont.library 1.4 through the PNG datatype,
+   so FreeType's libpng use went with it. The benchmark pages on the lab
+   copies of Instance-14 and Instance-32 are recorded in
+   `labs/webcore-openfont-20261023/` as they finish.
 4. **The browser on javascript.library.** Before the switch, build the
    library the way the browser is built: MinSizeRel with -O2 for
    JavaScriptCore (#57), and with the 68k JIT patches. Today
@@ -166,6 +173,14 @@ is done when its "done when" holds on the lab instance.
    brotli.datatype, so compressed bodies are decoded the Amiga way. Then a
    WebCore network backend in place of CurlContext and the curl loader.
    Done when curl, nghttp2 and libpsl are gone from the engine's map.
+
+   The WebCore side goes in the order of `STEP5-6-WEBCORE.md` (#91),
+   patches 0070-0079. Done so far: libpsl is out (patch 0070): public
+   suffixes come from our own reader of Mozilla's list,
+   `PROGDIR:Network/public-suffixes`. Patch 0071 stops building curl's
+   unused WebSocket stream. Patches 0072 (the response types without curl)
+   and 0073 (the openweb.fetch backend beside curl, `OB_NET=openweb`) are
+   written, not yet built.
 6. **Drawing on OpenGfx and OpenGPU.** Much of what a GraphicsContext
    needs already exists; reuse it, don't write it again (check of 22 October):
    - anti-aliased path fill and clip: openamigafont `of_raster_a8()` (A8
@@ -178,6 +193,11 @@ is done when its "done when" holds on the lab instance.
      back end);
    - glyphs: OpenGPU MASK (add a batched glyph run and a glyph cache);
    - shadows: openamigagfx `oc_shadow()`.
+
+   Done so far: PNG encoding through the PNG datatype's write (DTM_WRITE,
+   patch 0074; openpng.datatype writes from 47.4); OpenGPU 0.18's stream v1.6 (openamigartg #109) has
+   anti-aliased path fill (non-zero and even-odd), strokes, gradients,
+   image patterns, blur and the blend modes, on its CPU core.
 
    Still to write: anti-aliased strokes, even-odd fill, linear, radial and
    conic gradients, blur, the PDF/HSL blend modes, OpenGfx bitmaps deeper

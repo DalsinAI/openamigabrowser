@@ -1,4 +1,4 @@
-From 63738489b7434948a42fc4f06f66191ad541be8f Mon Sep 17 00:00:00 2001
+From cbd5bb4a4f9642984433a0606827c873e94d0053 Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 04:59:39 +0000
 Subject: [PATCH] WebCore: text on openfont.library on the Amiga
@@ -74,7 +74,7 @@ CAIRO_FONTS=user).
  create mode 100644 Source/cmake/FindOpenFont.cmake
 
 diff --git a/Source/WebCore/PlatformAmiga.cmake b/Source/WebCore/PlatformAmiga.cmake
-index 6e25d85c2f3..651a96bcb22 100644
+index 7a8b83a94ea..ff84b13586f 100644
 --- a/Source/WebCore/PlatformAmiga.cmake
 +++ b/Source/WebCore/PlatformAmiga.cmake
 @@ -1,6 +1,6 @@
@@ -2514,7 +2514,7 @@ index 00000000000..5d981ac944d
 +
 +mark_as_advanced(OpenFont_INCLUDE_DIR)
 diff --git a/Source/cmake/OptionsAmiga.cmake b/Source/cmake/OptionsAmiga.cmake
-index a0736dabcd7..5f335350330 100644
+index 66562bed729..60a0bd3e1ea 100644
 --- a/Source/cmake/OptionsAmiga.cmake
 +++ b/Source/cmake/OptionsAmiga.cmake
 @@ -1,6 +1,6 @@
@@ -2526,19 +2526,18 @@ index a0736dabcd7..5f335350330 100644
  # the embedding layer (page clients, loader strategy) belongs to the browser.
  
  if (CMAKE_SYSTEM_NAME MATCHES "^(AROS|AmigaOS)$")
-@@ -31,10 +31,8 @@ find_package(ICU 70.1 REQUIRED COMPONENTS data i18n uc)
+@@ -31,9 +31,7 @@ find_package(ICU 70.1 REQUIRED COMPONENTS data i18n uc)
  if (ENABLE_WEBCORE)
      find_package(Cairo 1.16.0 REQUIRED)
      find_package(CURL 7.85.0 REQUIRED)
 -    find_package(Fontconfig 2.13.0 REQUIRED)
 -    find_package(Freetype 2.9.0 REQUIRED)
 -    find_package(HarfBuzz 2.7.4 REQUIRED COMPONENTS ICU)
-     find_package(LibPSL 0.20.2 REQUIRED)
 +    find_package(OpenFont 1.3 REQUIRED)
      find_package(OXP 0.1 REQUIRED)
-     find_package(PNG REQUIRED)
      find_package(SQLite3 3.23.1 REQUIRED)
-@@ -109,8 +107,11 @@ SET_AND_EXPOSE_TO_BUILD(WTF_DEFAULT_EVENT_LOOP 0)
+     if (NOT TARGET SQLite3::SQLite3) # CMake < 4.3
+@@ -107,8 +105,11 @@ SET_AND_EXPOSE_TO_BUILD(WTF_DEFAULT_EVENT_LOOP 0)
  # Set even when only JavaScriptCore is built, so cmakeconfig.h stays the same.
  SET_AND_EXPOSE_TO_BUILD(USE_CAIRO ON)
  SET_AND_EXPOSE_TO_BUILD(USE_CURL ON)
