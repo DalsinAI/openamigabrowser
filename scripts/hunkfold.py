@@ -64,13 +64,17 @@ definitions only). Then step 1 alone would be enough, with no map.
 
 usage: hunkfold.py COMMAND ...
   winners MAP OUT        the winners of a link, from its -Map file
-  fold IN OUT [--winners W] [--name N] [--quiet]
+  fold IN OUT [--winners W] [--imports I] [--name N] [--quiet]
                          rewrite IN (an object, or a hunk library: a stream
                          of HUNK_UNITs, which is what m68k-amigaos-ar writes)
                          as OUT (IN may be OUT). N is how the file shows in
                          the map (default IN); a .a file's units show as
                          basename(N)(basename(unit name)), for example
                          libWebCore.a(Page.cpp.obj)
+                         I: names (the last word of each line) whose every
+                         copy here becomes local, as for a losing copy: the
+                         names a jsimage client takes from JavaScriptEngine
+                         (scripts/jsimage.py)
   members PLAIN FOLDED   the archive members two -Map files linked; fails
                          when FOLDED linked one PLAIN did not
   copies MAP             section names linked more than once, and how many
@@ -337,6 +341,11 @@ def write_unit(uname, hunks):
     return b''.join(out)
 
 
+# --imports: the names a jsimage client takes from JavaScriptEngine
+# (scripts/jsimage.py); none of the program's own copies may win
+IMPORTS = set()
+
+
 def fold_unit(hunks, st, winners=None, key=None):
     """Rewrite relocations in place.  Returns True if anything changed.
 
@@ -431,10 +440,22 @@ def fold_unit(hunks, st, winners=None, key=None):
                 ext[1].append([et, name, sorted(offs), None])
     st['sections_rewritten'] += len(touched)
     st['sections_no_relocs'] += len(targets) - len(touched)
-    # 4. non-winning copies: weak def -> local def
-    if winners is not None:
+    # 4. non-winning copies: weak def -> local def; with --imports, every
+    #    copy of a name the program takes from JavaScriptEngine
+    if winners is not None or IMPORTS:
         for th in targets:
             h = hunks[th]
+            if targets[th] in IMPORTS:
+                for t, p in h.blocks:
+                    if t == HUNK_EXT:
+                        for e in p:
+                            if e[1] == targets[th] and ext_base(e[0]) == EXT_DEF:
+                                e[0] = EXT_DEF | EXT_LOCAL
+                st['defs_made_local_import'] += 1
+                changed = True
+                continue
+            if winners is None:
+                continue
             w = winners.get(h.name)
             if w is None:
                 st['defs_kept_no_winner'] += 1
@@ -717,6 +738,10 @@ def main(argv):
     while i < len(argv):
         if argv[i] == '--winners':
             winners = load_winners(argv[i + 1])
+            i += 2
+        elif argv[i] == '--imports':
+            with open(argv[i + 1]) as f:
+                IMPORTS.update(line.split()[-1].encode() for line in f if line.strip())
             i += 2
         elif argv[i] == '--name':
             name = argv[i + 1]

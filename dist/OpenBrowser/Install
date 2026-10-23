@@ -1,4 +1,4 @@
-; Install: OpenBrowser 0.8 test (22.10.2026), the Shell route.
+; Install: OpenBrowser 0.8.2 test (23.10.2026), the Shell route.
 ; MIT, Copyright (c) 2026 AmigaChrome Team.
 ; The Installer (Install-OpenBrowser, beside this drawer) does the same with
 ; questions. Run this from the drawer, where it stays:
@@ -9,16 +9,27 @@
 ; What it does; every step is checked, and it stops at the first failure:
 ;  - LIBS:opentls.library 1.2 or newer and LIBS:opencrypto.library 2.1 or
 ;    newer: a missing one goes in; one Version shows to be older is renamed
-;    .before-20261022 and the drawer's goes in; one whose version cannot be
+;    .before-20261023b and the drawer's goes in; one whose version cannot be
 ;    read (not loaded, no $VER in the file) is kept: the Installer reads
 ;    the RomTag and checks it;
+;  - LIBS:openfont.library 1.4 or newer (the engine draws its text with
+;    it): missing, it goes in; older, it is renamed .before-20261023 and
+;    the drawer's goes in; unreadable, it is kept, as above;
 ;  - LIBS:json.library (the engine's JSON.parse needs it) and
 ;    S:OpenTLS/ca-bundle.pem when missing;
-;  - with webbrowser.library installed (LIBS:WebBrowser), the installed
-;    engine is renamed WebBrowserEngine.before-20261022 and
-;    LIBS:WebBrowser/WebBrowserEngine becomes a two-line script (bit S) that
-;    runs the engine in this drawer: every program that uses the library
-;    gets the new engine, and the 89 MB engine is not copied to System:.
+;  - LOCALE:Unicode/icudt78b.dat, as the Installer does: when missing, or
+;    one of another size, which is renamed icudt78b.dat.before-20261023b,
+;    and only when LOCALE: has more than 25,000,000 bytes free;
+;  - the engine stays in this drawer (Libs/WebBrowser/WebBrowserEngine,
+;    with its fonts, blocklist and Unicode data); the 76 MB
+;    engine is not copied to System:. webbrowser.library (LIBS:, or this
+;    drawer's Libs) runs LIBS:WebBrowser/WebBrowserEngine when there is
+;    one, otherwise this drawer's: an older LIBS:WebBrowser/WebBrowserEngine
+;    (the engine, or the two-line script 0.8.0 and 0.8.1 test wrote there)
+;    is renamed WebBrowserEngine.before-20261023b;
+;  - an OpenBrowser.engine left in this drawer by an older version (unpacked
+;    over it) is renamed OpenBrowser.engine.before-20261023b: the launcher
+;    no longer runs it.
 ; Nothing is deleted.
 FailAt 21
 If NOT EXISTS Libs/WebBrowser/WebBrowserEngine
@@ -39,7 +50,7 @@ If $vrc GE 10 VAL
     Skip tlsdone
   EndIf
 Else
-  Rename LIBS:opentls.library LIBS:opentls.library.before-20261022
+  Rename LIBS:opentls.library LIBS:opentls.library.before-20261023b
   If WARN
     Echo "Could not rename the old LIBS:opentls.library; nothing changed."
     Quit 20
@@ -66,7 +77,7 @@ If $vrc GE 10 VAL
     Skip cryptodone
   EndIf
 Else
-  Rename LIBS:opencrypto.library LIBS:opencrypto.library.before-20261022
+  Rename LIBS:opencrypto.library LIBS:opencrypto.library.before-20261023b
   If WARN
     Echo "Could not rename the old LIBS:opencrypto.library; nothing changed."
     Quit 20
@@ -79,6 +90,33 @@ If WARN
 EndIf
 Echo "Installed LIBS:opencrypto.library"
 Lab cryptodone
+
+Version openfont.library 1 4 >NIL:
+Set vrc $RC
+If $vrc EQ 0 VAL
+  Echo "LIBS:openfont.library is new enough, kept"
+  Skip fontdone
+EndIf
+If $vrc GE 10 VAL
+  ; no version to read: not loaded, and the file has no $VER
+  If EXISTS LIBS:openfont.library
+    Echo "LIBS:openfont.library is there; its version cannot be read from the Shell, so it is kept (Install-OpenBrowser checks it)"
+    Skip fontdone
+  EndIf
+Else
+  Rename LIBS:openfont.library LIBS:openfont.library.before-20261023
+  If WARN
+    Echo "Could not rename the old LIBS:openfont.library; nothing changed."
+    Quit 20
+  EndIf
+EndIf
+Copy Libs/openfont.library LIBS: QUIET
+If WARN
+  Echo "Could not copy openfont.library to LIBS: (is LIBS: full or write-protected?)"
+  Quit 20
+EndIf
+Echo "Installed LIBS:openfont.library"
+Lab fontdone
 
 If NOT EXISTS LIBS:json.library
   Copy Libs/json.library LIBS: QUIET
@@ -99,28 +137,110 @@ If NOT EXISTS S:OpenTLS/ca-bundle.pem
   Echo "Installed S:OpenTLS/ca-bundle.pem (the certificates for https)"
 EndIf
 
-If EXISTS LIBS:WebBrowser
-  If EXISTS LIBS:WebBrowser/WebBrowserEngine
-    If NOT EXISTS LIBS:WebBrowser/WebBrowserEngine.before-20261022
-      Rename LIBS:WebBrowser/WebBrowserEngine LIBS:WebBrowser/WebBrowserEngine.before-20261022
-      If WARN
-        Echo "Could not rename the installed engine; nothing changed in LIBS:WebBrowser."
-        Quit 20
-      EndIf
-      Echo "Kept the installed engine as LIBS:WebBrowser/WebBrowserEngine.before-20261022"
-    EndIf
+; the Unicode data in LOCALE:Unicode/, for every program that reads it (the
+; engine reads it there first, then from Libs/WebBrowser/Unicode/), when
+; LOCALE: has more than 25,000,000 bytes free, as the Installer asks; one of
+; another size is kept as icudt78b.dat.before-20261023b. Without the room
+; nothing in LOCALE: is touched.
+; A command's output goes into a variable through a small .KEY script in T:
+; and a one-line script that runs it with that output as its arguments (no
+; backquotes: some Shells, such as Instance-32's, do not expand them).
+Echo ".KEY a,b,c,d,e,f,g,h/F" >T:ob-set-icunew
+Echo ".BRA {" >>T:ob-set-icunew
+Echo ".KET }" >>T:ob-set-icunew
+Copy T:ob-set-icunew T:ob-set-icuold QUIET
+Copy T:ob-set-icunew T:ob-set-icufree QUIET
+Echo "Set icunew {a}" >>T:ob-set-icunew
+Echo "Set icuold {a}" >>T:ob-set-icuold
+Echo ".KEY a,b/F" >T:ob-set-icudir
+Echo ".BRA {" >>T:ob-set-icudir
+Echo ".KET }" >>T:ob-set-icudir
+Echo "Set icudir *"{b}*"" >>T:ob-set-icudir
+Echo "Set icufree {d}" >>T:ob-set-icufree
+Set icunew 0
+Set icuold 0
+Set icufree 0
+Set icudir ""
+Echo "Execute T:ob-set-icunew " NOLINE >T:ob-icu-run
+List Libs/WebBrowser/Unicode/icudt78b.dat LFORMAT "%L" >>T:ob-icu-run
+Execute T:ob-icu-run
+If EXISTS LOCALE:Unicode/icudt78b.dat
+  Echo "Execute T:ob-set-icuold " NOLINE >T:ob-icu-run
+  List LOCALE:Unicode/icudt78b.dat LFORMAT "%L" >>T:ob-icu-run
+  Execute T:ob-icu-run
+  If $icuold EQ $icunew
+    Echo "LOCALE:Unicode/icudt78b.dat is there, kept"
+    Skip icudone
   EndIf
-  CD >T:ob-install-dir
-  Echo "; OpenBrowser 0.8 test: the engine is in the drawer (Install)" >LIBS:WebBrowser/WebBrowserEngine
-  If WARN
-    Echo "Could not write LIBS:WebBrowser/WebBrowserEngine"
+EndIf
+; LOCALE:'s free blocks. Info takes a volume or a path on one, not an
+; assign: Assign's list gives LOCALE:'s path (its first directory), and
+; Info's disk line (the one with the "%" of Full) its Free column. Info
+; counts blocks; at 512 bytes or more each, 48,829 free blocks are at least
+; 25,000,000 bytes (a disk with larger blocks may be skipped with less room
+; needed, never filled).
+Assign LIST >T:ob-icu-assign
+Echo "Execute T:ob-set-icudir " NOLINE >T:ob-icu-run
+Search T:ob-icu-assign "LOCALE #?" PATTERN NONUM >>T:ob-icu-run
+Execute T:ob-icu-run
+Info "$icudir" >T:ob-icu-info
+Echo "Execute T:ob-set-icufree " NOLINE >T:ob-icu-run
+Search T:ob-icu-info "%" NONUM >>T:ob-icu-run
+Execute T:ob-icu-run
+If NOT VAL $icufree GT 48828
+  Echo "Not copying the Unicode data to LOCALE:Unicode: LOCALE: ($icudir) has $icufree blocks free, not more than 25,000,000 bytes. The engine reads the drawer's copy, Libs/WebBrowser/Unicode/icudt78b.dat, instead."
+  Skip icudone
+EndIf
+If EXISTS LOCALE:Unicode/icudt78b.dat
+  If EXISTS LOCALE:Unicode/icudt78b.dat.before-20261023b
+    Echo "LOCALE:Unicode has both icudt78b.dat and icudt78b.dat.before-20261023b: move one of them away and run Install again."
     Quit 20
   EndIf
-  Echo "CD " NOLINE >>LIBS:WebBrowser/WebBrowserEngine
-  Type T:ob-install-dir >>LIBS:WebBrowser/WebBrowserEngine
-  Echo "Libs/WebBrowser/WebBrowserEngine" >>LIBS:WebBrowser/WebBrowserEngine
-  Protect LIBS:WebBrowser/WebBrowserEngine +s
-  Echo "LIBS:WebBrowser now runs the new engine in this drawer"
+  Rename LOCALE:Unicode/icudt78b.dat LOCALE:Unicode/icudt78b.dat.before-20261023b
+  If WARN
+    Echo "Could not rename LOCALE:Unicode/icudt78b.dat"
+    Quit 20
+  EndIf
+  Echo "Kept the other LOCALE:Unicode/icudt78b.dat ($icuold bytes) as icudt78b.dat.before-20261023b"
+EndIf
+If NOT EXISTS LOCALE:Unicode
+  MakeDir LOCALE:Unicode >NIL:
+EndIf
+Copy Libs/WebBrowser/Unicode/icudt78b.dat LOCALE:Unicode/ QUIET
+If WARN
+  Echo "Could not copy the Unicode data to LOCALE:Unicode (is System: full?); the engine reads the drawer's copy"
+Else
+  Echo "Installed LOCALE:Unicode/icudt78b.dat"
+EndIf
+Lab icudone
+UnSet icunew
+UnSet icuold
+UnSet icufree
+UnSet icudir
+
+If EXISTS LIBS:WebBrowser/WebBrowserEngine
+  If EXISTS LIBS:WebBrowser/WebBrowserEngine.before-20261023b
+    Echo "LIBS:WebBrowser has both WebBrowserEngine and WebBrowserEngine.before-20261023b: move one of them away and run Install again."
+    Quit 20
+  EndIf
+  Rename LIBS:WebBrowser/WebBrowserEngine LIBS:WebBrowser/WebBrowserEngine.before-20261023b
+  If WARN
+    Echo "Could not rename LIBS:WebBrowser/WebBrowserEngine; nothing changed in LIBS:WebBrowser."
+    Quit 20
+  EndIf
+  Echo "Kept the old LIBS:WebBrowser/WebBrowserEngine as WebBrowserEngine.before-20261023b"
+EndIf
+Echo "webbrowser.library runs the engine in this drawer"
+
+If EXISTS OpenBrowser.engine
+  If NOT EXISTS OpenBrowser.engine.before-20261023b
+    Rename OpenBrowser.engine OpenBrowser.engine.before-20261023b
+    If WARN
+      Echo "Could not rename the old OpenBrowser.engine in this drawer"
+      Quit 20
+    EndIf
+    Echo "Kept an older version's OpenBrowser.engine as OpenBrowser.engine.before-20261023b (no longer used)"
+  EndIf
 EndIf
 
 If NOT EXISTS LIBS:bsdsocket.library

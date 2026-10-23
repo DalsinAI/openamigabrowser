@@ -12,8 +12,13 @@
 #                options.
 #   the browser  OpenBrowser's own code (src/webcore): the page layer library
 #                OBCore and the programs
-#                  OpenBrowser   the launcher: a title window, then it loads
-#                                and runs OpenBrowser.engine, the browser
+#                  WebBrowserEngine  the browser: the one engine behind
+#                                webbrowser.library (src/webbrowser), with
+#                                OpenBrowser's window
+#                  OpenBrowser   the launcher: a title window, then it asks
+#                                webbrowser.library for a browser window
+#                  OpenBrowser.engine  the same window as a program of its
+#                                own (build-window-engine; not packaged)
 #                  obcore-view   the page layer without a window (tests)
 #                  obcore-dump   a local page's render tree, and a PNG of it
 #                A change here compiles the changed files and relinks; it
@@ -28,15 +33,20 @@
 #                   (default ~/AmigaChrome/stoves/os32-gcc16)
 #   OAB_DEPS        folder holding icu78-m68k-amigaos/ (scripts/build-icu.sh)
 #                   and m68k-amigaos/, the libraries from the OpenAmiga ports
-#                   (cairo and pixman, FreeType, HarfBuzz, fontconfig, Expat,
-#                   SQLite, zlib, libpng) in one prefix, with
+#                   (cairo and pixman, SQLite, zlib, libpng) in one
+#                   prefix, with the openfont.library 1.4 SDK
+#                   (openamigafont's sdk/Include_H in its include/) and
 #                   OXP, the XML parser (openamigaxml's oxp/build-amiga.sh with
-#                   OUT set to that prefix; WebKit patch 0030).
+#                   OUT set to that prefix; WebKit patch 0030). Its cairo is
+#                   built without FreeType (openamigacairo's build.sh with
+#                   CAIRO_FONTS=user): text is drawn and shaped with
+#                   openfont.library (WebKit patch 0090), and FreeType,
+#                   HarfBuzz, fontconfig and Expat are not used.
 #                   No curl or nghttp2: the network is openweb.fetch (WebKit
 #                   patch 0075). At run time the Amiga needs, without a
 #                   services card or a Cradle, a TCP/IP stack,
-#                   opentls.library in LIBS: and its CA bundle in
-#                   S:OpenTLS/ca-bundle.pem for https://, and
+#                   opentls.library 1.2 or newer in LIBS: and its CA bundle
+#                   in S:OpenTLS/ca-bundle.pem for https://, and
 #                   stream.datatype, gzip.datatype and brotli.datatype for
 #                   compressed pages.
 #   OPENSERVICE_DIR openamigaservice's checkout: openweb.fetch's client and
@@ -101,6 +111,14 @@
 #                   tables are linked in. A CMake option of src/webcore, so
 #                   an existing folder takes "file" at its next configure.
 #                   test-browser stages the file in Unicode/.  (default file)
+#                   "library": ICU's code and data are unicode.library's
+#                   (PLAN step 7); needs OB_ICU_DIR. Given here, it is
+#                   passed to CMake at the next configure-engine with the
+#                   matching ICU libraries, so an existing folder switches
+#                   either way with a relink.
+#   OB_ICU_DIR      with OB_ICU_DATA=library: the ICU folder
+#                   scripts/build-unicode-library.sh makes (ICU's headers,
+#                   and libraries that send each call to unicode.library).
 #   OB_CCACHE       the ccache program, or "none"  (default: ccache on PATH)
 #   OB_CCACHE_DIR   ccache's folder for this build
 #                   (default ~/.cache/ccache-openbrowser)
@@ -115,7 +133,8 @@
 #                   (test-browser)
 #   OB_FONTS        folder holding the TrueType fonts the engine draws with
 #                   (the Liberation and DejaVu .ttf files); test-browser copies
-#                   them to Fonts/, which fontconfig reads as PROGDIR:Fonts.
+#                   them to Fonts/, which the engine adds to openfont.library's
+#                   folders as PROGDIR:Fonts.
 #                   The engine stops at its first page without them.
 #
 # usage: build-webcore.sh [COMMAND]
@@ -123,14 +142,32 @@
 #                        set the compiler cache (which recompiles nothing)
 #   build-bindings       generate WebCore's derived sources, one job at a time
 #   build-engine         build the engine, if its fingerprint has changed
-#   build-browser        build OBCore and OpenBrowser only
+#   build-browser        build OBCore, WebBrowserEngine and the OpenBrowser
+#                        launcher only
+#   build-window-engine  build OpenBrowser.engine, the browser window as a
+#                        program of its own, without webbrowser.library (for
+#                        tests that run it directly; the package does not
+#                        carry it)
 #   build-tests          build obcore-view and obcore-dump only
+#   jsimage [PROGRAM...] build the programs (default WebBrowserEngine) as
+#                        jsimage clients: they take JavaScriptCore, WTF,
+#                        bmalloc and the run-time they share from
+#                        JavaScriptEngine at load time instead of linking
+#                        their own (scripts/jsimage.py, src/jslib/jsimage.h).
+#                        Writes BUILD/jsimage/JavaScriptEngine (the image)
+#                        and BUILD/jsimage/PROGRAM/PROGRAM (each client),
+#                        with stripped copies and sizes in the report;
+#                        bin/ keeps the programs as they link today
+#   build-javascript     build JavaScriptEngine, the program behind
+#                        javascript.library (src/jslib), on this folder's
+#                        JavaScriptCore, and fold it like the browser
 #   fold [PROGRAM...]    fold and link again the programs ninja has linked
 #                        since they were last folded (OpenBrowser.engine,
-#                        obcore-view, obcore-dump, WebBrowserEngine; or the
-#                        ones named). build-browser and build-tests fold
-#                        their programs when OB_FOLD is 1; run this after
-#                        "ninja WebBrowserEngine"
+#                        obcore-view, obcore-dump, WebBrowserEngine,
+#                        JavaScriptEngine; or the ones named). build-browser,
+#                        build-window-engine, build-tests and
+#                        build-javascript fold their programs when OB_FOLD
+#                        is 1
 #   test-browser         stage the programs, test pages and settings in
 #                        OB_TEST_DIR, with an AmigaDOS script that runs them
 #   clean-browser        remove the browser's objects and programs
@@ -261,7 +298,7 @@ engine_inputs() {
     echo "compiler $("$gcc" --version | head -n 1) $(sha256 < "$("$gcc" -print-prog-name=cc1plus)")"
     echo "binutils $("$GCC16/prefix/bin/m68k-amigaos-as" --version | head -n 1)"
     echo "toolchain-file $(sha256 < "$ROOT/toolchain/amigaos3-gcc16.cmake")"
-    echo "icu-headers $(tree_hash "$OAB_DEPS/icu78-m68k-amigaos/include")"
+    echo "icu-headers $(tree_hash "${OB_ICU_DIR:-$OAB_DEPS/icu78-m68k-amigaos}/include")"
     echo "openamiga-headers $(tree_hash "$OAB_DEPS/m68k-amigaos/include")"
     # openweb.fetch's client API, which WebCore's OpenWebFetchAmiga.c is
     # built against (src/webcore/CMakeLists.txt finds the checkout the same way).
@@ -356,9 +393,26 @@ configure_engine() {
     # otherwise preprocess every C++ file a second time, uncached, to look
     # for them.
     set -- "$@" -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+    # OB_ICU_DATA given: which ICU libraries the programs link, set in the
+    # cache, for an existing folder too, so it switches with a relink (the
+    # headers are the same ICU 78.3 in both folders).
+    if [ -n "${OB_ICU_DATA:-}" ]; then
+        icu_dir="$OAB_DEPS/icu78-m68k-amigaos"
+        if [ "$OB_ICU_DATA" = library ]; then
+            [ -f "${OB_ICU_DIR:-}/include/ul_client.h" ] || die "OB_ICU_DATA=library needs OB_ICU_DIR (scripts/build-unicode-library.sh)"
+            export OB_ICU_DIR
+            icu_dir=$OB_ICU_DIR
+            set -- "$@" -DOB_UNICODE_DIR="$OB_ICU_DIR"
+        fi
+        set -- "$@" -DOB_ICU_DATA="$OB_ICU_DATA" \
+            -DICU_UC_LIBRARY_RELEASE="$icu_dir/lib/libicuuc.a" \
+            -DICU_I18N_LIBRARY_RELEASE="$icu_dir/lib/libicui18n.a" \
+            -DICU_DATA_LIBRARY_RELEASE="$icu_dir/lib/libicudata.a" \
+            -DCMAKE_CXX_STANDARD_LIBRARIES="$icu_dir/lib/libicudata.a -lpthread -latomic -lstdc++ -L$GCC16/compat -los32compat"
+    fi
     if [ -f "$BUILD/CMakeCache.txt" ]; then
-        # An existing folder keeps its options; only the launcher changes,
-        # which the Makefile generator does not treat as a reason to rebuild.
+        # An existing folder keeps its options; only the launcher and the
+        # ICU libraries change, which do not make anything recompile.
         cmake "$BUILD" "$@"
         return
     fi
@@ -506,7 +560,7 @@ browser_build() {
 # only the one the name resolved to. hunkfold rewrites copies of the
 # archives so that only the copy the plain link used still defines each
 # name; linked again, --gc-sections drops the others.
-FOLD_PROGRAMS="OpenBrowser.engine obcore-view obcore-dump WebBrowserEngine"
+FOLD_PROGRAMS="OpenBrowser.engine obcore-view obcore-dump WebBrowserEngine JavaScriptEngine"
 
 links_with_gc() {
     sed -n 's/^CMAKE_EXE_LINKER_FLAGS:[A-Z]*=//p' "$BUILD/CMakeCache.txt" 2>/dev/null | grep -q -- --gc-sections
@@ -622,9 +676,137 @@ fold_programs() {
 }
 
 build_browser() {
-    browser_build browser OBCore OpenBrowser OpenBrowserLauncher
+    browser_build browser OBCore WebBrowserEngine OpenBrowserLauncher
+    if fold_wanted; then fold_programs WebBrowserEngine; fi
+    ls -l "$BUILD/bin/OpenBrowser" "$BUILD/bin/WebBrowserEngine"
+}
+
+# OpenBrowser.engine: the same browser window as a program of its own, which
+# runs without webbrowser.library. Not in the package (WebBrowserEngine is
+# the one engine there); kept for tests that run the window directly.
+build_window_engine() {
+    browser_build window-engine OBCore OpenBrowser
     if fold_wanted; then fold_programs OpenBrowser.engine; fi
-    ls -l "$BUILD/bin/OpenBrowser" "$BUILD/bin/OpenBrowser.engine"
+    ls -l "$BUILD/bin/OpenBrowser.engine"
+}
+
+# JavaScriptEngine on the browser's JavaScriptCore; javascript.library and
+# JS themselves are scripts/build-javascript-library.sh.
+build_javascript() {
+    browser_build javascript JavaScriptEngine
+    if fold_wanted; then fold_programs JavaScriptEngine; fi
+    strip="$GCC16/prefix/bin/m68k-amigaos-strip"
+    "$strip" -o "$BUILD/bin/JavaScriptEngine.stripped" "$BUILD/bin/JavaScriptEngine"
+    ls -l "$BUILD/bin/JavaScriptEngine" "$BUILD/bin/JavaScriptEngine.stripped"
+}
+
+# program_map NAME: the -Map file NAME's link writes (named after its
+# CMake target: bin/OpenBrowser.map for bin/OpenBrowser.engine)
+program_map() {
+    pm_cmd=$(cd "$BUILD" && ninja -t commands -s "bin/$1") || die "no link command for bin/$1"
+    pm_map=$(printf '%s\n' "$pm_cmd" | sed -n 's/.*-Wl,-Map=\([^ ]*\).*/\1/p')
+    [ -n "$pm_map" ] || die "the link command of $1 writes no -Map"
+    echo "$BUILD/bin/$(basename "$pm_map")"
+}
+
+# jsimage_program NAME: link one client against the image (jsimage.py):
+# its archives folded with every copy of an imported name made local,
+# without JavaScriptCore, WTF and bmalloc, twice (the image at
+# __jsimage_base, and 0x10000000 further), then the fixup table added.
+jsimage_program() {
+    j_prog=$1
+    j_out="$BUILD/jsimage/$j_prog"
+    j_map=$(program_map "$j_prog")
+    j_plain="${j_map%.map}.plain.map"
+    [ -f "$j_plain" ] || j_plain=$j_map
+    j_log="$BUILD/logs/jsimage-$j_prog-$(date -u +%Y%m%dT%H%M%SZ).log"
+    j_start=$(date +%s)
+    rm -rf "$j_out"
+    mkdir -p "$j_out/lib" "$j_out/1" "$j_out/2"
+    $JSIMAGE imports "$BUILD/jsimage/exports" "$BUILD/bin/$j_prog" "$j_map" "$j_out/imports" >> "$j_log" 2>&1 \
+        || die "jsimage: no imports for $j_prog (log: $j_log)"
+    $JSIMAGE script "$j_out/imports" 0 "$j_out/1/jsimage-imports.ld" >> "$j_log" 2>&1
+    $JSIMAGE script "$j_out/imports" 0x10000000 "$j_out/2/jsimage-imports.ld" >> "$j_log" 2>&1
+    python3 "$HERE/hunkfold.py" winners "$j_plain" "$j_out/winners.txt" >> "$j_log" 2>&1 \
+        || die "jsimage: no winners from $j_plain (log: $j_log)"
+    for j_lib in "$BUILD"/lib/lib*.a; do
+        j_name=$(basename "$j_lib")
+        case "$j_name" in libJavaScriptCore.a|libWTF.a|libbmalloc.a) continue ;; esac
+        echo "== $j_name" >> "$j_log"
+        python3 "$HERE/hunkfold.py" fold "$j_lib" "$j_out/lib/$j_name" --name "lib/$j_name" \
+            --winners "$j_out/winners.txt" --imports "$j_out/imports" >> "$j_log" 2>&1 \
+            || die "jsimage: folding $j_name failed (log: $j_log)"
+    done
+    j_client=$(find "$BUILD/OpenBrowser/CMakeFiles/JSImageClient.dir" -name 'jsimage_client.c.obj' -o -name 'jsimage_client.c.o' | head -1)
+    [ -f "$j_client" ] || die "jsimage: JSImageClient was not built"
+    j_cmd=$(cd "$BUILD" && ninja -t commands -s "bin/$j_prog") || die "jsimage: ninja has no link command for bin/$j_prog"
+    # JavaScriptCore, WTF and bmalloc out; the other archives folded; the
+    # jsimage link script and the client's first code in
+    j_cmd=$(printf '%s\n' "$j_cmd" | sed \
+        -e "s#[^ ]*lib\(JavaScriptCore\|WTF\|bmalloc\)\.a##g" \
+        -e "s# lib/\(lib[^ /]*\.a\)# $j_out/lib/\1#g" \
+        -e "s#$BUILD/lib/\(lib[^ /]*\.a\)#$j_out/lib/\1#g" \
+        -e "s#-Wl,-T,[^ ]*amigaos3-onehunk\.ld#-Wl,-T,$ROOT/toolchain/amigaos3-onehunk-jsimage.ld#" \
+        -e "s#-Wl,-Map=[^ ]*#-Wl,-Map=$j_out/link1.map#" \
+        -e "s# -o bin/$j_prog # $j_client -L$j_out/1 -o $j_out/link1 #")
+    case "$j_cmd" in
+        *amigaos3-onehunk-jsimage.ld*"-o $j_out/link1 "*) ;;
+        *) die "jsimage: cannot rewrite the link command of $j_prog (it must link one hunk, OB_PCREL=1)" ;;
+    esac
+    echo "== link 1" >> "$j_log"
+    printf '%s\n' "$j_cmd" >> "$j_log"
+    (cd "$BUILD" && sh -c "$j_cmd") >> "$j_log" 2>&1 || die "jsimage: linking $j_prog failed (log: $j_log)"
+    j_cmd=$(printf '%s\n' "$j_cmd" | sed -e "s#-L$j_out/1 -o $j_out/link1 #-L$j_out/2 -o $j_out/link2 #" \
+        -e "s#-Wl,-Map=[^ ]*#-Wl,-Map=$j_out/link2.map#")
+    echo "== link 2" >> "$j_log"
+    (cd "$BUILD" && sh -c "$j_cmd") >> "$j_log" 2>&1 || die "jsimage: the second link of $j_prog failed (log: $j_log)"
+    $JSIMAGE fixups "$j_out/link1" "$j_out/link2" "$BUILD/jsimage/exports" "$j_out/$j_prog" >> "$j_log" 2>&1 \
+        || die "jsimage: no fixups for $j_prog (log: $j_log)"
+    rm -f "$j_out/link2" "$j_out/link2.map"
+    "$GCC16/prefix/bin/m68k-amigaos-strip" -o "$j_out/$j_prog.stripped" "$j_out/$j_prog"
+    "$GCC16/prefix/bin/m68k-amigaos-strip" -o "$j_out/plain.stripped" "$BUILD/bin/$j_prog"
+    j_line="$(date -u +%Y-%m-%dT%H:%M:%SZ) jsimage $j_prog: stripped $(file_size "$j_out/plain.stripped") -> $(file_size "$j_out/$j_prog.stripped") bytes, $(tail -1 "$j_log"), $(( $(date +%s) - j_start )) s"
+    rm -f "$j_out/plain.stripped"
+    echo "$j_line" >> "$BUILD/build-report.txt"
+    echo "$j_line"
+    echo "  log: $j_log"
+}
+
+build_jsimage() {
+    [ $# -gt 0 ] || set -- WebBrowserEngine
+    [ "$(generator)" = Ninja ] || die "jsimage needs a build folder made with Ninja: $BUILD"
+    JSIMAGE="python3 $HERE/jsimage.py --nm=$GCC16/prefix/bin/m68k-amigaos-nm"
+    mkdir -p "$BUILD/jsimage" "$BUILD/logs"
+    # 1. the clients as they link today (folded), and the client's first code
+    targets=JSImageClient
+    for prog; do
+        case "$prog" in OpenBrowser.engine) targets="$targets OBCore OpenBrowser" ;; *) targets="$targets $prog" ;; esac
+    done
+    browser_build jsimage-clients $targets
+    if fold_wanted; then fold_programs "$@"; fi
+    # 2. the image keeps all of JavaScriptCore, WTF and bmalloc the clients linked
+    pairs=
+    for prog; do pairs="$pairs $BUILD/bin/$prog $(program_map "$prog")"; done
+    $JSIMAGE needs "$BUILD/jsimage/needs.ld.new" $pairs
+    if ! cmp -s "$BUILD/jsimage/needs.ld.new" "$BUILD/jsimage/needs.ld"; then
+        mv "$BUILD/jsimage/needs.ld.new" "$BUILD/jsimage/needs.ld"
+    else
+        rm -f "$BUILD/jsimage/needs.ld.new"
+    fi
+    # 3. the image: JavaScriptEngine, folded, its exports, stamped
+    browser_build jsimage-image JavaScriptEngine
+    if fold_wanted; then fold_programs JavaScriptEngine; fi
+    $JSIMAGE exports "$BUILD/bin/JavaScriptEngine" "$(program_map JavaScriptEngine)" "$BUILD/jsimage/exports"
+    cp "$BUILD/bin/JavaScriptEngine" "$BUILD/jsimage/JavaScriptEngine"
+    $JSIMAGE stamp "$BUILD/jsimage/JavaScriptEngine" "$BUILD/jsimage/exports"
+    "$GCC16/prefix/bin/m68k-amigaos-strip" -o "$BUILD/jsimage/JavaScriptEngine.stripped" "$BUILD/jsimage/JavaScriptEngine"
+    line="$(date -u +%Y-%m-%dT%H:%M:%SZ) jsimage image: JavaScriptEngine stripped $(file_size "$BUILD/jsimage/JavaScriptEngine.stripped") bytes, image $($JSIMAGE id "$BUILD/jsimage/exports")"
+    echo "$line" >> "$BUILD/build-report.txt"
+    echo "$line"
+    # 4. each client against it
+    for prog; do
+        jsimage_program "$prog"
+    done
 }
 
 build_tests() {
@@ -663,13 +845,16 @@ test_browser() {
     set -- "$OB_FONTS"/*.ttf
     [ -f "$1" ] || { echo "no .ttf files in $OB_FONTS" >&2; exit 1; }
     strip="$GCC16/prefix/bin/m68k-amigaos-strip"
-    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig" "$OB_TEST_DIR/Fonts"
+    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/Fonts"
     cp "$@" "$OB_TEST_DIR/Fonts/"
-    for program in OpenBrowser OpenBrowser.engine obcore-view obcore-dump; do
+    for program in obcore-view obcore-dump; do
         "$strip" -o "$OB_TEST_DIR/$program" "$BUILD/bin/$program"
     done
+    # the window as a program of its own, when build-window-engine made it
+    if [ -f "$BUILD/bin/OpenBrowser.engine" ]; then
+        "$strip" -o "$OB_TEST_DIR/OpenBrowser.engine" "$BUILD/bin/OpenBrowser.engine"
+    fi
     cp "$ROOT"/tests/pages/*.html "$OB_TEST_DIR/pages/"
-    cp "$ROOT/src/webcore/fontconfig/fonts.conf" "$OB_TEST_DIR/fontconfig/"
     cp "$ROOT/src/webcore/blocklist" "$OB_TEST_DIR/"
     if [ "$(sed -n 's/^OB_ICU_DATA:STRING=//p' "$BUILD/CMakeCache.txt")" != linked ]; then
         mkdir -p "$OB_TEST_DIR/Unicode"
@@ -698,10 +883,12 @@ test_browser() {
 
 clean_browser() {
     rm -rf "$BUILD"/OpenBrowser/CMakeFiles/OBCore.dir "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowser.dir \
-        "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowserLauncher.dir \
-        "$BUILD"/OpenBrowser/CMakeFiles/obcore-view.dir "$BUILD"/OpenBrowser/CMakeFiles/obcore-dump.dir
-    rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/OpenBrowser.engine \
-        "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump "$BUILD"/bin/*.plain.map
+        "$BUILD"/OpenBrowser/CMakeFiles/OpenBrowserLauncher.dir "$BUILD"/OpenBrowser/CMakeFiles/WebBrowserEngine.dir \
+        "$BUILD"/OpenBrowser/CMakeFiles/obcore-view.dir "$BUILD"/OpenBrowser/CMakeFiles/obcore-dump.dir \
+        "$BUILD"/OpenBrowser/CMakeFiles/JavaScriptEngine.dir
+    rm -f "$BUILD"/lib/libOBCore.a "$BUILD"/bin/OpenBrowser "$BUILD"/bin/OpenBrowser.engine "$BUILD"/bin/WebBrowserEngine \
+        "$BUILD"/bin/obcore-view "$BUILD"/bin/obcore-dump "$BUILD"/bin/*.plain.map \
+        "$BUILD"/bin/JavaScriptEngine "$BUILD"/bin/JavaScriptEngine.stripped
     rm -rf "$BUILD"/lib-folded
     echo "Removed the browser's objects and programs from $BUILD"
 }
@@ -724,7 +911,10 @@ case "$MODE" in
     build-bindings) need_sources; build_bindings ;;
     build-engine) build_engine ;;
     build-browser) build_browser ;;
+    build-window-engine) build_window_engine ;;
     build-tests) build_tests ;;
+    build-javascript) build_javascript ;;
+    jsimage) shift; build_jsimage "$@" ;;
     fold) shift; [ $# -gt 0 ] || set -- $FOLD_PROGRAMS; fold_programs "$@" ;;
     test-browser) test_browser ;;
     clean-browser) clean_browser ;;

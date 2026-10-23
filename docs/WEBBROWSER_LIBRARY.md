@@ -54,7 +54,7 @@ gives its memory back, and the next call starts it again.
 LIBS:webbrowser.library
 LIBS:WebBrowser/WebBrowserEngine
 LIBS:WebBrowser/Fonts/                 the TrueType fonts
-LIBS:WebBrowser/fontconfig/fonts.conf  (its dir is PROGDIR:Fonts)
+LIBS:openfont.library                  1.4 or newer: the engine's text
 ```
 
 The engine keeps its cookies in `LIBS:WebBrowser/Cookies.db`. It kept its
@@ -66,6 +66,22 @@ Not installed, OpenBrowser still works from its drawer as unpacked: the
 launcher opens `PROGDIR:Libs/webbrowser.library`, and the library starts
 `PROGDIR:Libs/WebBrowser/WebBrowserEngine` when `LIBS:WebBrowser` has no
 engine.
+
+Since 0.8.2 this is the one engine OpenBrowser's package carries (there is
+no `OpenBrowser.engine` beside the launcher), and Install keeps it in the
+drawer: `Libs/WebBrowser/` holds `WebBrowserEngine` with the one copy of
+`Fonts/`, `fontconfig/fonts.conf`, `blocklist`, `Unicode/icudt78b.dat` and
+`Network/public-suffixes` (patch 0070).
+The engine finds them through its own `PROGDIR:` (fontconfig's
+`FONTCONFIG_PATH` is `PROGDIR:fontconfig`, the built-in fonts dir
+`PROGDIR:Fonts`; `AmigaFrameLoaderClient.cpp` reads `PROGDIR:blocklist`;
+`ob_icudata.c` tries `LOCALE:Unicode/`, then `PROGDIR:Unicode/`; patch 0070
+reads `PROGDIR:Network/public-suffixes`, then `ENVARC:OpenBrowser/`). Install
+renames an older `LIBS:WebBrowser/WebBrowserEngine` (an engine, or the
+two-line script 0.8.0 and 0.8.1 test wrote there) to
+`WebBrowserEngine.before-20261023b`, so the library runs the drawer's
+engine for the OpenBrowser launcher. A program elsewhere that uses the
+library then needs an engine in `LIBS:WebBrowser` of its own.
 
 ## Calls
 
@@ -97,4 +113,5 @@ Headers: `src/webbrowser/include` (`libraries/webbrowser.h`,
 `src/webbrowser/build-library.sh [outdir]` builds the library and WBGrab with
 the os32-gcc16 compiler. The engine is a WebCore target:
 `ninja WebBrowserEngine` in the WebCore build tree
-(`scripts/build-webcore.sh build-browser` builds it with the browser).
+(`scripts/build-webcore.sh build-browser` builds it with the launcher and
+folds it).

@@ -34,14 +34,33 @@ set(OB_PROGRAM_SOURCES
 # at start from LOCALE:Unicode/ or PROGDIR:Unicode/ (ob_icudata.c), and each
 # program carries an empty data block (ob_icustub.c), which keeps
 # libicudata.a's 5 MB of tables out of it; "linked" links the tables in as
-# before.
-set(OB_ICU_DATA "file" CACHE STRING "ICU data: file (read at start) or linked")
+# before; "library" takes ICU's code and data from unicode.library: the
+# toolchain's OB_ICU_DIR names scripts/build-unicode-library.sh's folder,
+# whose libicuuc.a sends each ICU call to the library, and ob_icudata.c
+# opens it at start in place of reading the file.
+set(OB_ICU_DATA "file" CACHE STRING "ICU data: file (read at start), linked, or library (unicode.library)")
 if (OB_ICU_DATA STREQUAL "file")
     list(APPEND OB_CORE_SOURCES ob_icudata.c)
     list(APPEND OB_PROGRAM_SOURCES ob_icustub.c)
     add_compile_definitions(OB_ICU_DATA_FILE=1)
+elseif (OB_ICU_DATA STREQUAL "library")
+    # OB_UNICODE_DIR: that folder, for ul_client.h. A folder configured
+    # before keeps its ICU headers (the same 78.3 ones) and is pointed at
+    # the folder's libraries through FindICU's cache entries instead
+    # (src/unicodelib/README.md), so the switch only relinks.
+    if (DEFINED ENV{OB_ICU_DIR})
+        set(OB_UNICODE_DIR_DEFAULT "$ENV{OB_ICU_DIR}")
+    else ()
+        set(OB_UNICODE_DIR_DEFAULT "${AC_WEBKIT_DEPS}")
+    endif ()
+    set(OB_UNICODE_DIR "${OB_UNICODE_DIR_DEFAULT}" CACHE PATH "scripts/build-unicode-library.sh's ICU folder")
+    if (NOT EXISTS "${OB_UNICODE_DIR}/include/ul_client.h")
+        message(FATAL_ERROR "OB_ICU_DATA=library needs OB_UNICODE_DIR (or OB_ICU_DIR) set to scripts/build-unicode-library.sh's ICU folder")
+    endif ()
+    list(APPEND OB_CORE_SOURCES ob_icudata.c)
+    add_compile_definitions(OB_ICU_DATA_FILE=1 OB_ICU_LIBRARY=1)
 elseif (NOT OB_ICU_DATA STREQUAL "linked")
-    message(FATAL_ERROR "OB_ICU_DATA must be file or linked")
+    message(FATAL_ERROR "OB_ICU_DATA must be file, linked or library")
 endif ()
 
 # openservice.device and openweb.fetch (DalsinAI/openamigaservice, checked
@@ -129,21 +148,26 @@ set(OB_PRIVATE_INCLUDE_DIRECTORIES
     ${WEBCORE_DIR}/platform/network/amiga
 )
 list(APPEND OB_PRIVATE_INCLUDE_DIRECTORIES ${OB_OPENSERVICE_DIR}/include)
+if (OB_ICU_DATA STREQUAL "library")
+    list(APPEND OB_PRIVATE_INCLUDE_DIRECTORIES ${OB_UNICODE_DIR}/include)
+endif ()
 set(OB_SYSTEM_INCLUDE_DIRECTORIES
     ${AC_WEBCORE_DEPS}/include
     ${AC_WEBCORE_DEPS}/include/cairo
-    ${AC_WEBCORE_DEPS}/include/freetype2
-    ${AC_WEBCORE_DEPS}/include/harfbuzz
     ${AC_WEBCORE_DEPS}/include/pixman-1
 )
 
 # Static archives that depend on each other (WebCore, JavaScriptCore, WTF,
-# cairo, fontconfig...) are linked as one group, so their order does not
+# cairo, pixman...) are linked as one group, so their order does not
 # matter, followed by what libnix programs need. No curl or nghttp2 (WebKit
 # patch 0075): openweb.fetch's native transport opens bsdsocket.library,
 # opentls.library and datatypes.library itself, so there is no network or
 # TLS library to link.
 macro(OB_LINK _target)
+    # OB_ICU_DATA=library: icui18n, icuuc and icudata are the library's stubs
+    if (OB_ICU_DATA STREQUAL "library")
+        target_link_directories(${_target} PRIVATE ${OB_UNICODE_DIR}/lib)
+    endif ()
     target_link_directories(${_target} PRIVATE ${AC_WEBCORE_DEPS}/lib ${AC_WEBKIT_DEPS}/lib)
     # A link map beside each program (bin/NAME.map): which object every
     # address belongs to, static functions included, which the program's
@@ -152,7 +176,7 @@ macro(OB_LINK _target)
     target_link_libraries(${_target} PRIVATE
         -Wl,--start-group
         OBCore WebCore PAL JavaScriptCore WTF bmalloc
-        cairo pixman-1 fontconfig freetype harfbuzz harfbuzz-icu expat png z oxp sqlite3
+        cairo pixman-1 png z oxp sqlite3
         icui18n icuuc icudata
         amiga pthread atomic stdc++ m
         -Wl,--end-group
@@ -217,8 +241,11 @@ WEBKIT_EXECUTABLE_DECLARE(WebBrowserEngine)
 WEBKIT_EXECUTABLE(WebBrowserEngine)
 OB_LINK(WebBrowserEngine)
 
-# OpenBrowser.engine: the browser window (GadTools) around the page layer.
-# The launcher below loads and runs it.
+# OpenBrowser.engine: the browser window (GadTools) around the page layer, as
+# a program of its own that runs without webbrowser.library. The package
+# does not carry it: WebBrowserEngine above is the one engine there, with the
+# same window (ob_browser_engine.c). Kept for tests that run the window
+# directly (scripts/build-webcore.sh build-window-engine).
 set(OpenBrowser_SOURCES
     ${OB_PROGRAM_SOURCES}
     ob_blit.c
@@ -233,9 +260,70 @@ WEBKIT_EXECUTABLE_DECLARE(OpenBrowser)
 WEBKIT_EXECUTABLE(OpenBrowser)
 OB_LINK(OpenBrowser)
 
+# JavaScriptEngine: the program behind javascript.library (src/jslib),
+# built here so that its JavaScriptCore is the browser's own: the same
+# patches, flags (OB_OPTIMIZE, OB_PCREL, OB_GC_SECTIONS) and archives, and
+# folded like the browser's programs. Its sources compile as WebKit's jsc
+# shell does, with JavaScriptCore's own include folders (jsl_cache.cpp is
+# on JavaScriptCore's private interface). It links no WebCore.
+set(JavaScriptEngine_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_cache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_engine.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsl_os_exec.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsimage_host.c
+)
+if (OB_ICU_DATA STREQUAL "file")
+    list(APPEND JavaScriptEngine_SOURCES ob_icudata.c ob_icustub.c)
+elseif (OB_ICU_DATA STREQUAL "library")
+    list(APPEND JavaScriptEngine_SOURCES ob_icudata.c)
+endif ()
+set(JavaScriptEngine_FRAMEWORKS JavaScriptCore WTF bmalloc)
+set(JavaScriptEngine_PRIVATE_INCLUDE_DIRECTORIES
+    $<TARGET_PROPERTY:JavaScriptCore,INCLUDE_DIRECTORIES>
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/sdk/Include_H
+)
+if (OB_ICU_DATA STREQUAL "library")
+    list(APPEND JavaScriptEngine_PRIVATE_INCLUDE_DIRECTORIES ${OB_UNICODE_DIR}/include)
+endif ()
+WEBKIT_EXECUTABLE_DECLARE(JavaScriptEngine)
+WEBKIT_EXECUTABLE(JavaScriptEngine)
+if (OB_ICU_DATA STREQUAL "library")
+    target_link_directories(JavaScriptEngine PRIVATE ${OB_UNICODE_DIR}/lib)
+endif ()
+target_link_directories(JavaScriptEngine PRIVATE ${AC_WEBKIT_DEPS}/lib)
+target_link_options(JavaScriptEngine PRIVATE -Wl,-Map=${CMAKE_BINARY_DIR}/bin/JavaScriptEngine.map)
+# Nothing in the engine reads jsimage_id or jsimage_client (jsimage.py
+# stamps the first, the client sets the second), so OB_GC_SECTIONS would
+# drop them; -u keeps both.
+target_link_options(JavaScriptEngine PRIVATE -Wl,-u,_jsimage_id -Wl,-u,_jsimage_client)
+# As a jsimage (scripts/jsimage.py, "build-webcore.sh jsimage"), the engine
+# keeps every name of JavaScriptCore, WTF and bmalloc that its clients
+# linked: jsimage/needs.ld, an EXTERN list (empty until then).
+set(OB_JSIMAGE_NEEDS ${CMAKE_BINARY_DIR}/jsimage/needs.ld)
+if (NOT EXISTS ${OB_JSIMAGE_NEEDS})
+    file(WRITE ${OB_JSIMAGE_NEEDS} "/* jsimage: no clients yet */\n")
+endif ()
+target_link_options(JavaScriptEngine PRIVATE ${OB_JSIMAGE_NEEDS})
+set_property(TARGET JavaScriptEngine APPEND PROPERTY LINK_DEPENDS ${OB_JSIMAGE_NEEDS})
+target_link_libraries(JavaScriptEngine PRIVATE
+    -Wl,--start-group
+    JavaScriptCore WTF bmalloc
+    icui18n icuuc icudata
+    amiga pthread atomic stdc++ m
+    -Wl,--end-group
+)
+
+# A jsimage client's first code (src/jslib/jsimage_client.c): it runs
+# before the C library is set up, so it is built without it.
+add_library(JSImageClient OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../jslib/jsimage_client.c)
+target_compile_options(JSImageClient PRIVATE -ffreestanding -fno-builtin)
+
 # OpenBrowser: the small program the icon starts. It shows a title window at
-# once, loads OpenBrowser.engine (about 100 MB) with a progress bar and runs
-# it in its own process. It needs nothing of WebKit's, only the C library,
+# once and asks webbrowser.library (LIBS:, or the drawer's Libs before
+# Install) for a browser window, which WebBrowserEngine opens. It needs nothing of WebKit's, only the C library,
 # the stove's compat library (the toolchain wraps malloc) and libpthread
 # (the toolchain links with -fexceptions, whose frame tables use it).
 add_executable(OpenBrowserLauncher ob_launcher.c ob_splash.c)

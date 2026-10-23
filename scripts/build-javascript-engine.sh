@@ -8,6 +8,10 @@
 # layer and its main, linked the way the jsc shell is, with the same
 # JavaScriptCore build. Hard float, -O2 (the OpenBrowser stack's exception).
 #
+# The engine the browser ships is built with the browser instead
+# (scripts/build-webcore.sh build-javascript): its JavaScriptCore is then
+# the browser's own. This script is the older way, on a JSCOnly build.
+#
 # Build JavaScriptCore first with scripts/build-jsc.sh (same WEBKIT_BUILD):
 # this compiles the four files with the flags CMake gave jsc.cpp, then
 # runs jsc's own link command with them in jsc.cpp's place.

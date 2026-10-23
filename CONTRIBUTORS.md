@@ -42,7 +42,7 @@ copyright and licence.
 - **WebKit** (WTF, bmalloc, JavaScriptCore, WebCore): pinned to `54fe1539718e` of https://github.com/WebKit/WebKit in `webkit/UPSTREAM`, by Apple Inc. and the WebKit contributors; LGPL 2 and BSD-style.
 - **ICU 78.3** (icu4c), by Unicode, Inc. and the ICU contributors; Unicode License v3.
 - **bebbo's amiga-gcc** (https://franke.ms/git/bebbo/amiga-gcc, GCC 16.2, branch `amiga16.2`), with libnix and libpthread (Szilard Biro, zlib-style); GCC's runtime libraries are GPL-3.0 with the GCC Runtime Library Exception.
-- **The OpenAmiga ports** WebCore links: cairo and pixman, FreeType, HarfBuzz, fontconfig, Expat, libxml2, SQLite, curl, libpsl, zlib and libpng, each under its own licence; curl does TLS through **OpenTLS** (opentls.library) at run time. Until 19 October 2026 the engine used **AmiSSL 5** (OpenSSL 3, Apache-2.0).
+- **The OpenAmiga ports** WebCore links: cairo and pixman, libxml2, SQLite, curl, libpsl, zlib and libpng, each under its own licence; curl does TLS through **OpenTLS** (opentls.library) at run time. Until 19 October 2026 the engine used **AmiSSL 5** (OpenSSL 3, Apache-2.0); until 23 October 2026 its text used FreeType, HarfBuzz, fontconfig and Expat, now **OpenFont** (openfont.library).
 
 ## Work we learned from
 

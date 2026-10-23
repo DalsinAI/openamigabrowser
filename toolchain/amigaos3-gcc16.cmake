@@ -60,9 +60,16 @@ set(AC_OS32_WRAP_FLAGS "-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -
 # on the link line keeps libstdc++'s own.
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${AC_OS32_CPU_FLAGS} -fexceptions ${AC_OS32_WRAP_FLAGS}")
 # FindICU puts libicudata before libicuuc; list it again so its data symbol resolves.
-set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${AC_OAB_DEPS}/icu78-m68k-amigaos/lib/libicudata.a -lpthread -latomic -lstdc++ -L${AC_OS32_STOVE}/compat -los32compat")
+# ICU: the static libraries scripts/build-icu.sh makes, or with OB_ICU_DIR
+# the folder scripts/build-unicode-library.sh makes, whose libraries send
+# every ICU call to unicode.library (the same headers, no ICU code or data).
+if (DEFINED ENV{OB_ICU_DIR})
+    set(AC_WEBKIT_DEPS "$ENV{OB_ICU_DIR}")
+else ()
+    set(AC_WEBKIT_DEPS "${AC_OAB_DEPS}/icu78-m68k-amigaos")
+endif ()
+set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${AC_WEBKIT_DEPS}/lib/libicudata.a -lpthread -latomic -lstdc++ -L${AC_OS32_STOVE}/compat -los32compat")
 
-set(AC_WEBKIT_DEPS "${AC_OAB_DEPS}/icu78-m68k-amigaos")
 set(AC_WEBCORE_DEPS "${AC_OAB_DEPS}/m68k-amigaos")
 set(CMAKE_FIND_ROOT_PATH "${AC_WEBKIT_DEPS};${AC_WEBCORE_DEPS};${AC_OS32_GCC16}/m68k-amigaos")
 set(CMAKE_PREFIX_PATH "${AC_WEBKIT_DEPS};${AC_WEBCORE_DEPS}")
