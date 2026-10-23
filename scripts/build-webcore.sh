@@ -676,6 +676,15 @@ build_javascript() {
     ls -l "$BUILD/bin/JavaScriptEngine" "$BUILD/bin/JavaScriptEngine.stripped"
 }
 
+# program_map NAME: the -Map file NAME's link writes (named after its
+# CMake target: bin/OpenBrowser.map for bin/OpenBrowser.engine)
+program_map() {
+    pm_cmd=$(cd "$BUILD" && ninja -t commands -s "bin/$1") || die "no link command for bin/$1"
+    pm_map=$(printf '%s\n' "$pm_cmd" | sed -n 's/.*-Wl,-Map=\([^ ]*\).*/\1/p')
+    [ -n "$pm_map" ] || die "the link command of $1 writes no -Map"
+    echo "$BUILD/bin/$(basename "$pm_map")"
+}
+
 # jsimage_program NAME: link one client against the image (jsimage.py):
 # its archives folded with every copy of an imported name made local,
 # without JavaScriptCore, WTF and bmalloc, twice (the image at
@@ -683,8 +692,8 @@ build_javascript() {
 jsimage_program() {
     j_prog=$1
     j_out="$BUILD/jsimage/$j_prog"
-    j_map="$BUILD/bin/$j_prog.map"
-    j_plain="$BUILD/bin/$j_prog.plain.map"
+    j_map=$(program_map "$j_prog")
+    j_plain="${j_map%.map}.plain.map"
     [ -f "$j_plain" ] || j_plain=$j_map
     j_log="$BUILD/logs/jsimage-$j_prog-$(date -u +%Y%m%dT%H%M%SZ).log"
     j_start=$(date +%s)
@@ -753,7 +762,7 @@ build_jsimage() {
     if fold_wanted; then fold_programs "$@"; fi
     # 2. the image keeps all of JavaScriptCore, WTF and bmalloc the clients linked
     pairs=
-    for prog; do pairs="$pairs $BUILD/bin/$prog $BUILD/bin/$prog.map"; done
+    for prog; do pairs="$pairs $BUILD/bin/$prog $(program_map "$prog")"; done
     $JSIMAGE needs "$BUILD/jsimage/needs.ld.new" $pairs
     if ! cmp -s "$BUILD/jsimage/needs.ld.new" "$BUILD/jsimage/needs.ld"; then
         mv "$BUILD/jsimage/needs.ld.new" "$BUILD/jsimage/needs.ld"
@@ -763,7 +772,7 @@ build_jsimage() {
     # 3. the image: JavaScriptEngine, folded, its exports, stamped
     browser_build jsimage-image JavaScriptEngine
     if fold_wanted; then fold_programs JavaScriptEngine; fi
-    $JSIMAGE exports "$BUILD/bin/JavaScriptEngine" "$BUILD/bin/JavaScriptEngine.map" "$BUILD/jsimage/exports"
+    $JSIMAGE exports "$BUILD/bin/JavaScriptEngine" "$(program_map JavaScriptEngine)" "$BUILD/jsimage/exports"
     cp "$BUILD/bin/JavaScriptEngine" "$BUILD/jsimage/JavaScriptEngine"
     $JSIMAGE stamp "$BUILD/jsimage/JavaScriptEngine" "$BUILD/jsimage/exports"
     "$GCC16/prefix/bin/m68k-amigaos-strip" -o "$BUILD/jsimage/JavaScriptEngine.stripped" "$BUILD/jsimage/JavaScriptEngine"
