@@ -171,7 +171,9 @@ is done when its "done when" holds on the lab instance.
    patches 0070-0079. Done so far: libpsl is out (patch 0070): public
    suffixes come from our own reader of Mozilla's list,
    `PROGDIR:Network/public-suffixes`. Patch 0071 stops building curl's
-   unused WebSocket stream.
+   unused WebSocket stream. Patches 0072 (the response types without curl)
+   and 0073 (the openweb.fetch backend beside curl, `OB_NET=openweb`) are
+   written, not yet built.
 6. **Drawing on OpenGfx and OpenGPU.** Much of what a GraphicsContext
    needs already exists; reuse it, don't write it again (check of 22 October):
    - anti-aliased path fill and clip: openamigafont `of_raster_a8()` (A8

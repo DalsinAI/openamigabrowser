@@ -316,6 +316,24 @@ The patches, in order:
   (`CurlStream`, `CurlStreamScheduler`) is not built. It serves WebKit's
   network process, which the port does not have; pages get no WebSocket
   channel today (`EmptySocketProvider`), so nothing changes.
+- `0072-amiga-network-types-without-curl.patch`: `ResourceError` gets an
+  Amiga domain (`AmigaNetworkErrorDomain`, `ResourceError::AmigaCode`):
+  openweb.fetch's errors 1 to 9 and the loader's own, with curl's codes
+  mapped onto them; `isCertificationVerificationError` reads it.
+  `ResourceResponse` is built from a plain response head
+  (`AmigaResponseHead`) and `AuthenticationChallenge` from a
+  `ResourceResponse`. curl still does every load, as before.
+- `0073-amiga-openweb-fetch-backend.patch`: loads through openweb.fetch
+  beside curl (`platform/network/amiga/`): `WebFetchAmiga.cpp` runs them on
+  one network thread with `wf_async_start` and `wf_wait`, through a plain C
+  glue (`OpenWebFetchAmiga.c`); `FormData` bodies go through `wf_send`.
+  `ResourceHandleAmiga.cpp` keeps redirects, cookies and the HTTP cache for
+  both. The Shell variable `OB_NET` picks it (`SetEnv OB_NET openweb`);
+  curl is the default. Basic and Digest credentials go in the URL; proxies
+  are the transport's. Bodies are decoded only when the transport decodes
+  (the card); the native transport sends `Accept-Encoding: identity` until
+  the datatypes stream decodes. Needs openamigaservice with the
+  asynchronous calls (protocol 2); without them the engine has curl only.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

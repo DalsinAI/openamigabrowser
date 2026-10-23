@@ -284,10 +284,10 @@ engine's link map.
    `CurlContext::streamScheduler()`), and patch 0010's proxy experiment if
    no one still uses it. Map: their objects (559 lines of source for the
    first two).
-3. **The types without curl.** `ResourceError` with its own domain,
+3. **The types without curl** (patch 0072). `ResourceError` with its own domain,
    `ResourceResponse` and `AuthenticationChallenge` built from a plain
    response head. curl still does the work. Map: nothing; this is what makes 4 and 5 small.
-4. **The openweb.fetch backend beside curl.** The request half of
+4. **The openweb.fetch backend beside curl** (patch 0073; `OB_NET=openweb`). The request half of
    `ResourceHandleAmiga.cpp` on `wf_*` (asynchronous, as above), with
    `CurlFormDataStream`'s job done by a `FormData` reader feeding
    `wf_send()`. A switch picks curl or openweb.fetch, so both are measured
