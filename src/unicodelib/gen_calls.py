@@ -27,7 +27,7 @@ def read_calls(path):
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
-        if not re.fullmatch(r"u[a-z0-9]*_[A-Za-z0-9_]+", line):
+        if not re.fullmatch(r"(u[a-z0-9]*|UCNV)_[A-Za-z0-9_]+", line):
             sys.exit(f"gen_calls.py: {path}: not an ICU C call: {line!r}")
         if line in names:
             sys.exit(f"gen_calls.py: {path}: {line} twice")

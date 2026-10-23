@@ -264,3 +264,8 @@ unorm2_composePair
 unorm2_getRawDecomposition
 uscript_getCode
 uscript_getShortName
+# Callbacks: WebCore's TextCodecICU passes these to ucnv_setFromUCallBack
+# and ucnv_setToUCallBack, and calls the first itself. The library calls
+# back through the program's stub, which goes round to the library's own.
+UCNV_FROM_U_CALLBACK_ESCAPE
+UCNV_TO_U_CALLBACK_SUBSTITUTE

@@ -82,7 +82,7 @@ if grep -E 'lib(nix|nix20)\.a\((__initstdio|environ|malloc|calloc|realloc|setloc
         "$OUT/unicode.library.map"; then
     echo "build-unicode-library.sh: unicode.library links libnix's per-program code" >&2; exit 1
 fi
-lists=$(awk '/^ \.list___(INIT|EXIT)_LIST__/ { getline; print $NF }' "$OUT/unicode.library.map" | sed 's#.*/##' | sort -u | tr '\n' ' ')
+lists=$(awk '/^ \.list___(INIT|EXIT)_LIST__/ { getline; print $NF }' "$OUT/unicode.library.map" | sed 's#.*/##' | LC_ALL=C sort -u | tr '\n' ' ')
 case "$lists" in
     "libnix.a(cxxglue.o) libnix20.a(__gmtoffset.o) ") ;;
     *) echo "build-unicode-library.sh: start-up or exit code nobody runs: $lists" >&2; exit 1 ;;

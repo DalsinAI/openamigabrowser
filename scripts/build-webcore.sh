@@ -356,9 +356,26 @@ configure_engine() {
     # otherwise preprocess every C++ file a second time, uncached, to look
     # for them.
     set -- "$@" -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+    # OB_ICU_DATA given: which ICU libraries the programs link, set in the
+    # cache, for an existing folder too, so it switches with a relink (the
+    # headers are the same ICU 78.3 in both folders).
+    if [ -n "${OB_ICU_DATA:-}" ]; then
+        icu_dir="$OAB_DEPS/icu78-m68k-amigaos"
+        if [ "$OB_ICU_DATA" = library ]; then
+            [ -f "${OB_ICU_DIR:-}/include/ul_client.h" ] || die "OB_ICU_DATA=library needs OB_ICU_DIR (scripts/build-unicode-library.sh)"
+            export OB_ICU_DIR
+            icu_dir=$OB_ICU_DIR
+            set -- "$@" -DOB_UNICODE_DIR="$OB_ICU_DIR"
+        fi
+        set -- "$@" -DOB_ICU_DATA="$OB_ICU_DATA" \
+            -DICU_UC_LIBRARY_RELEASE="$icu_dir/lib/libicuuc.a" \
+            -DICU_I18N_LIBRARY_RELEASE="$icu_dir/lib/libicui18n.a" \
+            -DICU_DATA_LIBRARY_RELEASE="$icu_dir/lib/libicudata.a" \
+            -DCMAKE_CXX_STANDARD_LIBRARIES="$icu_dir/lib/libicudata.a -lpthread -latomic -lstdc++ -L$GCC16/compat -los32compat"
+    fi
     if [ -f "$BUILD/CMakeCache.txt" ]; then
-        # An existing folder keeps its options; only the launcher changes,
-        # which the Makefile generator does not treat as a reason to rebuild.
+        # An existing folder keeps its options; only the launcher and the
+        # ICU libraries change, which do not make anything recompile.
         cmake "$BUILD" "$@"
         return
     fi
@@ -395,23 +412,6 @@ configure_engine() {
            set -- "$@" -DCMAKE_PROJECT_WebKit_INCLUDE="$ROOT/scripts/cmake/ob-pcrel.cmake" ;;
         *) echo "OB_PCREL must be 0 or 1" >&2; exit 2 ;;
     esac
-    # OB_ICU_DATA given: which ICU libraries the programs link, set in the
-    # cache too, so an existing folder switches with a relink (the headers
-    # are the same ICU 78.3 in both folders).
-    if [ -n "${OB_ICU_DATA:-}" ]; then
-        icu_dir="$OAB_DEPS/icu78-m68k-amigaos"
-        if [ "$OB_ICU_DATA" = library ]; then
-            [ -f "${OB_ICU_DIR:-}/include/ul_client.h" ] || die "OB_ICU_DATA=library needs OB_ICU_DIR (scripts/build-unicode-library.sh)"
-            export OB_ICU_DIR
-            icu_dir=$OB_ICU_DIR
-            set -- "$@" -DOB_UNICODE_DIR="$OB_ICU_DIR"
-        fi
-        set -- "$@" -DOB_ICU_DATA="$OB_ICU_DATA" \
-            -DICU_UC_LIBRARY_RELEASE="$icu_dir/lib/libicuuc.a" \
-            -DICU_I18N_LIBRARY_RELEASE="$icu_dir/lib/libicui18n.a" \
-            -DICU_DATA_LIBRARY_RELEASE="$icu_dir/lib/libicudata.a" \
-            -DCMAKE_CXX_STANDARD_LIBRARIES="$icu_dir/lib/libicudata.a -lpthread -latomic -lstdc++ -L$GCC16/compat -los32compat"
-    fi
     cmake -S "$WEBKIT_SOURCE" -B "$BUILD" -G "$(generator)" "$@" \
       -DPORT=Amiga \
       -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain/amigaos3-gcc16.cmake" \

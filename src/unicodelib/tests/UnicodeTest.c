@@ -24,6 +24,8 @@
 
 #include <unicode/ubrk.h>
 #include <unicode/ucal.h>
+#include <unicode/ucnv.h>
+#include <unicode/ucnv_err.h>
 #include <unicode/ucol.h>
 #include <unicode/udat.h>
 #include <unicode/uidna.h>
@@ -166,6 +168,25 @@ int main(int argc, char **argv)
     n = uni(a, 256, "stra\xc3\x9f" "e");
     n = u_strToUpper(b, 256, a, n, "en", &e);
     check("upper case of strasse with sharp s", U_SUCCESS(e) && !strcmp(utf8(b, n), "STRASSE"), utf8(b, n));
+
+    /* a converter calling back through the program's stub, as WebCore's
+       TextCodecICU does: U+00E9 to US-ASCII as an XML escape */
+    {
+        UConverter *cnv;
+        char out[64], *o = out;
+        const UChar *in = a;
+        e = U_ZERO_ERROR;
+        cnv = ucnv_open("US-ASCII", &e);
+        if (U_SUCCESS(e))
+            ucnv_setFromUCallBack(cnv, UCNV_FROM_U_CALLBACK_ESCAPE, UCNV_ESCAPE_XML_DEC, NULL, NULL, &e);
+        n = uni(a, 256, "caf\xc3\xa9");
+        if (U_SUCCESS(e))
+            ucnv_fromUnicode(cnv, &o, out + sizeof out - 1, &in, a + n, NULL, TRUE, &e);
+        *o = 0;
+        check("converter escape callback", U_SUCCESS(e) && !strcmp(out, "caf&#233;"), U_SUCCESS(e) ? out : u_errorName(e));
+        if (cnv)
+            ucnv_close(cnv);
+    }
 
     /* IDNA (UTS 46): the URL parser's call */
     {
