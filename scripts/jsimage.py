@@ -188,9 +188,13 @@ def cmd_exports(image, mapfile, out):
         for off, typ, name in sorted(nm(image)):
             member = owner(sections, starts, off)
             archive = re.match(r'.*/(lib[^/]*\.a)\((.*)\)$', member)
+            # an archive member, or one of the image's own objects (whose
+            # inline copies of JavaScriptCore's functions may be the ones
+            # the image kept)
+            unit = archive.group(2) if archive else member.rsplit('/', 1)[-1]
             ours = name.startswith('_jsimage_')
-            if not ours and (typ.islower() or LINKER_NAME.match(name) or not archive
-                             or OWN_MEMBER.search(archive.group(2))):
+            if not ours and (typ.islower() or LINKER_NAME.match(name) or not member
+                             or OWN_MEMBER.search(unit)):
                 skipped += 1
                 continue
             f.write(f'{off:08x} {name} {archive.group(1) + "(" + archive.group(2) + ")" if archive else member}\n')
@@ -238,13 +242,17 @@ def cmd_imports(exports, program, mapfile, out):
         m = re.match(r'.*/(lib[^/]*\.a)\((.*)\)$', w)
         return f'{m.group(1)}({m.group(2)})' if m else w
     client_members = set(archive_member(w) for w in client_members)
+    # what the client linked from JavaScriptCore, WTF and bmalloc, whichever
+    # copy the image kept (an inline function's may be in the image's own
+    # objects)
+    client_moved = set(name for _, name, who in defined_by(program, mapfile) if MOVED.search(who))
     moved = shared = 0
     with open(out, 'w') as f:
         for line in open(exports):
             off, name, member = line.rstrip('\n').split(' ', 2)
             if name.startswith('_jsimage_'):
                 continue
-            if MOVED.search(member):
+            if MOVED.search(member) or name in client_moved:
                 moved += 1
             elif member in client_members:
                 shared += 1
