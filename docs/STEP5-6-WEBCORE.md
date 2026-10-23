@@ -280,7 +280,7 @@ engine's link map.
 1. **Public suffixes from a file** (patch 0070). `PublicSuffixStoreAmiga.cpp` in place
    of `PublicSuffixStoreCurl.cpp`, the host script and the data file in
    `PROGDIR:`. Map: `libpsl.a`. Needs nothing from openweb.fetch.
-2. **Unused curl code out.** `CurlStream` and `CurlStreamScheduler` (and
+2. **Unused curl code out** (patch 0071; patch 0010 stays until curl goes in 5). `CurlStream` and `CurlStreamScheduler` (and
    `CurlContext::streamScheduler()`), and patch 0010's proxy experiment if
    no one still uses it. Map: their objects (559 lines of source for the
    first two).
