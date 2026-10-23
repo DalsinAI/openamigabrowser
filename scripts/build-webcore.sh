@@ -27,10 +27,15 @@
 #                   (default ~/AmigaChrome/stoves/os32-gcc16)
 #   OAB_DEPS        folder holding icu78-m68k-amigaos/ (scripts/build-icu.sh)
 #                   and m68k-amigaos/, the libraries from the OpenAmiga ports
-#                   (cairo and pixman, FreeType, HarfBuzz, fontconfig, Expat,
-#                   SQLite, curl, libpsl, zlib, libpng) in one prefix, with
+#                   (cairo and pixman, SQLite, curl, libpsl, zlib, libpng) in
+#                   one prefix, with the openfont.library 1.3 SDK
+#                   (openamigafont's sdk/Include_H in its include/) and
 #                   OXP, the XML parser (openamigaxml's oxp/build-amiga.sh with
-#                   OUT set to that prefix; WebKit patch 0030).
+#                   OUT set to that prefix; WebKit patch 0030). Its cairo is
+#                   built without FreeType (openamigacairo's build.sh with
+#                   CAIRO_FONTS=user): text is drawn and shaped with
+#                   openfont.library (WebKit patch 0090), and FreeType,
+#                   HarfBuzz, fontconfig and Expat are not used.
 #                   Its curl must be openamigacurl's main branch, built on
 #                   OpenTLS (opentls.library): WebCore links no OpenSSL and no
 #                   AmiSSL SDK is used (WebKit patch 0022). openamigacurl
@@ -103,7 +108,8 @@
 #                   (test-browser)
 #   OB_FONTS        folder holding the TrueType fonts the engine draws with
 #                   (the Liberation and DejaVu .ttf files); test-browser copies
-#                   them to Fonts/, which fontconfig reads as PROGDIR:Fonts.
+#                   them to Fonts/, which the engine adds to openfont.library's
+#                   folders as PROGDIR:Fonts.
 #                   The engine stops at its first page without them.
 #
 # usage: build-webcore.sh [COMMAND]
@@ -645,13 +651,12 @@ test_browser() {
     set -- "$OB_FONTS"/*.ttf
     [ -f "$1" ] || { echo "no .ttf files in $OB_FONTS" >&2; exit 1; }
     strip="$GCC16/prefix/bin/m68k-amigaos-strip"
-    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/fontconfig" "$OB_TEST_DIR/Fonts"
+    mkdir -p "$OB_TEST_DIR/pages" "$OB_TEST_DIR/Fonts"
     cp "$@" "$OB_TEST_DIR/Fonts/"
     for program in OpenBrowser OpenBrowser.engine obcore-view obcore-dump; do
         "$strip" -o "$OB_TEST_DIR/$program" "$BUILD/bin/$program"
     done
     cp "$ROOT"/tests/pages/*.html "$OB_TEST_DIR/pages/"
-    cp "$ROOT/src/webcore/fontconfig/fonts.conf" "$OB_TEST_DIR/fontconfig/"
     cp "$ROOT/src/webcore/blocklist" "$OB_TEST_DIR/"
     if [ "$(sed -n 's/^OB_ICU_DATA:STRING=//p' "$BUILD/CMakeCache.txt")" != linked ]; then
         mkdir -p "$OB_TEST_DIR/Unicode"

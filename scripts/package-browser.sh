@@ -24,13 +24,17 @@
 #   JSON_LIB       json.library (default build/json-library/, scripts/build-json-library.sh);
 #                  the Installer puts it in LIBS:. Required: the engine's
 #                  JSON.parse parses through it (WebKit patch 0058)
+#   OPENFONT_LIB   openfont.library 1.3 or newer (openamigafont's
+#                  build/amiga/openfont.library); the Installer puts it in
+#                  LIBS:. Required: the engine draws and shapes all its text
+#                  with it (WebKit patch 0090)
 #   EXTRAS         optional: a folder with Libs/javascript.library,
 #                  Libs/JavaScript/JavaScriptEngine, C/JS and
 #                  Libs/json.library, which the Installer offers
 #
 # OUT_DIR/OpenBrowser/            the drawer: OpenBrowser, OpenBrowser.engine,
-#                                 Unicode/, Fonts/, fontconfig/, Libs/
-#                                 (webbrowser.library, WebBrowser/, OpenTLS),
+#                                 Unicode/, Fonts/, Libs/ (webbrowser.library,
+#                                 WebBrowser/, OpenTLS, json and openfont),
 #                                 S/OpenTLS/, Install, icons and readme
 # OUT_DIR/OpenBrowser.info        the drawer's icon
 # OUT_DIR/Install-OpenBrowser     the Installer script (SYS:System/Installer),
@@ -56,7 +60,7 @@ for f in "$BIN/OpenBrowser" "$BIN/OpenBrowser.engine" "$BIN/WebBrowserEngine" "$
 done
 rm -rf "$OUT"; mkdir -p "$OUT"
 D="$OUT/OpenBrowser"; E="$D/Libs/WebBrowser"
-mkdir -p "$D/Fonts" "$D/fontconfig" "$D/Unicode" "$D/S/OpenTLS" "$E/Fonts" "$E/fontconfig" "$E/Unicode"
+mkdir -p "$D/Fonts" "$D/Unicode" "$D/S/OpenTLS" "$E/Fonts" "$E/Unicode"
 "$STRIP" -o "$D/OpenBrowser" "$BIN/OpenBrowser"
 "$STRIP" -o "$D/OpenBrowser.engine" "$BIN/OpenBrowser.engine"
 "$STRIP" -o "$E/WebBrowserEngine" "$BIN/WebBrowserEngine"
@@ -64,7 +68,6 @@ WBLIB=${WEBBROWSER_LIB:-"$HERE/src/webbrowser/bin/webbrowser.library"}
 if [ -f "$WBLIB" ]; then cp "$WBLIB" "$D/Libs/"; fi
 for t in "$D" "$E"; do
     cp "$OB_FONTS"/*.ttf "$t/Fonts/"
-    cp "$HERE/src/webcore/fontconfig/fonts.conf" "$t/fontconfig/"
     cp "$HERE/src/webcore/blocklist" "$t/"
     cp "$ICU_DATA" "$t/Unicode/icudt78b.dat"
 done
@@ -72,6 +75,9 @@ cp "$OPENTLS_LIBS/opentls.library" "$OPENTLS_LIBS/opencrypto.library" "$D/Libs/"
 JSONLIB=${JSON_LIB:-"$HERE/build/json-library/json.library"}
 [ -f "$JSONLIB" ] || { echo "package-browser.sh: no $JSONLIB (scripts/build-json-library.sh); the engine's JSON.parse needs it" >&2; exit 2; }
 cp "$JSONLIB" "$D/Libs/"
+OPENFONTLIB=${OPENFONT_LIB:?set OPENFONT_LIB to openfont.library 1.3 (openamigafont); the engine draws its text with it}
+[ -f "$OPENFONTLIB" ] || { echo "package-browser.sh: no $OPENFONTLIB" >&2; exit 2; }
+cp "$OPENFONTLIB" "$D/Libs/openfont.library"
 cp "$CA_BUNDLE/ca-bundle.pem" "$D/S/OpenTLS/"
 [ -f "$CA_BUNDLE/ca-bundle.LICENSE" ] && cp "$CA_BUNDLE/ca-bundle.LICENSE" "$D/S/OpenTLS/"
 cp "$HERE/dist/OpenBrowser/Install" "$D/Install"

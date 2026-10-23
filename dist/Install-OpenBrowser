@@ -80,6 +80,15 @@
         (makedir "S:OpenTLS")
         (copyfiles (source "OpenBrowser/S/OpenTLS") (dest "S:OpenTLS") (all) (nogauge))))
 
+; openfont.library 1.3 or newer: the engine draws and shapes all its text
+; with it. An older one is renamed .before-20261023 (kept).
+(if (< (getversion "LIBS:openfont.library") 65539)
+    (
+        (if (exists "LIBS:openfont.library")
+            (if (= 0 (rename "LIBS:openfont.library" "LIBS:openfont.library.before-20261023"))
+                (abort "Could not rename the old LIBS:openfont.library.")))
+        (copyfiles (source "OpenBrowser/Libs/openfont.library") (dest "LIBS:") (nogauge))))
+
 ; json.library: JSON for the browser and any other program (23 KB); the
 ; engine's JSON.parse parses through it
 (copylib (source "OpenBrowser/Libs/json.library") (dest "LIBS:") (nogauge)

@@ -305,6 +305,15 @@ The patches, in order:
   `LIBS:json.library` (version 1) must be installed; without it
   `JSON.parse` throws an Error that says so. Also checks the stack in the
   fast `JSON.stringify` on the 68k (no guard page below the stack).
+- `0090-amiga-text-openfont.patch`: text on openfont.library 1.3
+  (`USE_OPENFONT`) in place of FreeType, fontconfig and HarfBuzz, which are
+  no longer found or linked. Families are matched with OpenFont's
+  `OFA_Exact`, with the aliases the old `fonts.conf` gave kept in
+  `FontCacheOpenFont.cpp`; glyphs are drawn through cairo user fonts that
+  fill OpenFont's outlines (cairo built with `CAIRO_FONTS=user`, no
+  FreeType backend); metrics follow FreeType's rules from the raw tables;
+  complex runs are itemised by script with ICU and shaped with
+  `OF_ShapeUTF16`. `LIBS:openfont.library` 1.3 must be installed.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

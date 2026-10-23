@@ -54,7 +54,7 @@ gives its memory back, and the next call starts it again.
 LIBS:webbrowser.library
 LIBS:WebBrowser/WebBrowserEngine
 LIBS:WebBrowser/Fonts/                 the TrueType fonts
-LIBS:WebBrowser/fontconfig/fonts.conf  (its dir is PROGDIR:Fonts)
+LIBS:openfont.library                  1.3 or newer: the engine's text
 ```
 
 The engine keeps its cookies in `LIBS:WebBrowser/Cookies.db` and its TLS
