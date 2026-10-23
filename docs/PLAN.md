@@ -66,13 +66,13 @@ The design documents disagree with each other (inventory of 22 October
 | Decoders are datatypes | picture datatypes (openamigaimage); stream.datatype, gzip.datatype, brotli.datatype | pictures: yes. The stream class and the gzip and Brotli datatypes are a design only (JIT-on-core 0.5 §5.1), with no code in any repo | partly | libpng (for cairo) and zlib are still linked; curl decodes compressed bodies |
 | JavaScript JIT | patches 0020-0052 | in the browser | **yes** | nothing |
 | javascript.library | #63, #64 | built and tested (22 Oct: EVAL, errors, .jsc cache 7.5 s to 0.14 s) | **no**: the browser still links its own JavaScriptCore | the browser's build |
-| ICU | the data file (#52); later unicode.library (breaking, NFC, IDNA, properties) | the data file works. **No unicode.library exists**: no repo, branch, PR or binary was found on 22 October; `src/webcore/ob_icudata.c` names it as the later way to share the data. | **no**: the 5.2 MB of data is still built in | the build options |
+| ICU | unicode.library (`src/unicodelib`, #90, #102): ICU 78.3's code and data, one shared copy, 261 calls | done: library 4,032,168 bytes, data 4,597,248 bytes; UnicodeTest passed on lab copies of Instance-14 and Instance-32 (23 Oct); the 0.8.1 engine relinked on it is 71,871,112 bytes stripped (75,787,960 before, 3,916,848 less) and draws Wikipedia | **no**: opt-in (`OB_ICU_DATA=library`), not yet the default build | the build options; then step 7's second half, our own code in place of ICU's |
 
 What the old libraries cost in today's engine, from its link map (MiB):
 
 | Library | Size | Goes when |
 | --- | --- | --- |
-| ICU (code 3.4 + data 5.2) | 8.6 | data: step 2; code: step 7 |
+| ICU (code 3.4 + data 5.2) | 8.6 | data: step 2; code: into unicode.library with `OB_ICU_DATA=library` (step 7, 3.9 MB less, 23 Oct); our own code: step 7 |
 | HarfBuzz | 1.16 | step 3 (gone, #94) |
 | FreeType | 0.50 | step 3 (gone, #94) |
 | fontconfig, with Expat | 0.45 | step 3 (gone, #94) |
@@ -234,9 +234,12 @@ is done when its "done when" holds on the lab instance.
      directly, and nothing in the browser uses pixman.library. This is the largest step: all of WebCore's
    painting goes through it. Done when cairo, pixman and libpng are gone
    from the map.
-7. **unicode.library, then ICU out.** Make unicode.library (none exists
-   yet): one shared copy of ICU's data and its calls for every program,
-   starting with the browser engine and JavaScriptEngine. Then replace
+7. **unicode.library, then ICU out.** unicode.library is made (#90,
+   #102, 23 October, `src/unicodelib/README.md`): one shared copy of
+   ICU's data and its calls for every program; the engine links 6.8 KB of
+   stubs with `OB_ICU_DATA=library`. Left: make it the default build and
+   ship it (`LIBS:unicode.library`, `LIBS:Unicode/icudt78b.dat`), and
+   move JavaScriptEngine onto it (the same `OB_ICU_DIR`). Then replace
    ICU's code with our own, in unicode.library: line and word breaking,
    NFC, IDNA, Unicode properties, and the Intl services JavaScriptCore
    uses (collation, number, date and plural formatting, locales and time
@@ -249,7 +252,8 @@ Not in the order above, still open:
 - **#6, the visit cache (patch 0018).** Open since 7 October: finish it or
   close it.
 - **Two copies of ICU's code** while the browser runs on javascript.library
-  (about 3.4 MB each once step 2 has moved the data out), until step 7.
+  (about 3.4 MB each once step 2 has moved the data out), until both link
+  unicode.library (step 7).
 - **The inventory of 22 October 2026** (every repo, PR, design document and
   lab) is the evidence behind the "where each decision stands" table. It is
   kept outside the repositories, in INVENTORY-20261022.
