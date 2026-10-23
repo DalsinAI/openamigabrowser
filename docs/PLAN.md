@@ -65,7 +65,7 @@ The design documents disagree with each other (inventory of 22 October
 | Network is openweb.fetch | openweb.fetch/1 (openamigaservice `src/webfetch.c`, `docs/OPENWEB_FETCH.md`, v1 12 Oct) | runs on the services card only, and its TLS is the host's OpenSSL 3, not OpenTLS. It has cookies (passes every Set-Cookie through), keep-alive pooling, host-side gzip, deflate and Brotli, and 64 fetches at once. It lacks HTTP/2, WebSocket, proxies, HTTP auth and a LAN transport. No `OWFetch` binary on any drive; no WebCore network backend on it | **no**: today curl 8.22 on opentls.library 1.3 (patch 0022), HTTP/2 through nghttp2 (0023), bsdsocket.library from OpenSocket | WebCore's CurlContext and curl loader |
 | Decoders are datatypes | picture datatypes (openamigaimage); stream.datatype, gzip.datatype, brotli.datatype | pictures: yes. The stream class and the gzip and Brotli datatypes are a design only (JIT-on-core 0.5 §5.1), with no code in any repo | partly | libpng (for cairo) and zlib are still linked; curl decodes compressed bodies |
 | JavaScript JIT | patches 0020-0052 | in the browser | **yes** | nothing |
-| javascript.library | #63, #64 | built and tested (22 Oct: EVAL, errors, .jsc cache 7.5 s to 0.14 s) | **no**: the browser still links its own JavaScriptCore | the browser's build |
+| javascript.library | #63, #64; JavaScriptEngine built with the browser (#98) and shared with it (jsimage: #99, #103, #106, #108) | done: JavaScriptEngine 25,374,812 bytes stripped (38,086,144 before, 23 Oct); the browser engine takes JavaScriptCore, WTF and bmalloc from it (49,883,356 bytes stripped, 73,263,356 before); DOM bench no slower on lab copies of Instance-14 and Instance-32 | **yes**, when built with `build-webcore.sh jsimage` (`package-browser.sh` packs it with `Libs/JavaScript/JavaScriptEngine`) | nothing in the jsimage engine; the plain build (`OB_JSIMAGE=0`) still links its own |
 | ICU | unicode.library (`src/unicodelib`, #90, #102): ICU 78.3's code and data, one shared copy, 261 calls | done: library 4,032,168 bytes, data 4,597,248 bytes; UnicodeTest passed on lab copies of Instance-14 and Instance-32 (23 Oct); the 0.8.1 engine relinked on it is 71,871,112 bytes stripped (75,787,960 before, 3,916,848 less) and draws Wikipedia | **no**: opt-in (`OB_ICU_DATA=library`), not yet the default build | the build options; then step 7's second half, our own code in place of ICU's |
 
 What the old libraries cost in today's engine, from its link map (MiB):
@@ -78,7 +78,7 @@ What the old libraries cost in today's engine, from its link map (MiB):
 | fontconfig, with Expat | 0.45 | step 3 (gone, #94) |
 | cairo, pixman, libpng | 0.94 | step 6 |
 | curl, nghttp2, libpsl | 0.54 | step 5 |
-| JavaScriptCore | 21.1 | step 4, into javascript.library |
+| JavaScriptCore | 21.1 | step 4, into javascript.library (done 23 Oct: the jsimage engine is 23.4 MB smaller) |
 
 WebCore's own cairo, FreeType and curl platform code (inside WebCore's
 47 MB) goes along with the libraries.
@@ -176,6 +176,33 @@ is done when its "done when" holds on the lab instance.
    patches is not checked. Done when the browser engine links no
    JavaScriptCore of its own (about 22.6 MB smaller, 90.2 to about 67.6 MB)
    and the benchmarks are no slower.
+
+   **Done 23 October 2026** (#98, #99, #103, #106, #108, #110 and this
+   step's last PR). JavaScriptEngine is built the browser's way:
+   MinSizeRel, -O2 JavaScriptCore, JIT patches 0020-0058, one pc-relative
+   hunk. It is 25,374,812 bytes stripped, down from 38,086,144. The browser
+   engine is a jsimage client (`scripts/jsimage.py`, `src/jslib/jsimage.h`):
+   it is linked without JavaScriptCore, WTF and bmalloc, and at start-up it
+   loads JavaScriptEngine and runs on its copy. It is 49,883,356 bytes
+   stripped, down from 73,263,356 for the same build linked plain (23.4 MB
+   less), with a 769,152-byte fixup table. The engine looks for the image
+   in `LIBS:JavaScript/` first (javascript.library's, when it is this
+   build's: the image id is read from the file before loading), then in
+   its drawer (`Libs/JavaScript/JavaScriptEngine`). Times on dev's lab
+   copies (JSIMG6, quiet machine, 9 runs each, alternating with plain
+   0.8.2):
+
+   | | DOM bench JS, jsimage | DOM bench JS, plain 0.8.2 | 0.8.1 |
+   | --- | --- | --- | --- |
+   | Instance-14 | 1.473 s (median 1.48) | 1.496 s (median 1.48) | 1.46 s |
+   | Instance-32 | median 1.58 s (1.52-1.60) | median 1.58 s (1.50-1.60) | 1.51 s |
+
+   The Instance-32 row's 0.8.1 time is an earlier day's: on one fresh
+   Instance-32 copy (REL82, 5 runs each) 0.8.1 has a median of 1.56 s and
+   0.8.2 1.52 s, so 0.8.2 is no slower than 0.8.1 either.
+   Wikipedia and Reddit load on both copies; with `-settle 4` Wikipedia
+   loads all 14 requests on both builds (15.50 s with the shared image,
+   15.34 s plain, Instance-14).
 5. **Network on openweb.fetch.** First, give openweb.fetch what the
    browser needs: TLS through OpenTLS instead of the host's OpenSSL,
    HTTP/2, WebSocket, proxies, HTTP auth, and a transport that works
