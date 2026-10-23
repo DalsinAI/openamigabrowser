@@ -1,4 +1,4 @@
-From 02cf7661ec4059d1fdcb40448539b87b3027c58a Mon Sep 17 00:00:00 2001
+From 63738489b7434948a42fc4f06f66191ad541be8f Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 04:59:39 +0000
 Subject: [PATCH] WebCore: text on openfont.library on the Amiga
@@ -24,6 +24,11 @@ or linked.
 - Glyph pages, web fonts (TrueType, OpenType, WOFF) and the complex path:
   runs are itemised by script with ICU and shaped with OF_ShapeUTF16,
   with the CSS font features.
+- Emoji in fonts that keep them as PNG images (CBDT, sbix) are drawn
+  through cairo's colour glyph callback: openfont.library 1.4 decodes the
+  strike nearest the size through the PNG datatype (OF_GlyphColorBitmap),
+  so neither FreeType nor libpng is needed for them. With 1.3 those glyphs
+  are blank.
 - Calls on faces take OpenFontFace::lock(), as FreeType ports take
   cairoFontLock().
 - LIBS:openfont.library (version 1, revision 3 or newer) is opened once,
@@ -41,20 +46,20 @@ CAIRO_FONTS=user).
  .../platform/graphics/FontPlatformData.cpp    |   4 +-
  .../platform/graphics/FontPlatformData.h      |  21 +-
  .../platform/graphics/WidthIterator.cpp       |   2 +-
- .../ComplexTextControllerOpenFont.cpp         | 272 +++++++++++++
- .../graphics/openfont/FontCacheOpenFont.cpp   | 227 +++++++++++
- .../FontCustomPlatformDataOpenFont.cpp        | 122 ++++++
- .../openfont/FontPlatformDataOpenFont.cpp     | 183 +++++++++
+ .../ComplexTextControllerOpenFont.cpp         | 272 +++++++++++
+ .../graphics/openfont/FontCacheOpenFont.cpp   | 227 +++++++++
+ .../FontCustomPlatformDataOpenFont.cpp        | 122 +++++
+ .../openfont/FontPlatformDataOpenFont.cpp     | 183 ++++++++
  .../openfont/GlyphPageTreeNodeOpenFont.cpp    |  79 ++++
- .../graphics/openfont/OpenFontFace.cpp        | 371 ++++++++++++++++++
- .../platform/graphics/openfont/OpenFontFace.h | 115 ++++++
- .../graphics/openfont/OpenFontLibrary.c       | 217 ++++++++++
- .../graphics/openfont/OpenFontLibrary.h       | 141 +++++++
- .../openfont/SimpleFontDataOpenFont.cpp       | 194 +++++++++
+ .../graphics/openfont/OpenFontFace.cpp        | 440 ++++++++++++++++++
+ .../platform/graphics/openfont/OpenFontFace.h | 115 +++++
+ .../graphics/openfont/OpenFontLibrary.c       | 251 ++++++++++
+ .../graphics/openfont/OpenFontLibrary.h       | 158 +++++++
+ .../openfont/SimpleFontDataOpenFont.cpp       | 194 ++++++++
  .../rendering/style/RenderStyleConstants.h    |   2 +-
- Source/cmake/FindOpenFont.cmake               |  88 +++++
+ Source/cmake/FindOpenFont.cmake               |  88 ++++
  Source/cmake/OptionsAmiga.cmake               |  15 +-
- 21 files changed, 2089 insertions(+), 17 deletions(-)
+ 21 files changed, 2209 insertions(+), 17 deletions(-)
  create mode 100644 Source/WebCore/platform/OpenFont.cmake
  create mode 100644 Source/WebCore/platform/graphics/openfont/ComplexTextControllerOpenFont.cpp
  create mode 100644 Source/WebCore/platform/graphics/openfont/FontCacheOpenFont.cpp
@@ -1215,10 +1220,10 @@ index 00000000000..b24c0bb4d4f
 +#endif // USE(OPENFONT)
 diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontFace.cpp b/Source/WebCore/platform/graphics/openfont/OpenFontFace.cpp
 new file mode 100644
-index 00000000000..fe5646f9ed5
+index 00000000000..6dc2eeac758
 --- /dev/null
 +++ b/Source/WebCore/platform/graphics/openfont/OpenFontFace.cpp
-@@ -0,0 +1,371 @@
+@@ -0,0 +1,440 @@
 +/*
 + * Copyright (C) 2026 AmigaChrome Team.
 + *
@@ -1252,6 +1257,7 @@ index 00000000000..fe5646f9ed5
 +#include "FloatRect.h"
 +#include "OpenFontLibrary.h"
 +#include <array>
++#include <cmath>
 +#include <cairo.h>
 +#include <wtf/HashMap.h>
 +#include <wtf/Lock.h>
@@ -1274,6 +1280,7 @@ index 00000000000..fe5646f9ed5
 +    unsigned unitsPerEm { 1000 };
 +    std::span<const uint8_t> horizontalMetrics;
 +    unsigned horizontalMetricCount { 0 };
++    bool hasColorBitmaps { false };
 +    cairo_font_extents_t extents { };
 +};
 +
@@ -1405,6 +1412,70 @@ index 00000000000..fe5646f9ed5
 +    return CAIRO_STATUS_SUCCESS;
 +}
 +
++// Emoji in fonts that keep them as PNG images (CBDT, sbix): openfont.library
++// decodes the strike nearest the scaled font's size through the PNG
++// datatype, and the image is painted in em units, as the outline would be.
++// Other glyphs (and every glyph of other fonts) go to renderGlyph.
++static cairo_status_t renderColorGlyph(cairo_scaled_font_t* scaledFont, unsigned long glyph, cairo_t* cr, cairo_text_extents_t* extents)
++{
++    auto* data = cairoFaceData(scaledFont);
++    if (!data || !data->hasColorBitmaps)
++        return CAIRO_STATUS_USER_FONT_NOT_IMPLEMENTED;
++
++    cairo_matrix_t scale;
++    cairo_scaled_font_get_scale_matrix(scaledFont, &scale);
++    unsigned pixelSize = std::lround(std::hypot(scale.xy, scale.yy));
++
++    OBOFColorBitmap bitmap;
++    {
++        Locker locker { OpenFontFace::lock() };
++        if (!obof_glyph_color_bitmap(data->face, glyph, pixelSize, &bitmap))
++            return CAIRO_STATUS_USER_FONT_NOT_IMPLEMENTED;
++    }
++
++    // cairo's ARGB32 is premultiplied, in native byte order.
++    RefPtr<cairo_surface_t> image = adoptRef(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bitmap.width, bitmap.height));
++    if (cairo_surface_status(image.get()) != CAIRO_STATUS_SUCCESS) {
++        obof_free_color_bitmap(&bitmap);
++        return CAIRO_STATUS_SUCCESS;
++    }
++    cairo_surface_flush(image.get());
++    auto* rows = cairo_image_surface_get_data(image.get());
++    int stride = cairo_image_surface_get_stride(image.get());
++    for (uint32_t y = 0; y < bitmap.height; ++y) {
++        auto* row = reinterpret_cast<uint32_t*>(rows + y * stride);
++        for (uint32_t x = 0; x < bitmap.width; ++x) {
++            uint32_t pixel = bitmap.pixels[y * bitmap.width + x];
++            uint32_t alpha = pixel >> 24;
++            if (alpha == 255) {
++                row[x] = pixel;
++                continue;
++            }
++            auto premultiply = [alpha](uint32_t channel) { return (channel * alpha + 127) / 255; };
++            row[x] = (alpha << 24) | (premultiply((pixel >> 16) & 0xFF) << 16) | (premultiply((pixel >> 8) & 0xFF) << 8) | premultiply(pixel & 0xFF);
++        }
++    }
++    cairo_surface_mark_dirty(image.get());
++
++    double em = bitmap.ppem ? bitmap.ppem : 1;
++    extents->x_advance = advanceFromHorizontalMetrics(data->horizontalMetrics, data->horizontalMetricCount, glyph) / static_cast<double>(data->unitsPerEm);
++    extents->y_advance = 0;
++    extents->x_bearing = bitmap.left / em;
++    extents->y_bearing = -bitmap.top / em;
++    extents->width = bitmap.width / em;
++    extents->height = bitmap.height / em;
++    obof_free_color_bitmap(&bitmap);
++
++    cairo_save(cr);
++    cairo_translate(cr, extents->x_bearing, extents->y_bearing);
++    cairo_scale(cr, 1 / em, 1 / em);
++    cairo_set_source_surface(cr, image.get(), 0, 0);
++    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
++    cairo_paint(cr);
++    cairo_restore(cr);
++    return CAIRO_STATUS_SUCCESS;
++}
++
 +static void destroyCairoFaceData(void* pointer)
 +{
 +    auto* data = static_cast<OpenFontCairoFace*>(pointer);
@@ -1434,6 +1505,7 @@ index 00000000000..fe5646f9ed5
 +    data->unitsPerEm = unitsPerEm;
 +    data->horizontalMetrics = m_horizontalMetrics;
 +    data->horizontalMetricCount = m_horizontalMetricCount;
++    data->hasColorBitmaps = !table(tag('C', 'B', 'D', 'T')).empty() || !table(tag('s', 'b', 'i', 'x')).empty();
 +    double em = unitsPerEm;
 +    int ascender = readInt16(horizontalHeader, 4);
 +    int descender = readInt16(horizontalHeader, 6);
@@ -1446,6 +1518,8 @@ index 00000000000..fe5646f9ed5
 +    m_cairoFontFace = adoptRef(cairo_user_font_face_create());
 +    cairo_user_font_face_set_init_func(m_cairoFontFace.get(), initScaledFont);
 +    cairo_user_font_face_set_render_glyph_func(m_cairoFontFace.get(), renderGlyph);
++    if (data->hasColorBitmaps)
++        cairo_user_font_face_set_render_color_glyph_func(m_cairoFontFace.get(), renderColorGlyph);
 +    if (cairo_font_face_set_user_data(m_cairoFontFace.get(), &openFontCairoFaceKey, data, destroyCairoFaceData) != CAIRO_STATUS_SUCCESS)
 +        destroyCairoFaceData(data);
 +}
@@ -1713,10 +1787,10 @@ index 00000000000..a0ccb78433c
 +#endif // USE(OPENFONT)
 diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
 new file mode 100644
-index 00000000000..e96159ac8b9
+index 00000000000..6a748803917
 --- /dev/null
 +++ b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,251 @@
 +/*
 + * Copyright (C) 2026 AmigaChrome Team.
 + *
@@ -1755,15 +1829,18 @@ index 00000000000..e96159ac8b9
 +
 +#include <pthread.h>
 +#include <stdlib.h>
++#include <string.h>
 +
 +/* One base for every thread: the library takes its calls one at a time. */
 +struct Library* OpenFontBase;
 +static pthread_once_t s_openOnce = PTHREAD_ONCE_INIT;
 +static int s_available;
++static int s_hasColorBitmaps;
 +
 +/* The structures below are the library's own, passed straight through. */
 +typedef char obofGlyphMatchesLibrary[sizeof(OBOFGlyph) == sizeof(struct OFGlyph) ? 1 : -1];
 +typedef char obofFeatureMatchesLibrary[sizeof(OBOFFeature) == sizeof(struct OFFeature) ? 1 : -1];
++typedef char obofColorMatchesLibrary[sizeof(OBOFColorBitmap) == sizeof(struct OFColorBitmap) ? 1 : -1];
 +
 +static void closeOpenFont(void)
 +{
@@ -1789,6 +1866,7 @@ index 00000000000..e96159ac8b9
 +        return;
 +    atexit(closeOpenFont);
 +    s_available = 1;
++    s_hasColorBitmaps = OpenFontBase->lib_Revision >= OPENFONT_REVISION_COLOR;
 +
 +    /* The fonts in the program's drawer (Fonts/), by their full path, as
 +     * the font index keeps every folder's; the installed browser's
@@ -1900,6 +1978,36 @@ index 00000000000..e96159ac8b9
 +    return 1;
 +}
 +
++int obof_glyph_color_bitmap(struct OFFace* face, uint32_t glyph, unsigned ppem, OBOFColorBitmap* bitmap)
++{
++    struct OFColorBitmap color;
++    memset(bitmap, 0, sizeof *bitmap);
++    if (!s_hasColorBitmaps || OF_GlyphColorBitmap(face, glyph, ppem, &color) != OFERR_OK)
++        return 0;
++    bitmap->pixels = (uint32_t*)color.cb_Pixels;
++    bitmap->width = color.cb_Width;
++    bitmap->height = color.cb_Height;
++    bitmap->left = color.cb_Left;
++    bitmap->top = color.cb_Top;
++    bitmap->ppem = color.cb_PPEM;
++    return 1;
++}
++
++void obof_free_color_bitmap(OBOFColorBitmap* bitmap)
++{
++    struct OFColorBitmap color;
++    if (!bitmap->pixels)
++        return;
++    color.cb_Pixels = (ULONG*)bitmap->pixels;
++    color.cb_Width = bitmap->width;
++    color.cb_Height = bitmap->height;
++    color.cb_Left = bitmap->left;
++    color.cb_Top = bitmap->top;
++    color.cb_PPEM = bitmap->ppem;
++    OF_FreeColorBitmap(&color);
++    memset(bitmap, 0, sizeof *bitmap);
++}
++
 +int obof_glyph_outline(struct OFFace* face, uint32_t glyph, uint8_t* verbs, uint32_t maxVerbs,
 +    int32_t* points, uint32_t maxPoints, uint32_t* verbCount, uint32_t* pointCount)
 +{
@@ -1936,10 +2044,10 @@ index 00000000000..e96159ac8b9
 +}
 diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.h b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.h
 new file mode 100644
-index 00000000000..d76e90f2897
+index 00000000000..7bc9039e341
 --- /dev/null
 +++ b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.h
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,158 @@
 +/*
 + * Copyright (C) 2026 AmigaChrome Team.
 + *
@@ -2026,6 +2134,23 @@ index 00000000000..d76e90f2897
 +/* A glyph's ink box at the face's size, 26.6 and y up: x bearing, y
 + * bearing (the top), width, height. 0 when the glyph has none. */
 +int obof_glyph_extents(struct OFFace*, uint32_t glyph, int32_t box[4]);
++
++/* A colour glyph (an emoji) from a font with PNG images (CBDT or sbix),
++ * decoded by openfont.library 1.4 through the PNG datatype: pixels are
++ * 0xAARRGGBB, not premultiplied; left and top place the image's top-left
++ * corner from the pen, y up, in the strike's pixels (ppem). 0 when the
++ * glyph has none, or the library is older than 1.4. */
++typedef struct {
++    uint32_t* pixels;
++    uint32_t width;
++    uint32_t height;
++    int32_t left;
++    int32_t top;
++    uint32_t ppem;
++} OBOFColorBitmap;
++
++int obof_glyph_color_bitmap(struct OFFace*, uint32_t glyph, unsigned ppem, OBOFColorBitmap*);
++void obof_free_color_bitmap(OBOFColorBitmap*);
 +
 +#define OBOF_PATH_MOVE  0
 +#define OBOF_PATH_LINE  1

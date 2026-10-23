@@ -28,7 +28,7 @@
 #   OAB_DEPS        folder holding icu78-m68k-amigaos/ (scripts/build-icu.sh)
 #                   and m68k-amigaos/, the libraries from the OpenAmiga ports
 #                   (cairo and pixman, SQLite, curl, libpsl, zlib, libpng) in
-#                   one prefix, with the openfont.library 1.3 SDK
+#                   one prefix, with the openfont.library 1.4 SDK
 #                   (openamigafont's sdk/Include_H in its include/) and
 #                   OXP, the XML parser (openamigaxml's oxp/build-amiga.sh with
 #                   OUT set to that prefix; WebKit patch 0030). Its cairo is

@@ -313,7 +313,11 @@ The patches, in order:
   fill OpenFont's outlines (cairo built with `CAIRO_FONTS=user`, no
   FreeType backend); metrics follow FreeType's rules from the raw tables;
   complex runs are itemised by script with ICU and shaped with
-  `OF_ShapeUTF16`. `LIBS:openfont.library` 1.3 must be installed.
+  `OF_ShapeUTF16`. Emoji in fonts that keep them as PNG images (CBDT,
+  sbix) are drawn through cairo's colour glyph callback from
+  openfont.library 1.4's `OF_GlyphColorBitmap`, which decodes them through
+  the PNG datatype, so neither FreeType nor libpng is linked.
+  `LIBS:openfont.library` 1.3 must be installed; 1.4 for emoji.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 

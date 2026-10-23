@@ -24,7 +24,7 @@
 #   JSON_LIB       json.library (default build/json-library/, scripts/build-json-library.sh);
 #                  the Installer puts it in LIBS:. Required: the engine's
 #                  JSON.parse parses through it (WebKit patch 0058)
-#   OPENFONT_LIB   openfont.library 1.3 or newer (openamigafont's
+#   OPENFONT_LIB   openfont.library 1.4 or newer (openamigafont's
 #                  build/amiga/openfont.library); the Installer puts it in
 #                  LIBS:. Required: the engine draws and shapes all its text
 #                  with it (WebKit patch 0090)
@@ -75,7 +75,7 @@ cp "$OPENTLS_LIBS/opentls.library" "$OPENTLS_LIBS/opencrypto.library" "$D/Libs/"
 JSONLIB=${JSON_LIB:-"$HERE/build/json-library/json.library"}
 [ -f "$JSONLIB" ] || { echo "package-browser.sh: no $JSONLIB (scripts/build-json-library.sh); the engine's JSON.parse needs it" >&2; exit 2; }
 cp "$JSONLIB" "$D/Libs/"
-OPENFONTLIB=${OPENFONT_LIB:?set OPENFONT_LIB to openfont.library 1.3 (openamigafont); the engine draws its text with it}
+OPENFONTLIB=${OPENFONT_LIB:?set OPENFONT_LIB to openfont.library 1.4 (openamigafont); the engine draws its text with it}
 [ -f "$OPENFONTLIB" ] || { echo "package-browser.sh: no $OPENFONTLIB" >&2; exit 2; }
 cp "$OPENFONTLIB" "$D/Libs/openfont.library"
 cp "$CA_BUNDLE/ca-bundle.pem" "$D/S/OpenTLS/"

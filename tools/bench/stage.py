@@ -23,7 +23,7 @@ Programs (left out with --no-programs, for restaging only the pages):
   Fonts/        the .ttf files of --fonts (default $OB_FONTS); needed unless
                 DIR/Fonts already has them
   Libs/openfont.library   --openfont FILE (default $OPENFONT_LIB), optional:
-                the engine draws its text with openfont.library 1.3 (WebKit
+                the engine draws its text with openfont.library 1.4 (WebKit
                 patch 0090) and opens this one when LIBS: has none or an
                 older one
   OpenBrowserLite, obfetch   from --lite (default $OB_LITE_DIR), optional

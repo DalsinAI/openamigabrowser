@@ -103,7 +103,7 @@ nghttp2 (`libnghttp2.a`, pinned and built by openamigacurl) for curl's
 HTTP/2. No AmiSSL SDK is needed (until 19 October 2026 the engine used
 AmiSSL 5). cairo is built without FreeType (openamigacairo, `CAIRO_FONTS=user`)
 and the prefix holds openfont.library's SDK (openamigafont): the engine's
-text is drawn and shaped with openfont.library 1.3, which the Amiga needs in
+text is drawn and shaped with openfont.library 1.4, which the Amiga needs in
 `LIBS:`. Then apply the patches in `webkit/` and run
 `WEBKIT_SOURCE=... OAB_DEPS=... scripts/build-webcore.sh`.
 For https:// the Amiga needs opentls.library 1.2 or newer and its CA bundle

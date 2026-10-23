@@ -12,7 +12,7 @@
 ;    .before-20261022 and the drawer's goes in; one whose version cannot be
 ;    read (not loaded, no $VER in the file) is kept: the Installer reads
 ;    the RomTag and checks it;
-;  - LIBS:openfont.library 1.3 or newer (the engine draws its text with
+;  - LIBS:openfont.library 1.4 or newer (the engine draws its text with
 ;    it): missing, it goes in; older, it is renamed .before-20261023 and
 ;    the drawer's goes in; unreadable, it is kept, as above;
 ;  - LIBS:json.library (the engine's JSON.parse needs it) and
@@ -83,7 +83,7 @@ EndIf
 Echo "Installed LIBS:opencrypto.library"
 Lab cryptodone
 
-Version openfont.library 1 3 >NIL:
+Version openfont.library 1 4 >NIL:
 Set vrc $RC
 If $vrc EQ 0 VAL
   Echo "LIBS:openfont.library is new enough, kept"

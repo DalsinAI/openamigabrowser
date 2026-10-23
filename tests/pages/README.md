@@ -4,7 +4,7 @@ Pages for `obcore-view`, which runs OpenBrowser's page layer (WebCore with
 JavaScript, the DOM and timers) without a window and prints what the page
 does: `OBVIEW_TITLE`, `OBVIEW_ALERT`, `OBVIEW_CONSOLE` and so on. Copy the
 pages and `obcore-view` to the Amiga and run it from a Shell, with the
-fonts in `PROGDIR:Fonts` and openfont.library 1.3 in `LIBS:` (or
+fonts in `PROGDIR:Fonts` and openfont.library 1.4 in `LIBS:` (or
 `PROGDIR:Libs`) as for OpenBrowser itself.
 
 | Page | Command | What it shows | Result on AmigaOS 3.2.3, 4 October 2026 |
