@@ -151,6 +151,48 @@ def nm(path):
             yield int(p[0], 16), p[1], p[2]
 
 
+# The hunk files' symbol tables cut long names (about 128 characters); the
+# archives, and so the client's references, have them whole. A cut name is
+# made whole again from the -Map: the input section that starts where the
+# symbol is (-ffunction-sections, -fdata-sections) is named after it.
+LONG_NAME = 100
+
+
+def section_names(path):
+    """{start: [names]} of the input sections of a -Map, each name without
+    its .text./.data./.rodata./.bss. prefix, as the symbol it holds"""
+    out = {}
+    sect = re.compile(r'^ \.(?:text|data\.rel\.ro\.local|data\.rel\.ro|data\.rel\.local|data\.rel|data|rodata|bss)\.(\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+) ')
+    pending = None
+    for line in open(path, errors='replace'):
+        if pending is not None and line.startswith('  '):
+            line = pending + line
+        pending = None
+        m = sect.match(line)
+        if m:
+            out.setdefault(int(m.group(2), 16), []).append('_' + m.group(1))
+        elif re.match(r'^ \S+$', line.rstrip('\n')):
+            pending = line.rstrip('\n')
+    return out
+
+
+def nm_whole(path, mapfile, stats=None):
+    """nm, with the names the hunk file cut made whole from the -Map"""
+    names = None
+    for off, typ, name in nm(path):
+        if len(name) >= LONG_NAME:
+            if names is None:
+                names = section_names(mapfile)
+            whole = [n for n in names.get(off, ()) if n.startswith(name) and len(n) > len(name)]
+            if len(whole) == 1:
+                name = whole[0]
+                if stats is not None:
+                    stats['whole'] = stats.get('whole', 0) + 1
+            elif stats is not None and not any(n == name for n in names.get(off, ())):
+                stats['cut'] = stats.get('cut', 0) + 1
+        yield off, typ, name
+
+
 def map_sections(path):
     """The input sections of a one-hunk link's -Map, sorted:
     [(start, end, 'archive(member)' or file)]. A symbol's owner is the
@@ -185,7 +227,8 @@ def cmd_exports(image, mapfile, out):
     starts = [a for a, _, _ in sections]
     kept = skipped = 0
     with open(out, 'w') as f:
-        for off, typ, name in sorted(nm(image)):
+        stats = {}
+        for off, typ, name in sorted(nm_whole(image, mapfile, stats)):
             member = owner(sections, starts, off)
             archive = re.match(r'.*/(lib[^/]*\.a)\((.*)\)$', member)
             # an archive member, or one of the image's own objects (whose
@@ -199,7 +242,8 @@ def cmd_exports(image, mapfile, out):
                 continue
             f.write(f'{off:08x} {name} {archive.group(1) + "(" + archive.group(2) + ")" if archive else member}\n')
             kept += 1
-    print(f'jsimage exports: {kept} names, {skipped} kept by each program')
+    print(f'jsimage exports: {kept} names, {skipped} kept by each program; '
+          f'{stats.get("whole", 0)} long names made whole, {stats.get("cut", 0)} left cut')
 
 
 MOVED = re.compile(r'(^|/)lib(JavaScriptCore|WTF|bmalloc)\.a\(')
@@ -209,7 +253,7 @@ def defined_by(program, mapfile):
     """(offset, name, owner) of each global the program defines"""
     sections = map_sections(mapfile)
     starts = [a for a, _, _ in sections]
-    for off, typ, name in nm(program):
+    for off, typ, name in nm_whole(program, mapfile):
         if not typ.islower():
             yield off, name, owner(sections, starts, off)
 
