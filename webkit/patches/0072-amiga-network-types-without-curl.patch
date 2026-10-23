@@ -1,0 +1,407 @@
+From 5d6a35a64d674284d0bff04fd7d52abe50f80026 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 04:52:54 +0000
+Subject: [PATCH] WebCore: the network types without curl on the Amiga
+
+ResourceError has the Amiga's own domain, AmigaNetworkErrorDomain: codes
+1 to 9 are openweb.fetch's errors (DNS, connect, TLS, timeout, protocol,
+cancelled, closed early, decode, no room), then a certificate not
+trusted, too many redirects, a redirect to a file and an upload that
+could not be read. curl's codes are mapped into it, keeping curl's words,
+while curl is linked; isCertificationVerificationError() is the
+certificate code.
+
+ResourceResponse is built from a plain response head
+(AmigaResponseHead: URL, status, HTTP version, length and the head's
+lines), and the CurlResponse constructor goes through it.
+AuthenticationChallenge is built from such a response too, its scheme
+read from WWW-Authenticate or Proxy-Authenticate.
+
+curl still does every load; nothing else changes.
+---
+ .../network/curl/AuthenticationChallenge.h    | 10 +++
+ .../curl/AuthenticationChallengeCurl.cpp      | 50 +++++++++++
+ .../platform/network/curl/ResourceError.h     | 23 +++++
+ .../network/curl/ResourceErrorCurl.cpp        | 86 +++++++++++++++++++
+ .../platform/network/curl/ResourceResponse.h  | 17 ++++
+ .../network/curl/ResourceResponseCurl.cpp     | 67 +++++++++++++++
+ 6 files changed, 253 insertions(+)
+
+diff --git a/Source/WebCore/platform/network/curl/AuthenticationChallenge.h b/Source/WebCore/platform/network/curl/AuthenticationChallenge.h
+index 79ae90c2656..a1d80254f2a 100644
+--- a/Source/WebCore/platform/network/curl/AuthenticationChallenge.h
++++ b/Source/WebCore/platform/network/curl/AuthenticationChallenge.h
+@@ -45,6 +45,12 @@ public:
+     }
+ 
+     WEBCORE_EXPORT AuthenticationChallenge(const CurlResponse&, unsigned, const ResourceResponse&);
++#if PLATFORM(AMIGA)
++    // A 401 or 407 from a plain response head (AmigaResponseHead): the
++    // scheme is the strongest the server's challenge offers. proxyURL is
++    // the proxy that asked, for a 407.
++    WEBCORE_EXPORT AuthenticationChallenge(const ResourceResponse&, unsigned previousFailureCount, const URL& proxyURL = { });
++#endif
+     WEBCORE_EXPORT AuthenticationChallenge(const URL&, const CertificateInfo&, const ResourceError&);
+ 
+     AuthenticationClient* authenticationClient() const { return nullptr; }
+@@ -52,6 +58,10 @@ public:
+ private:
+     ProtectionSpace::ServerType protectionSpaceServerTypeFromURI(const URL&, bool isForProxy);
+     ProtectionSpace protectionSpaceForPasswordBased(const CurlResponse&, const ResourceResponse&);
++#if PLATFORM(AMIGA)
++    ProtectionSpace protectionSpaceForPasswordBased(const ResourceResponse&, const URL& proxyURL, ProtectionSpace::AuthenticationScheme);
++    ProtectionSpace::AuthenticationScheme authenticationSchemeFromHeader(const ResourceResponse&);
++#endif
+     ProtectionSpace protectionSpaceForServerTrust(const URL&, const CertificateInfo&);
+     std::optional<uint16_t> determineProxyPort(const URL&);
+     ProtectionSpace::AuthenticationScheme authenticationSchemeFromCurlAuth(long);
+diff --git a/Source/WebCore/platform/network/curl/AuthenticationChallengeCurl.cpp b/Source/WebCore/platform/network/curl/AuthenticationChallengeCurl.cpp
+index 1373e6e9b7b..ae2ee366648 100644
+--- a/Source/WebCore/platform/network/curl/AuthenticationChallengeCurl.cpp
++++ b/Source/WebCore/platform/network/curl/AuthenticationChallengeCurl.cpp
+@@ -39,6 +39,13 @@ AuthenticationChallenge::AuthenticationChallenge(const CurlResponse& curlRespons
+ {
+ }
+ 
++#if PLATFORM(AMIGA)
++AuthenticationChallenge::AuthenticationChallenge(const ResourceResponse& response, unsigned previousFailureCount, const URL& proxyURL)
++    : AuthenticationChallengeBase(protectionSpaceForPasswordBased(response, proxyURL, authenticationSchemeFromHeader(response)), Credential(), previousFailureCount, response, ResourceError())
++{
++}
++#endif
++
+ AuthenticationChallenge::AuthenticationChallenge(const URL& url, const CertificateInfo& certificateInfo, const ResourceError& resourceError)
+     : AuthenticationChallengeBase(protectionSpaceForServerTrust(url, certificateInfo), Credential(), 0, ResourceResponse(), resourceError)
+ {
+@@ -57,6 +64,10 @@ ProtectionSpace::ServerType AuthenticationChallenge::protectionSpaceServerTypeFr
+ 
+ ProtectionSpace AuthenticationChallenge::protectionSpaceForPasswordBased(const CurlResponse& curlResponse, const ResourceResponse& response)
+ {
++#if PLATFORM(AMIGA)
++    auto isProxyAuth = response.isProxyAuthenticationRequired();
++    return protectionSpaceForPasswordBased(response, curlResponse.proxyUrl, authenticationSchemeFromCurlAuth(isProxyAuth ? curlResponse.availableProxyAuth : curlResponse.availableHttpAuth));
++#else
+     if (!response.isUnauthorized() && !response.isProxyAuthenticationRequired())
+         return ProtectionSpace();
+ 
+@@ -66,9 +77,48 @@ ProtectionSpace AuthenticationChallenge::protectionSpaceForPasswordBased(const C
+     auto serverType = protectionSpaceServerTypeFromURI(url, isProxyAuth);
+     auto authenticationScheme = authenticationSchemeFromCurlAuth(isProxyAuth ? curlResponse.availableProxyAuth : curlResponse.availableHttpAuth);
+ 
++    return ProtectionSpace(url.host().toString(), static_cast<int>(port.value_or(0)), serverType, parseRealm(response), authenticationScheme);
++#endif
++}
++
++#if PLATFORM(AMIGA)
++ProtectionSpace AuthenticationChallenge::protectionSpaceForPasswordBased(const ResourceResponse& response, const URL& proxyURL, ProtectionSpace::AuthenticationScheme authenticationScheme)
++{
++    if (!response.isUnauthorized() && !response.isProxyAuthenticationRequired())
++        return ProtectionSpace();
++
++    auto isProxyAuth = response.isProxyAuthenticationRequired();
++    const auto& url = isProxyAuth ? proxyURL : response.url();
++    auto port = determineProxyPort(url);
++    auto serverType = protectionSpaceServerTypeFromURI(url, isProxyAuth);
++
+     return ProtectionSpace(url.host().toString(), static_cast<int>(port.value_or(0)), serverType, parseRealm(response), authenticationScheme);
+ }
+ 
++// The strongest scheme the challenge offers, as curl chooses: a scheme's
++// name counts at the start of the header or after a space or a comma.
++ProtectionSpace::AuthenticationScheme AuthenticationChallenge::authenticationSchemeFromHeader(const ResourceResponse& response)
++{
++    auto header = response.httpHeaderField(StringView { response.isProxyAuthenticationRequired() ? "proxy-authenticate"_s : "www-authenticate"_s });
++    auto offers = [&header](ASCIILiteral scheme) {
++        for (size_t at = header.findIgnoringASCIICase(scheme); at != notFound; at = header.findIgnoringASCIICase(scheme, at + 1)) {
++            if (!at || header[at - 1] == ' ' || header[at - 1] == ',')
++                return true;
++        }
++        return false;
++    };
++    if (offers("NTLM"_s))
++        return ProtectionSpace::AuthenticationScheme::NTLM;
++    if (offers("Negotiate"_s))
++        return ProtectionSpace::AuthenticationScheme::Negotiate;
++    if (offers("Digest"_s))
++        return ProtectionSpace::AuthenticationScheme::HTTPDigest;
++    if (offers("Basic"_s))
++        return ProtectionSpace::AuthenticationScheme::HTTPBasic;
++    return ProtectionSpace::AuthenticationScheme::Unknown;
++}
++#endif
++
+ ProtectionSpace AuthenticationChallenge::protectionSpaceForServerTrust(const URL& url, const CertificateInfo& certificateInfo)
+ {
+     auto port = determineProxyPort(url);
+diff --git a/Source/WebCore/platform/network/curl/ResourceError.h b/Source/WebCore/platform/network/curl/ResourceError.h
+index ace8e487243..3710652a0b7 100644
+--- a/Source/WebCore/platform/network/curl/ResourceError.h
++++ b/Source/WebCore/platform/network/curl/ResourceError.h
+@@ -55,6 +55,29 @@ public:
+ 
+     WEBCORE_EXPORT ResourceError(int curlCode, const URL& failingURL, Type = Type::General);
+ 
++#if PLATFORM(AMIGA)
++    // The Amiga's own errors (domain "AmigaNetworkErrorDomain"): 1 to 9 are
++    // openweb.fetch's (docs/OPENWEB_FETCH.md in openamigaservice), the rest
++    // the network layer's own. curl's codes come into this domain as well,
++    // with curl's words, while curl is linked.
++    enum class AmigaCode : int {
++        DNS = 1,
++        Connect,
++        TLS,
++        Timeout,
++        Protocol,
++        Cancelled,
++        Closed,
++        Decode,
++        Host,
++        CertificateNotTrusted,
++        TooManyRedirects,
++        RedirectToFile,
++        UploadFailed,
++    };
++    WEBCORE_EXPORT ResourceError(AmigaCode, const URL& failingURL, const String& description = { }, Type = Type::General);
++#endif
++
+     WEBCORE_EXPORT bool isCertificationVerificationError() const;
+ 
+     ErrorRecoveryMethod errorRecoveryMethod() const { return ErrorRecoveryMethod::NoRecovery; }
+diff --git a/Source/WebCore/platform/network/curl/ResourceErrorCurl.cpp b/Source/WebCore/platform/network/curl/ResourceErrorCurl.cpp
+index 58ed88ac895..4c44321da38 100644
+--- a/Source/WebCore/platform/network/curl/ResourceErrorCurl.cpp
++++ b/Source/WebCore/platform/network/curl/ResourceErrorCurl.cpp
+@@ -32,16 +32,98 @@
+ 
+ namespace WebCore {
+ 
++#if !PLATFORM(AMIGA)
+ static const String& curlErrorDomain()
+ {
+     static NeverDestroyed<const String> errorDomain(MAKE_STATIC_STRING_IMPL("CurlErrorDomain"));
+     return errorDomain;
+ }
++#endif
++
++#if PLATFORM(AMIGA)
++static const String& amigaErrorDomain()
++{
++    static NeverDestroyed<const String> errorDomain(MAKE_STATIC_STRING_IMPL("AmigaNetworkErrorDomain"));
++    return errorDomain;
++}
++
++static ASCIILiteral amigaErrorDescription(ResourceError::AmigaCode code)
++{
++    using Code = ResourceError::AmigaCode;
++    switch (code) {
++    case Code::DNS: return "The server's name was not found."_s;
++    case Code::Connect: return "The server could not be reached."_s;
++    case Code::TLS: return "The secure connection failed."_s;
++    case Code::Timeout: return "The server did not answer in time."_s;
++    case Code::Protocol: return "The server's answer was not understood."_s;
++    case Code::Cancelled: return "The load was cancelled."_s;
++    case Code::Closed: return "The connection closed too early."_s;
++    case Code::Decode: return "The compressed answer was damaged."_s;
++    case Code::Host: return "There was no memory or no connection left for the load."_s;
++    case Code::CertificateNotTrusted: return "The server's certificate is not trusted."_s;
++    case Code::TooManyRedirects: return "The server redirected too many times."_s;
++    case Code::RedirectToFile: return "The server redirected to a local file."_s;
++    case Code::UploadFailed: return "The data to send could not be read."_s;
++    }
++    return "The load failed."_s;
++}
++
++// curl's codes in the Amiga's domain, while curl is linked.
++static ResourceError::AmigaCode amigaCodeForCurl(int curlCode)
++{
++    using Code = ResourceError::AmigaCode;
++    switch (curlCode) {
++    case CURLE_COULDNT_RESOLVE_HOST:
++    case CURLE_COULDNT_RESOLVE_PROXY:
++        return Code::DNS;
++    case CURLE_COULDNT_CONNECT:
++        return Code::Connect;
++    case CURLE_SSL_CONNECT_ERROR:
++    case CURLE_SSL_CERTPROBLEM:
++    case CURLE_SSL_CIPHER:
++        return Code::TLS;
++    case CURLE_PEER_FAILED_VERIFICATION:
++        return Code::CertificateNotTrusted;
++    case CURLE_OPERATION_TIMEDOUT:
++        return Code::Timeout;
++    case CURLE_ABORTED_BY_CALLBACK:
++        return Code::Cancelled;
++    case CURLE_SEND_ERROR:
++    case CURLE_RECV_ERROR:
++    case CURLE_PARTIAL_FILE:
++    case CURLE_GOT_NOTHING:
++        return Code::Closed;
++    case CURLE_BAD_CONTENT_ENCODING:
++        return Code::Decode;
++    case CURLE_OUT_OF_MEMORY:
++    case CURLE_FAILED_INIT:
++        return Code::Host;
++    case CURLE_TOO_MANY_REDIRECTS:
++        return Code::TooManyRedirects;
++    case CURLE_FILE_COULDNT_READ_FILE:
++        return Code::RedirectToFile;
++    case CURLE_READ_ERROR:
++        return Code::UploadFailed;
++    default:
++        return Code::Protocol;
++    }
++}
++
++ResourceError::ResourceError(AmigaCode code, const URL& failingURL, const String& description, Type type)
++    : ResourceErrorBase(amigaErrorDomain(), static_cast<int>(code), failingURL, description.isEmpty() ? String { amigaErrorDescription(code) } : description, type, IsSanitized::No)
++{
++}
+ 
++ResourceError::ResourceError(int curlCode, const URL& failingURL, Type type)
++    : ResourceError(amigaCodeForCurl(curlCode), failingURL, CurlHandle::errorDescription(static_cast<CURLcode>(curlCode)), type)
++{
++}
++#else
+ ResourceError::ResourceError(int curlCode, const URL& failingURL, Type type)
+     : ResourceErrorBase(curlErrorDomain(), curlCode, failingURL, CurlHandle::errorDescription(static_cast<CURLcode>(curlCode)), type, IsSanitized::No)
+ {
+ }
++#endif
+ 
+ ResourceError ResourceError::fromIPCData(std::optional<IPCData>&& ipcData)
+ {
+@@ -75,7 +157,11 @@ auto ResourceError::ipcData() const -> std::optional<IPCData>
+ 
+ bool ResourceError::isCertificationVerificationError() const
+ {
++#if PLATFORM(AMIGA)
++    return domain() == amigaErrorDomain() && errorCode() == static_cast<int>(AmigaCode::CertificateNotTrusted);
++#else
+     return domain() == curlErrorDomain() && errorCode() == CURLE_PEER_FAILED_VERIFICATION;
++#endif
+ }
+ 
+ void ResourceError::doPlatformIsolatedCopy(const ResourceError&)
+diff --git a/Source/WebCore/platform/network/curl/ResourceResponse.h b/Source/WebCore/platform/network/curl/ResourceResponse.h
+index b054c8fcec8..140c57fd190 100644
+--- a/Source/WebCore/platform/network/curl/ResourceResponse.h
++++ b/Source/WebCore/platform/network/curl/ResourceResponse.h
+@@ -33,6 +33,20 @@ namespace WebCore {
+ 
+ class CurlResponse;
+ 
++#if PLATFORM(AMIGA)
++// A response head as any transport gives it, without curl's types: the
++// URL, the status, the HTTP version times ten (10, 11, 20; 0 when not
++// known), the body's length (0 when not known, as curl gave it) and the
++// head's lines, the status line first, then "Name: value" as sent.
++struct AmigaResponseHead {
++    URL url;
++    int statusCode { 0 };
++    unsigned httpVersion { 0 };
++    long long expectedContentLength { 0 };
++    Vector<String> headers;
++};
++#endif
++
+ class ResourceResponse : public ResourceResponseBase {
+ public:
+     ResourceResponse()
+@@ -51,6 +65,9 @@ public:
+     }
+ 
+     WEBCORE_EXPORT ResourceResponse(CurlResponse&);
++#if PLATFORM(AMIGA)
++    WEBCORE_EXPORT explicit ResourceResponse(const AmigaResponseHead&);
++#endif
+ 
+     bool isMovedPermanently() const { return httpStatusCode() == httpStatus301MovedPermanently; };
+     bool isFound() const { return httpStatusCode() == httpStatus302Found; }
+diff --git a/Source/WebCore/platform/network/curl/ResourceResponseCurl.cpp b/Source/WebCore/platform/network/curl/ResourceResponseCurl.cpp
+index b354f4b3a2c..d5f913098e7 100644
+--- a/Source/WebCore/platform/network/curl/ResourceResponseCurl.cpp
++++ b/Source/WebCore/platform/network/curl/ResourceResponseCurl.cpp
+@@ -79,6 +79,72 @@ static bool isAppendableHeader(const String &key)
+     return false;
+ }
+ 
++#if PLATFORM(AMIGA)
++static unsigned httpVersionTimesTen(long curlVersion)
++{
++    switch (curlVersion) {
++    case CURL_HTTP_VERSION_1_0:
++        return 10;
++    case CURL_HTTP_VERSION_1_1:
++        return 11;
++    case CURL_HTTP_VERSION_2_0:
++        return 20;
++    case CURL_HTTP_VERSION_3:
++        return 30;
++    default:
++        return 0;
++    }
++}
++
++static AmigaResponseHead headFromCurl(const CurlResponse& response)
++{
++    AmigaResponseHead head;
++    head.url = response.url;
++    head.statusCode = response.statusCode ? response.statusCode : response.httpConnectCode;
++    head.httpVersion = httpVersionTimesTen(response.httpVersion);
++    head.expectedContentLength = response.expectedContentLength;
++    head.headers = response.headers;
++    return head;
++}
++
++ResourceResponse::ResourceResponse(CurlResponse& response)
++    : ResourceResponse(headFromCurl(response))
++{
++    setCertificateInfo(WTF::move(response.certificateInfo));
++}
++
++ResourceResponse::ResourceResponse(const AmigaResponseHead& head)
++    : ResourceResponseBase()
++{
++    setURL(URL { head.url });
++    setExpectedContentLength(head.expectedContentLength);
++    setHTTPStatusCode(head.statusCode);
++
++    for (const auto& header : head.headers)
++        appendHTTPHeaderField(header);
++
++    switch (head.httpVersion) {
++    case 10:
++        setHTTPVersion("HTTP/1.0"_s);
++        break;
++    case 11:
++        setHTTPVersion("HTTP/1.1"_s);
++        break;
++    case 20:
++        setHTTPVersion("HTTP/2"_s);
++        break;
++    case 30:
++        setHTTPVersion("HTTP/3"_s);
++        break;
++    default:
++        break;
++    }
++
++    setMimeType(extractMIMETypeFromMediaType(httpHeaderField(HTTPHeaderName::ContentType)).convertToASCIILowercase());
++    setTextEncodingName(extractCharsetFromMediaType(httpHeaderField(HTTPHeaderName::ContentType)).toString());
++    setSource(ResourceResponse::Source::Network);
++}
++#else
+ ResourceResponse::ResourceResponse(CurlResponse& response)
+     : ResourceResponseBase()
+ {
+@@ -112,6 +178,7 @@ ResourceResponse::ResourceResponse(CurlResponse& response)
+     setCertificateInfo(WTF::move(response.certificateInfo));
+     setSource(ResourceResponse::Source::Network);
+ }
++#endif
+ 
+ void ResourceResponse::appendHTTPHeaderField(const String& header)
+ {
+-- 
+2.43.0
+
