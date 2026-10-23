@@ -53,7 +53,7 @@ page, unless said otherwise):
 | `first_paint_ms` | The first time WebCore had something to draw (its first invalidation). The nearest thing to "first paint" without a window |
 | `load_done_ms` | WebCore said the load was over (the page and everything it waits for) |
 | `last_resource_ms` | The last request ended |
-| `painted_ms` | obcore-view's picture of the page was finished. obcore-view paints once, after the load: this is when a window would show the finished page |
+| `painted_ms` | obcore-view's picture of the page was finished. obcore-view paints once, after the load, when no timer is due within 50 ms or, for a page whose animations or timers never stop, once the network has been quiet for 2 s (`-settle`, the page option `settle=N`; `OBVIEW_SETTLED` in the log): about when a window shows the finished page |
 | `wall_ms` | The whole run of obcore-view, program loading and start-up included, from `obstamp` (20 ms steps) |
 | `requests`, `failed`, `bytes` | Requests made, requests that failed (blocked hosts count), bytes received as WebCore saw them arrive |
 | `mem_image` | Free memory lost between `obstamp` and obcore-view's own first line: mostly the program itself (the 104 MB engine) |
