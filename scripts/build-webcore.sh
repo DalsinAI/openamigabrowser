@@ -8,7 +8,8 @@
 #   the engine   WebKit's WebCore, JavaScriptCore, WTF, PAL and bmalloc.
 #                Built only when an input in its fingerprint changes: the
 #                WebKit tree and its patches, the compiler, the headers of
-#                ICU, the OpenAmiga libraries and OpenTLS, the build options.
+#                ICU, the OpenAmiga libraries and openweb.fetch, the build
+#                options.
 #   the browser  OpenBrowser's own code (src/webcore): the page layer library
 #                OBCore and the programs
 #                  OpenBrowser   the launcher: a title window, then it loads
@@ -28,17 +29,23 @@
 #   OAB_DEPS        folder holding icu78-m68k-amigaos/ (scripts/build-icu.sh)
 #                   and m68k-amigaos/, the libraries from the OpenAmiga ports
 #                   (cairo and pixman, FreeType, HarfBuzz, fontconfig, Expat,
-#                   SQLite, curl, zlib, libpng) in one prefix, with
+#                   SQLite, zlib, libpng) in one prefix, with
 #                   OXP, the XML parser (openamigaxml's oxp/build-amiga.sh with
 #                   OUT set to that prefix; WebKit patch 0030).
-#                   Its curl must be openamigacurl's main branch, built on
-#                   OpenTLS (opentls.library): WebCore links no OpenSSL and no
-#                   AmiSSL SDK is used (WebKit patch 0022). openamigacurl
-#                   builds curl's HTTP/2 with nghttp2: copy its libnghttp2.a
-#                   into m68k-amigaos/lib beside libcurl.a, and the programs
-#                   link it after curl (WebKit patch 0023). At run time the
-#                   Amiga needs opentls.library 1.2 or newer in LIBS: and its
-#                   CA bundle in S:OpenTLS/ca-bundle.pem for https://.
+#                   No curl or nghttp2: the network is openweb.fetch (WebKit
+#                   patch 0075). At run time the Amiga needs, without a
+#                   services card or a Cradle, a TCP/IP stack,
+#                   opentls.library in LIBS: and its CA bundle in
+#                   S:OpenTLS/ca-bundle.pem for https://, and
+#                   stream.datatype, gzip.datatype and brotli.datatype for
+#                   compressed pages.
+#   OPENSERVICE_DIR openamigaservice's checkout: openweb.fetch's client and
+#                   native transport (required)
+#                   (default ../openamigaservice beside this repository)
+#   OPENDATATYPES_DIR
+#                   opendatatypes' checkout: the stream class's header, for
+#                   the native transport's decoding (required)
+#                   (default ../opendatatypes beside this repository)
 #
 # No Ruby: WebKit's Ruby generators run as Python ports (patches 0019 and
 # 0021), with the python3 CMake finds.
@@ -148,10 +155,21 @@ CCACHE_SIZE=${OB_CCACHE_SIZE:-20G}
 GMAKE=${GMAKE:-$(command -v gmake || command -v make || true)}
 ENGINE_LIBRARIES="libWebCore.a libJavaScriptCore.a libWTF.a libPAL.a libbmalloc.a"
 
+# openamigaservice's checkout, as src/webcore/CMakeLists.txt finds it.
+openservice_dir() {
+    if [ -n "${OPENSERVICE_DIR:-}" ] && [ -f "$OPENSERVICE_DIR/include/devices/openservice.h" ]; then
+        echo "$OPENSERVICE_DIR"
+    else
+        echo "$ROOT/../openamigaservice"
+    fi
+}
+
 need_sources() {
     : "${WEBKIT_SOURCE:?set WEBKIT_SOURCE to the patched WebKit tree}"
     : "${OAB_DEPS:?set OAB_DEPS to the folder with icu78-m68k-amigaos and m68k-amigaos}"
     [ -d "$WEBKIT_SOURCE/Source/WebCore" ] || die "WebKit source with Source/WebCore missing: $WEBKIT_SOURCE"
+    [ -f "$(openservice_dir)/include/openweb/webfetch.h" ] ||
+        die "openamigaservice missing at $(openservice_dir): the engine's network is openweb.fetch (set OPENSERVICE_DIR)"
     export OAB_DEPS
 }
 
@@ -229,9 +247,9 @@ engine_inputs() {
     echo "toolchain-file $(sha256 < "$ROOT/toolchain/amigaos3-gcc16.cmake")"
     echo "icu-headers $(tree_hash "$OAB_DEPS/icu78-m68k-amigaos/include")"
     echo "openamiga-headers $(tree_hash "$OAB_DEPS/m68k-amigaos/include")"
-    # opentls.library's API, as curl's OpenTLS backend was built against it
-    # (curl's own headers are in openamiga-headers).
-    echo "opentls-headers $(tree_hash "$ROOT/third_party/opentls/include")"
+    # openweb.fetch's client API, which WebCore's OpenWebFetchAmiga.c is
+    # built against (src/webcore/CMakeLists.txt finds the checkout the same way).
+    echo "openweb-headers $(tree_hash "$(openservice_dir)/include/openweb")"
     echo "options $(engine_options | sha256)"
 }
 
@@ -447,24 +465,6 @@ check_engine() {
     fi
 }
 
-# curl built with HTTP/2 needs nghttp2, which the programs link only when
-# libnghttp2.a is in the prefix (a curl without HTTP/2 links without it):
-# say so here rather than with nghttp2_* undefined at the end of the link,
-# and let CMake look again when libnghttp2.a has come or gone since it last
-# did (src/webcore/CMakeLists.txt keeps what it found as OB_NGHTTP2).
-check_curl() {
-    lib="$OAB_DEPS/m68k-amigaos/lib"
-    [ -f "$lib/libcurl.a" ] || die "no libcurl.a in $lib (openamigacurl's out/lib)"
-    if grep -q nghttp2_session_ "$lib/libcurl.a" && [ ! -f "$lib/libnghttp2.a" ]; then
-        die "$lib/libcurl.a is built with HTTP/2: copy libnghttp2.a from openamigacurl's out/lib beside it"
-    fi
-    want=
-    [ -f "$lib/libnghttp2.a" ] && want=nghttp2
-    if [ "$(sed -n 's/^OB_NGHTTP2:INTERNAL=//p' "$BUILD/CMakeCache.txt")" != "$want" ]; then
-        cmake "$BUILD" > /dev/null
-    fi
-}
-
 # The browser's targets without WebKit's: Ninja knows the engine is up to
 # date; for Makefiles, CMake's "/fast" targets skip the walk through WebKit's
 # targets (after letting CMake regenerate if a CMakeLists.txt changed).
@@ -472,7 +472,6 @@ browser_build() {
     name=$1
     shift
     check_engine
-    check_curl
     if [ "$(generator)" = Ninja ]; then
         run_build "$name" "$JOBS" "$@"
     else
