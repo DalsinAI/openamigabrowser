@@ -14,6 +14,8 @@
 ;    the RomTag and checks it;
 ;  - LIBS:json.library (the engine's JSON.parse needs it) and
 ;    S:OpenTLS/ca-bundle.pem when missing;
+;  - LOCALE:Unicode/icudt78b.dat, as the Installer does: when missing, or
+;    one of another size, which is renamed icudt78b.dat.before-20261023b;
 ;  - the engine stays in this drawer (Libs/WebBrowser/WebBrowserEngine,
 ;    with its fonts, fontconfig, blocklist and Unicode data); the 76 MB
 ;    engine is not copied to System:. webbrowser.library (LIBS:, or this
@@ -103,6 +105,40 @@ If NOT EXISTS S:OpenTLS/ca-bundle.pem
   EndIf
   Echo "Installed S:OpenTLS/ca-bundle.pem (the certificates for https)"
 EndIf
+
+; the Unicode data in LOCALE:Unicode/, for every program that reads it (the
+; engine reads it there first, then from Libs/WebBrowser/Unicode/); one of
+; another size is kept as icudt78b.dat.before-20261023b
+Set icunew `List Libs/WebBrowser/Unicode/icudt78b.dat LFORMAT "%L"`
+If EXISTS LOCALE:Unicode/icudt78b.dat
+  Set icuold `List LOCALE:Unicode/icudt78b.dat LFORMAT "%L"`
+  If "$icuold" EQ "$icunew"
+    Echo "LOCALE:Unicode/icudt78b.dat is there, kept"
+    Skip icudone
+  EndIf
+  If EXISTS LOCALE:Unicode/icudt78b.dat.before-20261023b
+    Echo "LOCALE:Unicode has both icudt78b.dat and icudt78b.dat.before-20261023b: move one of them away and run Install again."
+    Quit 20
+  EndIf
+  Rename LOCALE:Unicode/icudt78b.dat LOCALE:Unicode/icudt78b.dat.before-20261023b
+  If WARN
+    Echo "Could not rename LOCALE:Unicode/icudt78b.dat"
+    Quit 20
+  EndIf
+  Echo "Kept the other LOCALE:Unicode/icudt78b.dat ($icuold bytes) as icudt78b.dat.before-20261023b"
+EndIf
+If NOT EXISTS LOCALE:Unicode
+  MakeDir LOCALE:Unicode >NIL:
+EndIf
+Copy Libs/WebBrowser/Unicode/icudt78b.dat LOCALE:Unicode/ QUIET
+If WARN
+  Echo "Could not copy the Unicode data to LOCALE:Unicode (is System: full?); the engine reads the drawer's copy"
+Else
+  Echo "Installed LOCALE:Unicode/icudt78b.dat"
+EndIf
+Lab icudone
+UnSet icunew
+UnSet icuold
 
 If EXISTS LIBS:WebBrowser/WebBrowserEngine
   If EXISTS LIBS:WebBrowser/WebBrowserEngine.before-20261023b

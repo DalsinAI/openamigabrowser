@@ -104,11 +104,19 @@
 (copylib (source "OpenBrowser/Libs/json.library") (dest "LIBS:") (nogauge)
     (prompt "Installing json.library") (help @copylib-help) (confirm "expert"))
 
-; 3. The Unicode data, for every program that reads it, when System: has room;
-;    the engine in the drawer carries its own copy as well (Libs/WebBrowser/
-;    Unicode, which it reads when LOCALE:Unicode has none); System: keeps
-;    20 MB free
-(if (and (not (exists "LOCALE:Unicode/icudt78b.dat"))
+; 3. The Unicode data, for every program that reads it, when System: has room
+;    (it keeps 20 MB free); the engine in the drawer carries its own copy as
+;    well (Libs/WebBrowser/Unicode, which it reads when LOCALE:Unicode has
+;    none). One of another size is renamed icudt78b.dat.before-<stamp>.
+(set #icu "LOCALE:Unicode/icudt78b.dat")
+(set #icunew "OpenBrowser/Libs/WebBrowser/Unicode/icudt78b.dat")
+(if (and (exists #icu) (<> (getsize #icu) (getsize #icunew)))
+    (if (exists (cat #icu ".before-" #stamp))
+        (abort (cat "LOCALE:Unicode has both icudt78b.dat and icudt78b.dat.before-" #stamp
+                    ". Move one of them away and run the Installer again."))
+        (if (= 0 (rename #icu (cat #icu ".before-" #stamp)))
+            (abort "Could not rename LOCALE:Unicode/icudt78b.dat."))))
+(if (and (not (exists #icu))
          (> (getdiskspace "LOCALE:") 25000000))
     (
         (makedir "LOCALE:Unicode")
