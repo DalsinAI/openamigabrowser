@@ -1,0 +1,165 @@
+From 8ec62988dce8a095430c53410f780ec6b0f0bdec Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 00:46:19 +0000
+Subject: [PATCH] WebCore: openfont.library and the package's fonts found from
+ any drawer
+
+Without LIBS:openfont.library the engine still stopped at
+lastResortFallbackFont's RELEASE_ASSERT on Instance-32, with 0092.
+OpenLibrary("PROGDIR:...") is resolved by ramlib in its own process,
+where the engine's PROGDIR: means nothing, so the package's copy was
+never opened. The library is now opened by its full name, from
+PROGDIR:/, PROGDIR:Libs/ or PROGDIR:Libs/WebBrowser/Libs/. By its name
+alone only when it is in memory or in LIBS:: a ramlib search that finds
+nothing took 65 ms of every cold start.
+
+The package's fonts are looked for in PROGDIR:Fonts and
+PROGDIR:Libs/WebBrowser/Fonts (obcore-view runs from the drawer), and
+adding them is tried again on the next lookup when it ran on a plain
+task or the library refused. What was not found goes to stderr.
+---
+ .../graphics/openfont/OpenFontLibrary.c       | 97 +++++++++++++++----
+ 1 file changed, 80 insertions(+), 17 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
+index f50110e4270..0b1d131ced7 100644
+--- a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
++++ b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
+@@ -27,6 +27,7 @@
+ 
+ #include <exec/types.h>
+ #include <exec/libraries.h>
++#include <exec/execbase.h>
+ #include <utility/tagitem.h>
+ #include <libraries/openfont.h>
+ #include <dos/dos.h>
+@@ -35,6 +36,7 @@
+ #include <proto/openfont.h>
+ 
+ #include <pthread.h>
++#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -57,6 +59,46 @@ static void closeOpenFont(void)
+     }
+ }
+ 
++/* The package's fonts, by their full path, as the font index keeps every
++ * folder's; the installed browser's (LIBS:WebBrowser/Fonts) and FONTS: are
++ * in the index already. They are in the engine's drawer (Fonts/), which is
++ * PROGDIR: when webbrowser.library starts the engine, but a program that
++ * has the engine in it and runs from the browser's drawer (obcore-view, or
++ * the engine run from OpenBrowser) finds them in Libs/WebBrowser/Fonts.
++ * Locks and the index need a dos process: from a plain task, or when the
++ * library refuses, it is tried again on the next lookup. */
++static volatile int s_programFontsAdded;
++
++static void addProgramFonts(void)
++{
++    static const char* const dirs[] = { "PROGDIR:Fonts", "PROGDIR:Libs/WebBrowser/Fonts" };
++    struct Task* self;
++    unsigned i;
++    int ok = 1, found = 0;
++    if (s_programFontsAdded)
++        return;
++    self = FindTask(NULL);
++    if (self->tc_Node.ln_Type != NT_PROCESS)
++        return;
++    for (i = 0; i < sizeof dirs / sizeof dirs[0]; ++i) {
++        BPTR lock = Lock((CONST_STRPTR)dirs[i], SHARED_LOCK);
++        if (lock) {
++            char path[256];
++            LONG rc = OFERR_OK;
++            if (!NameFromLock(lock, (STRPTR)path, sizeof path) || (rc = OF_AddFontDir((CONST_STRPTR)path)) != OFERR_OK) {
++                fprintf(stderr, "WebCore: %s not added to the font index (%ld)\n", dirs[i], (long)rc);
++                ok = 0;
++            }
++            UnLock(lock);
++            found = 1;
++        }
++    }
++    if (!found)
++        fputs("WebCore: no PROGDIR:Fonts or PROGDIR:Libs/WebBrowser/Fonts\n", stderr);
++    if (ok)
++        s_programFontsAdded = 1;
++}
++
+ static void openOpenFont(void)
+ {
+     /* Version 1 is a preview whose structures may change in version 2, so
+@@ -65,36 +107,57 @@ static void openOpenFont(void)
+      * engine runs from the drawer's Libs/WebBrowser/, so that one is in
+      * the folder above (PROGDIR:/); a program in the drawer itself finds
+      * it in PROGDIR:Libs/. */
+-    static const char* const names[] = { OPENFONTNAME, "PROGDIR:/" OPENFONTNAME, "PROGDIR:Libs/" OPENFONTNAME };
++    static const char* const names[] = { OPENFONTNAME, "PROGDIR:/" OPENFONTNAME, "PROGDIR:Libs/" OPENFONTNAME,
++        "PROGDIR:Libs/WebBrowser/Libs/" OPENFONTNAME };
+     unsigned i;
+     for (i = 0; i < sizeof names / sizeof names[0] && !OpenFontBase; ++i) {
+-        OpenFontBase = OpenLibrary((CONST_STRPTR)names[i], OPENFONT_VERSION);
+-        if (OpenFontBase && (OpenFontBase->lib_Version != OPENFONT_VERSION || OpenFontBase->lib_Revision < OPENFONT_REVISION_LAYOUT))
++        /* By its full name: ramlib loads the library in its own process,
++         * where our PROGDIR: means nothing. */
++        char path[256];
++        const char* name = names[i];
++        if (!i) {
++            /* By name only when it is in memory or in LIBS:: a search
++             * that finds nothing costs ramlib about 65 ms. */
++            BPTR lock;
++            int resident;
++            Forbid();
++            resident = FindName(&SysBase->LibList, (CONST_STRPTR)OPENFONTNAME) != NULL;
++            Permit();
++            if (!resident) {
++                if (!(lock = Lock((CONST_STRPTR)"LIBS:" OPENFONTNAME, SHARED_LOCK)))
++                    continue;
++                UnLock(lock);
++            }
++        } else {
++            BPTR lock = Lock((CONST_STRPTR)names[i], SHARED_LOCK);
++            if (!lock)
++                continue;
++            name = NameFromLock(lock, (STRPTR)path, sizeof path) ? path : NULL;
++            UnLock(lock);
++            if (!name)
++                continue;
++        }
++        OpenFontBase = OpenLibrary((CONST_STRPTR)name, OPENFONT_VERSION);
++        if (OpenFontBase && (OpenFontBase->lib_Version != OPENFONT_VERSION || OpenFontBase->lib_Revision < OPENFONT_REVISION_LAYOUT)) {
++            fprintf(stderr, "WebCore: %s is %u.%u, not 1.3 or newer\n", name, OpenFontBase->lib_Version, OpenFontBase->lib_Revision);
+             closeOpenFont();
++        }
+     }
+-    if (!OpenFontBase)
++    if (!OpenFontBase) {
++        fputs("WebCore: no openfont.library 1.3 or newer in LIBS:, PROGDIR:/, PROGDIR:Libs/ or PROGDIR:Libs/WebBrowser/Libs/\n", stderr);
+         return;
++    }
+     atexit(closeOpenFont);
+     s_available = 1;
+     s_hasColorBitmaps = OpenFontBase->lib_Revision >= OPENFONT_REVISION_COLOR;
+-
+-    /* The fonts in the program's drawer (Fonts/), by their full path, as
+-     * the font index keeps every folder's; the installed browser's
+-     * (LIBS:WebBrowser/Fonts) and FONTS: are in the index already. */
+-    {
+-        BPTR lock = Lock((CONST_STRPTR)"PROGDIR:Fonts", SHARED_LOCK);
+-        if (lock) {
+-            char path[256];
+-            if (NameFromLock(lock, (STRPTR)path, sizeof path))
+-                OF_AddFontDir((CONST_STRPTR)path);
+-            UnLock(lock);
+-        }
+-    }
++    addProgramFonts();
+ }
+ 
+ int obof_available(void)
+ {
+     pthread_once(&s_openOnce, openOpenFont);
++    if (s_available)
++        addProgramFonts();
+     return s_available;
+ }
+ 

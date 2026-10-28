@@ -169,6 +169,17 @@ is done when its "done when" holds on the lab instance.
    so FreeType's libpng use went with it. The benchmark pages on the lab
    copies of Instance-14 and Instance-32 are recorded in
    `labs/webcore-openfont-20261023/` as they finish.
+   **Checked on Instance-32 and Instance-14, 28 October 2026** (#100, #111,
+   #114 with WebKit patches 0091-0093, and openamigafont #21). The package's
+   own openfont.library and fonts are found from the drawer (before this the
+   engine aborted with none in `LIBS:`). Fallback fonts no longer read every
+   font file again for each character. Results, in seconds:
+   - Instance-14 Wikipedia painted in 2.46 s, against 14.96 s before and
+     2.14 s on the curl build.
+   - Instance-32 from a cold boot, launch to painted: test1 0.64 s (0.8.2:
+     0.64 s) and DOM 2.37 s (0.8.2: 2.36 s). The engine is 73,264,340 B,
+     against 0.8.2's 75,787,960 B.
+   - Emoji: U+1F600 through the PNG datatype on both copies.
 4. **The browser on javascript.library.** Before the switch, build the
    library the way the browser is built: MinSizeRel with -O2 for
    JavaScriptCore (#57), and with the 68k JIT patches. Today
