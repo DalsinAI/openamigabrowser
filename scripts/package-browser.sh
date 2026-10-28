@@ -34,6 +34,11 @@
 #                  where build-webcore.sh makes it); the Installer puts it
 #                  in LIBS:. Required when the engine was built on it
 #                  (OB_ICU_DATA=library, the default): ICU's code is there
+#   OB_JSIMAGE     1 (the default when the WebCore build has one): the engine
+#                  is the jsimage client (build-webcore.sh jsimage), which
+#                  takes JavaScriptCore from JavaScriptEngine, packed beside
+#                  it as Libs/JavaScript/JavaScriptEngine. 0: the engine
+#                  with its own JavaScriptCore (bin/WebBrowserEngine)
 #   EXTRAS         optional: a folder with Libs/javascript.library,
 #                  Libs/JavaScript/JavaScriptEngine, C/JS and
 #                  Libs/json.library, which the Installer offers
@@ -42,7 +47,9 @@
 #                                 Libs/ (webbrowser.library, OpenTLS,
 #                                 json.library, openfont.library,
 #                                 unicode.library and WebBrowser/: the engine with Fonts/,
-#                                 blocklist, Unicode/ and Network/),
+#                                 blocklist, Unicode/ and Network/, and
+#                                 with a jsimage engine JavaScript/
+#                                 JavaScriptEngine),
 #                                 S/OpenTLS/, Install, icons and readme
 # OUT_DIR/OpenBrowser.info        the drawer's icon
 # OUT_DIR/Install-OpenBrowser     the Installer script (SYS:System/Installer),
@@ -77,7 +84,24 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 D="$OUT/OpenBrowser"; E="$D/Libs/WebBrowser"
 mkdir -p "$D/S/OpenTLS" "$E/Fonts" "$E/Unicode"
 "$STRIP" -o "$D/OpenBrowser" "$BIN/OpenBrowser"
-"$STRIP" -o "$E/WebBrowserEngine" "$BIN/WebBrowserEngine"
+# The jsimage client is a relink of bin/WebBrowserEngine: older than it, it
+# is from an earlier build
+JSI="$WEBKIT_BUILD/jsimage"
+if [ "${OB_JSIMAGE:-}" != 0 ] && [ -f "$JSI/WebBrowserEngine/WebBrowserEngine" ] \
+        && ! [ "$JSI/WebBrowserEngine/WebBrowserEngine" -ot "$BIN/WebBrowserEngine" ]; then
+    [ -f "$JSI/JavaScriptEngine" ] || { echo "missing: $JSI/JavaScriptEngine (the client's image)" >&2; exit 1; }
+    # the engine looks in LIBS:JavaScript/ first (where the Installer puts
+    # it with javascript.library), then at PROGDIR:/JavaScript/
+    # (src/jslib/jsimage_client.c)
+    mkdir -p "$D/Libs/JavaScript"
+    "$STRIP" -o "$E/WebBrowserEngine" "$JSI/WebBrowserEngine/WebBrowserEngine"
+    "$STRIP" -o "$D/Libs/JavaScript/JavaScriptEngine" "$JSI/JavaScriptEngine"
+    echo "engine: jsimage client, with Libs/JavaScript/JavaScriptEngine"
+elif [ "${OB_JSIMAGE:-}" = 1 ]; then
+    echo "OB_JSIMAGE=1, but $JSI has no current client (build-webcore.sh jsimage)" >&2; exit 1
+else
+    "$STRIP" -o "$E/WebBrowserEngine" "$BIN/WebBrowserEngine"
+fi
 cp "$WBLIB" "$D/Libs/"
 cp "$OB_FONTS"/*.ttf "$E/Fonts/"
 cp "$HERE/src/webcore/blocklist" "$E/"
