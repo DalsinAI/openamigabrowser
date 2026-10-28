@@ -30,6 +30,10 @@
 #                  build/amiga/openfont.library); the Installer puts it in
 #                  LIBS:. Required: the engine draws and shapes all its text
 #                  with it (WebKit patch 0090)
+#   UNICODE_LIB    unicode.library (default WEBKIT_BUILD/unicode-library/,
+#                  where build-webcore.sh makes it); the Installer puts it
+#                  in LIBS:. Required when the engine was built on it
+#                  (OB_ICU_DATA=library, the default): ICU's code is there
 #   OB_JSIMAGE     1 (the default when the WebCore build has one): the engine
 #                  is the jsimage client (build-webcore.sh jsimage), which
 #                  takes JavaScriptCore from JavaScriptEngine, packed beside
@@ -42,7 +46,7 @@
 # OUT_DIR/OpenBrowser/            the drawer: OpenBrowser (the launcher),
 #                                 Libs/ (webbrowser.library, OpenTLS,
 #                                 json.library, openfont.library,
-#                                 WebBrowser/: the engine with Fonts/,
+#                                 unicode.library and WebBrowser/: the engine with Fonts/,
 #                                 blocklist, Unicode/ and Network/, and
 #                                 with a jsimage engine JavaScript/
 #                                 JavaScriptEngine),
@@ -113,6 +117,14 @@ cp "$JSONLIB" "$D/Libs/"
 OPENFONTLIB=${OPENFONT_LIB:?set OPENFONT_LIB to openfont.library 1.4 (openamigafont); the engine draws its text with it}
 [ -f "$OPENFONTLIB" ] || { echo "package-browser.sh: no $OPENFONTLIB" >&2; exit 2; }
 cp "$OPENFONTLIB" "$D/Libs/openfont.library"
+# unicode.library, when the engine was built on it (OB_ICU_DATA=library):
+# ICU's code, shared; the Installer puts it in LIBS:, and the engine also
+# finds the drawer's Libs/ copy
+if grep -q 'unicode\.library' "$BIN/WebBrowserEngine"; then
+    UNICODELIB=${UNICODE_LIB:-"$WEBKIT_BUILD/unicode-library/unicode.library"}
+    [ -f "$UNICODELIB" ] || { echo "package-browser.sh: no $UNICODELIB (scripts/build-unicode-library.sh); the engine's ICU calls need it" >&2; exit 2; }
+    cp "$UNICODELIB" "$D/Libs/unicode.library"
+fi
 cp "$CA_BUNDLE/ca-bundle.pem" "$D/S/OpenTLS/"
 [ -f "$CA_BUNDLE/ca-bundle.LICENSE" ] && cp "$CA_BUNDLE/ca-bundle.LICENSE" "$D/S/OpenTLS/"
 cp "$HERE/dist/OpenBrowser/Install" "$D/Install"

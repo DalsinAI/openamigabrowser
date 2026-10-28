@@ -15,6 +15,7 @@
 #include <dos/dosextens.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <libraries/unicode.h>
 #include <proto/unicode.h>
 
 #include "ul_client.h"
@@ -24,6 +25,23 @@ extern void *const __ul_boot_table[UL_CALLS];
 void *const *__ul_table = __ul_boot_table;
 struct Library *UnicodeBase;
 
+/* LIBS:, then a package's own copy: a program in Libs/WebBrowser/ finds
+   the drawer's Libs/ above it (PROGDIR:/), one in the drawer itself its
+   Libs/ (PROGDIR:Libs/). PROGDIR: only means something to a process. */
+static struct Library *openLibrary(void)
+{
+    static const char *const names[] = {
+        UNICODENAME, "PROGDIR:/" UNICODENAME, "PROGDIR:Libs/" UNICODENAME
+    };
+    struct Task *me = FindTask(NULL);
+    struct Library *base = NULL;
+    unsigned i, n = me->tc_Node.ln_Type == NT_PROCESS ? 3 : 1;
+
+    for (i = 0; i < n && !base; i++)
+        base = OpenLibrary((CONST_STRPTR)names[i], 1);
+    return base;
+}
+
 int ul_client_open(void)
 {
     struct Library *base;
@@ -31,7 +49,7 @@ int ul_client_open(void)
 
     if (__ul_table != __ul_boot_table)
         return UL_OPEN_OK;
-    if (!(base = OpenLibrary((CONST_STRPTR)"unicode.library", 1)))
+    if (!(base = openLibrary()))
         return UL_OPEN_NO_LIBRARY;
     if (!(table = __UnicodeTable_base(base, UL_CALLS))) {
         CloseLibrary(base);
@@ -53,7 +71,7 @@ const char *ul_client_error(int code)
 {
     switch (code) {
     case UL_OPEN_NO_LIBRARY:
-        return "unicode.library (version 1) is not in LIBS:";
+        return "unicode.library (version 1) is not in LIBS: or the program's Libs/";
     case UL_OPEN_NO_DATA:
         return "unicode.library cannot read " UL_DATA_FILE " from LOCALE:Unicode/, LIBS:Unicode/ or PROGDIR:Unicode/";
     default:
