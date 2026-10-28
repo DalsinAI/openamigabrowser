@@ -1,0 +1,89 @@
+From be81b1c9197b447e1f03a2ccadd7dd59c09adc74 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 00:46:19 +0000
+Subject: [PATCH] WebCore: the package's fonts also from Libs/WebBrowser/Fonts,
+ added again until it works
+
+A program with the engine in it that runs from the browser's drawer
+(obcore-view, the lab's) has no PROGDIR:Fonts. With no TrueType fonts
+in FONTS: (Instance-32), no face was found and lastResortFallbackFont
+stopped at its RELEASE_ASSERT. The fonts are now looked for in
+PROGDIR:Fonts and PROGDIR:Libs/WebBrowser/Fonts, and adding them is tried
+again on the next lookup when it ran on a plain task or the library refused.
+---
+ .../graphics/openfont/OpenFontLibrary.c       | 50 ++++++++++++++-----
+ 1 file changed, 37 insertions(+), 13 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
+index f50110e4270..c6b7077097b 100644
+--- a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
++++ b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
+@@ -57,6 +57,40 @@ static void closeOpenFont(void)
+     }
+ }
+ 
++/* The package's fonts, by their full path, as the font index keeps every
++ * folder's; the installed browser's (LIBS:WebBrowser/Fonts) and FONTS: are
++ * in the index already. They are in the engine's drawer (Fonts/), which is
++ * PROGDIR: when webbrowser.library starts the engine, but a program that
++ * has the engine in it and runs from the browser's drawer (obcore-view, or
++ * the engine run from OpenBrowser) finds them in Libs/WebBrowser/Fonts.
++ * Locks and the index need a dos process: from a plain task, or when the
++ * library refuses, it is tried again on the next lookup. */
++static volatile int s_programFontsAdded;
++
++static void addProgramFonts(void)
++{
++    static const char* const dirs[] = { "PROGDIR:Fonts", "PROGDIR:Libs/WebBrowser/Fonts" };
++    struct Task* self;
++    unsigned i;
++    int ok = 1;
++    if (s_programFontsAdded)
++        return;
++    self = FindTask(NULL);
++    if (self->tc_Node.ln_Type != NT_PROCESS)
++        return;
++    for (i = 0; i < sizeof dirs / sizeof dirs[0]; ++i) {
++        BPTR lock = Lock((CONST_STRPTR)dirs[i], SHARED_LOCK);
++        if (lock) {
++            char path[256];
++            if (!NameFromLock(lock, (STRPTR)path, sizeof path) || OF_AddFontDir((CONST_STRPTR)path) != OFERR_OK)
++                ok = 0;
++            UnLock(lock);
++        }
++    }
++    if (ok)
++        s_programFontsAdded = 1;
++}
++
+ static void openOpenFont(void)
+ {
+     /* Version 1 is a preview whose structures may change in version 2, so
+@@ -77,24 +111,14 @@ static void openOpenFont(void)
+     atexit(closeOpenFont);
+     s_available = 1;
+     s_hasColorBitmaps = OpenFontBase->lib_Revision >= OPENFONT_REVISION_COLOR;
+-
+-    /* The fonts in the program's drawer (Fonts/), by their full path, as
+-     * the font index keeps every folder's; the installed browser's
+-     * (LIBS:WebBrowser/Fonts) and FONTS: are in the index already. */
+-    {
+-        BPTR lock = Lock((CONST_STRPTR)"PROGDIR:Fonts", SHARED_LOCK);
+-        if (lock) {
+-            char path[256];
+-            if (NameFromLock(lock, (STRPTR)path, sizeof path))
+-                OF_AddFontDir((CONST_STRPTR)path);
+-            UnLock(lock);
+-        }
+-    }
++    addProgramFonts();
+ }
+ 
+ int obof_available(void)
+ {
+     pthread_once(&s_openOnce, openOpenFont);
++    if (s_available)
++        addProgramFonts();
+     return s_available;
+ }
+ 

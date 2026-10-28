@@ -364,6 +364,12 @@ The patches, in order:
   `PROGDIR:/`, the drawer's `Libs/` above the engine's `Libs/WebBrowser/`.
   Before this it found no library there, so no face, and stopped at
   `lastResortFallbackFont`'s assert on most pages.
+- `0093-webcore-openfont-program-fonts.patch`: the package's fonts are
+  also looked for in `PROGDIR:Libs/WebBrowser/Fonts`, for a program with
+  the engine in it that runs from the browser's drawer (obcore-view). With
+  no TrueType fonts in `FONTS:`, as on Instance-32, it found no face and
+  stopped at the same assert. Adding the folder is tried again on the next
+  lookup when it was first asked from a plain task or the library refused.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
