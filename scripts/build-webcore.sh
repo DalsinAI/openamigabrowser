@@ -93,20 +93,24 @@
 #                   bin/NAME.map is the folded program's. 0: programs as
 #                   ninja links them.
 #                   (default 1 when the folder links with --gc-sections)
-#   OB_ICU_DATA    "file": the programs read ICU's data (icudt78b.dat) at
-#                   start from LOCALE:Unicode/ or PROGDIR:Unicode/, which
-#                   keeps 5 MB of tables out of each program; "linked": the
-#                   tables are linked in. A CMake option of src/webcore, so
-#                   an existing folder takes "file" at its next configure.
-#                   test-browser stages the file in Unicode/.  (default file)
-#                   "library": ICU's code and data are unicode.library's
-#                   (PLAN step 7); needs OB_ICU_DIR. Given here, it is
-#                   passed to CMake at the next configure-engine with the
-#                   matching ICU libraries, so an existing folder switches
-#                   either way with a relink.
+#   OB_ICU_DATA    "library": ICU's code and data are unicode.library's
+#                   (PLAN step 7): the programs link 7 KB of stubs and
+#                   LIBS:unicode.library (or the program's Libs/) reads
+#                   icudt78b.dat from LOCALE:Unicode/, LIBS:Unicode/ or
+#                   PROGDIR:Unicode/. "file": ICU's code is linked in and
+#                   the programs read the data file at start; "linked":
+#                   code and tables are linked in. configure-engine passes
+#                   it to CMake with the matching ICU libraries, so an
+#                   existing folder switches either way with a relink.
+#                   test-browser stages the data file in Unicode/ and, for
+#                   "library", unicode.library in Libs/.     (default library)
 #   OB_ICU_DIR      with OB_ICU_DATA=library: the ICU folder
 #                   scripts/build-unicode-library.sh makes (ICU's headers,
 #                   and libraries that send each call to unicode.library).
+#                   Unset, configure-engine and the builds make it in
+#                   BUILD/unicode-library (again when src/unicodelib or
+#                   ICU's libraries change), which needs NDK_INCLUDE.
+#   NDK_INCLUDE     OpenNDK's Include_H, for building unicode.library
 #   OB_CCACHE       the ccache program, or "none"  (default: ccache on PATH)
 #   OB_CCACHE_DIR   ccache's folder for this build
 #                   (default ~/.cache/ccache-openbrowser)
@@ -343,6 +347,29 @@ EOF
     chmod +x "$BUILD/ob-ccache"
 }
 
+# cache_value NAME: NAME's value in the build folder's CMake cache.
+cache_value() {
+    sed -n "s/^$1:[A-Z]*=//p" "$BUILD/CMakeCache.txt" 2>/dev/null
+}
+
+# unicode_library: unicode.library and its stubs in BUILD/unicode-library,
+# built again only when src/unicodelib, its build script or ICU's libraries
+# and data change; sets OB_ICU_DIR to its ICU folder.
+unicode_library() {
+    : "${OAB_DEPS:?set OAB_DEPS to the folder with icu78-m68k-amigaos}"
+    out="$BUILD/unicode-library"
+    icu="$OAB_DEPS/icu78-m68k-amigaos"
+    stamp="$(tree_hash "$ROOT/src/unicodelib") $(sha256 < "$ROOT/scripts/build-unicode-library.sh")"
+    stamp="$stamp $(cat "$icu/lib/libicuuc.a" "$icu/lib/libicui18n.a" "$icu/share/icudt78b.dat" | sha256)"
+    if [ "$(cat "$out/stamp" 2>/dev/null)" != "$stamp" ]; then
+        [ -n "${NDK_INCLUDE:-}" ] || die "unicode.library needs NDK_INCLUDE (OpenNDK's Include_H), or set OB_ICU_DIR, or OB_ICU_DATA=file"
+        STOVE="$GCC16" NDK_INCLUDE="$NDK_INCLUDE" OAB_DEPS="$OAB_DEPS" \
+            sh "$ROOT/scripts/build-unicode-library.sh" "$out" || die "scripts/build-unicode-library.sh failed"
+        echo "$stamp" > "$out/stamp"
+    fi
+    OB_ICU_DIR="$out/icu"
+}
+
 configure_engine() {
     need_sources
     if [ "$CCACHE" = none ]; then
@@ -356,23 +383,23 @@ configure_engine() {
     # otherwise preprocess every C++ file a second time, uncached, to look
     # for them.
     set -- "$@" -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
-    # OB_ICU_DATA given: which ICU libraries the programs link, set in the
-    # cache, for an existing folder too, so it switches with a relink (the
-    # headers are the same ICU 78.3 in both folders).
-    if [ -n "${OB_ICU_DATA:-}" ]; then
-        icu_dir="$OAB_DEPS/icu78-m68k-amigaos"
-        if [ "$OB_ICU_DATA" = library ]; then
-            [ -f "${OB_ICU_DIR:-}/include/ul_client.h" ] || die "OB_ICU_DATA=library needs OB_ICU_DIR (scripts/build-unicode-library.sh)"
-            export OB_ICU_DIR
-            icu_dir=$OB_ICU_DIR
-            set -- "$@" -DOB_UNICODE_DIR="$OB_ICU_DIR"
-        fi
-        set -- "$@" -DOB_ICU_DATA="$OB_ICU_DATA" \
-            -DICU_UC_LIBRARY_RELEASE="$icu_dir/lib/libicuuc.a" \
-            -DICU_I18N_LIBRARY_RELEASE="$icu_dir/lib/libicui18n.a" \
-            -DICU_DATA_LIBRARY_RELEASE="$icu_dir/lib/libicudata.a" \
-            -DCMAKE_CXX_STANDARD_LIBRARIES="$icu_dir/lib/libicudata.a -lpthread -latomic -lstdc++ -L$GCC16/compat -los32compat"
+    # OB_ICU_DATA (default library): which ICU libraries the programs
+    # link, set in the cache, for an existing folder too, so it switches
+    # with a relink (the headers are the same ICU 78.3 in both folders).
+    OB_ICU_DATA=${OB_ICU_DATA:-library}
+    icu_dir="$OAB_DEPS/icu78-m68k-amigaos"
+    if [ "$OB_ICU_DATA" = library ]; then
+        [ -n "${OB_ICU_DIR:-}" ] || unicode_library
+        [ -f "$OB_ICU_DIR/include/ul_client.h" ] || die "OB_ICU_DATA=library: no ul_client.h in $OB_ICU_DIR (scripts/build-unicode-library.sh)"
+        export OB_ICU_DIR
+        icu_dir=$OB_ICU_DIR
+        set -- "$@" -DOB_UNICODE_DIR="$OB_ICU_DIR"
     fi
+    set -- "$@" -DOB_ICU_DATA="$OB_ICU_DATA" \
+        -DICU_UC_LIBRARY_RELEASE="$icu_dir/lib/libicuuc.a" \
+        -DICU_I18N_LIBRARY_RELEASE="$icu_dir/lib/libicui18n.a" \
+        -DICU_DATA_LIBRARY_RELEASE="$icu_dir/lib/libicudata.a" \
+        -DCMAKE_CXX_STANDARD_LIBRARIES="$icu_dir/lib/libicudata.a -lpthread -latomic -lstdc++ -L$GCC16/compat -los32compat"
     if [ -f "$BUILD/CMakeCache.txt" ]; then
         # An existing folder keeps its options; only the launcher and the
         # ICU libraries change, which do not make anything recompile.
@@ -525,6 +552,10 @@ check_curl() {
 browser_build() {
     name=$1
     shift
+    # the folder's own unicode.library: its stubs again if its calls changed
+    if [ "$(cache_value OB_ICU_DATA)" = library ] && [ "$(cache_value OB_UNICODE_DIR)" = "$BUILD/unicode-library/icu" ]; then
+        unicode_library
+    fi
     check_engine
     check_curl
     if [ "$(generator)" = Ninja ]; then
@@ -838,9 +869,14 @@ test_browser() {
     fi
     cp "$ROOT"/tests/pages/*.html "$OB_TEST_DIR/pages/"
     cp "$ROOT/src/webcore/blocklist" "$OB_TEST_DIR/"
-    if [ "$(sed -n 's/^OB_ICU_DATA:STRING=//p' "$BUILD/CMakeCache.txt")" != linked ]; then
+    if [ "$(cache_value OB_ICU_DATA)" != linked ]; then
         mkdir -p "$OB_TEST_DIR/Unicode"
         cp "$(icu_data_file)" "$OB_TEST_DIR/Unicode/"
+    fi
+    # unicode.library where the programs look after LIBS:, PROGDIR:Libs/
+    if [ "$(cache_value OB_ICU_DATA)" = library ]; then
+        mkdir -p "$OB_TEST_DIR/Libs"
+        cp "$(dirname "$(cache_value OB_UNICODE_DIR)")/unicode.library" "$OB_TEST_DIR/Libs/"
     fi
     {
         echo "; OpenBrowser's test pages through obcore-view, staged by"

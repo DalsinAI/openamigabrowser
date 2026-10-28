@@ -113,6 +113,14 @@
 (copylib (source "OpenBrowser/Libs/json.library") (dest "LIBS:") (nogauge)
     (prompt "Installing json.library") (help @copylib-help) (confirm "expert"))
 
+; unicode.library: Unicode (ICU 78.3) for the browser and any other program,
+; one shared copy (4 MB); the engine's line breaking, normalisation, IDNA,
+; collation and number and date formatting go through it. A package built
+; without it carries none.
+(if (exists "OpenBrowser/Libs/unicode.library")
+    (copylib (source "OpenBrowser/Libs/unicode.library") (dest "LIBS:") (nogauge)
+        (prompt "Installing unicode.library") (help @copylib-help) (confirm "expert")))
+
 ; 3. The Unicode data, for every program that reads it, when System: has room
 ;    (it keeps 20 MB free); the engine in the drawer carries its own copy as
 ;    well (Libs/WebBrowser/Unicode, which it reads when LOCALE:Unicode has

@@ -60,15 +60,21 @@ all of it in one call, even what a crashed program never closed.
    and `TOOLCHAIN_DIR` (the OpenAmigaGCC release) or `STOVE` (os32-gcc16).
    It checks that nothing is left undefined and that none of libnix's
    per-program code (start-up, stdio, environment, malloc) is linked.
-3. OpenBrowser on the library: `OB_ICU_DATA=library OB_ICU_DIR=OUT/icu
-   scripts/build-webcore.sh configure-engine`, then the usual builds. An
-   existing folder switches with a relink (the ICU headers are the same),
-   and back with `OB_ICU_DATA=file`. JavaScriptEngine takes the same
-   folder through the toolchain file (`OB_ICU_DIR` in the environment) or
-   the same cache entries in its jsc build folder.
+3. OpenBrowser builds on the library by default: `scripts/build-webcore.sh`
+   (`OB_ICU_DATA=library`) makes it in `BUILD/unicode-library` with the
+   folder's stove and `NDK_INCLUDE`, again only when this folder or ICU's
+   libraries change, and the engine and JavaScriptEngine link its stubs.
+   `OB_ICU_DIR` points a build at one made elsewhere; `OB_ICU_DATA=file`
+   goes back to ICU's code linked in. An existing folder switches either
+   way at its next `configure-engine`, with a relink (the ICU headers are
+   the same). `test-browser` stages the library in `Libs/` and
+   `package-browser.sh` puts it in the drawer's `Libs/`.
 
-Install: `unicode.library` in `LIBS:`, `icudt78b.dat` in `LIBS:Unicode/`
-(or `LOCALE:Unicode/`). A program's own `Unicode/` drawer also works when
+Install: `unicode.library` in `LIBS:` (OpenBrowser's Installer and
+`Install` do it), `icudt78b.dat` in `LOCALE:Unicode/` or `LIBS:Unicode/`.
+A program also finds the library in its own `Libs/` or the folder above
+(`PROGDIR:Libs/`, `PROGDIR:/`, as OpenBrowser's engine in
+`Libs/WebBrowser/` does), and the data in its own `Unicode/` drawer when
 that program is the first to call the library.
 
 CI: `.github/workflows/unicodelib.yml` builds ICU, the library and the

@@ -15,8 +15,9 @@
 ;  - LIBS:openfont.library 1.4 or newer (the engine draws its text with
 ;    it): missing, it goes in; older, it is renamed .before-20261023 and
 ;    the drawer's goes in; unreadable, it is kept, as above;
-;  - LIBS:json.library (the engine's JSON.parse needs it) and
-;    S:OpenTLS/ca-bundle.pem when missing;
+;  - LIBS:json.library (the engine's JSON.parse needs it),
+;    LIBS:unicode.library (its Unicode calls, when the package carries it)
+;    and S:OpenTLS/ca-bundle.pem when missing;
 ;  - LOCALE:Unicode/icudt78b.dat, as the Installer does: when missing, or
 ;    one of another size, which is renamed icudt78b.dat.before-20261023b,
 ;    and only when LOCALE: has more than 25,000,000 bytes free;
@@ -125,6 +126,18 @@ If NOT EXISTS LIBS:json.library
     Quit 20
   EndIf
   Echo "Installed LIBS:json.library"
+EndIf
+
+; unicode.library (ICU's code, shared), when this package carries it
+If EXISTS Libs/unicode.library
+  If NOT EXISTS LIBS:unicode.library
+    Copy Libs/unicode.library LIBS: QUIET
+    If WARN
+      Echo "Could not copy unicode.library to LIBS:"
+      Quit 20
+    EndIf
+    Echo "Installed LIBS:unicode.library"
+  EndIf
 EndIf
 
 If NOT EXISTS S:OpenTLS/ca-bundle.pem
