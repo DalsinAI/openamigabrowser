@@ -66,13 +66,13 @@ The design documents disagree with each other (inventory of 22 October
 | Decoders are datatypes | picture datatypes (openamigaimage); stream.datatype, gzip.datatype, brotli.datatype | pictures: yes. The stream class and the gzip and Brotli datatypes are a design only (JIT-on-core 0.5 §5.1), with no code in any repo | partly | libpng (for cairo) and zlib are still linked; curl decodes compressed bodies |
 | JavaScript JIT | patches 0020-0052 | in the browser | **yes** | nothing |
 | javascript.library | #63, #64; JavaScriptEngine built with the browser (#98) and shared with it (jsimage: #99, #103, #106, #108) | done: JavaScriptEngine 25,374,812 bytes stripped (38,086,144 before, 23 Oct); the browser engine takes JavaScriptCore, WTF and bmalloc from it (49,883,356 bytes stripped, 73,263,356 before); DOM bench no slower on lab copies of Instance-14 and Instance-32 | **yes**, when built with `build-webcore.sh jsimage` (`package-browser.sh` packs it with `Libs/JavaScript/JavaScriptEngine`) | nothing in the jsimage engine; the plain build (`OB_JSIMAGE=0`) still links its own |
-| ICU | unicode.library (`src/unicodelib`, #90, #102): ICU 78.3's code and data, one shared copy, 261 calls | done: library 4,032,168 bytes, data 4,597,248 bytes; UnicodeTest passed on lab copies of Instance-14 and Instance-32 (23 Oct); the 0.8.1 engine relinked on it is 71,871,112 bytes stripped (75,787,960 before, 3,916,848 less) and draws Wikipedia | **no**: opt-in (`OB_ICU_DATA=library`), not yet the default build | the build options; then step 7's second half, our own code in place of ICU's |
+| ICU | unicode.library (`src/unicodelib`, #90, #102, #107, #113): ICU 78.3's code and data, one shared copy, 261 calls | done: library 4,032,168 bytes, data 4,597,248 bytes; UnicodeTest passed on lab copies of Instance-14 and Instance-32 (23 Oct); the 0.8.1 engine relinked on it is 71,871,112 bytes stripped (75,787,960 before, 3,916,848 less) and draws Wikipedia. The default build on it (#113, 28 Oct): WebBrowserEngine 69,347,684 bytes and JavaScriptEngine 21,561,160 bytes stripped; all six pages pass on a lab copy of Instance-14; launch to painted 3.42 s, the same as without it (3.42 s), and about 0.14 s less when the library is already in memory | **yes**: the default build (`OB_ICU_DATA=library`); `OB_ICU_DATA=file` links ICU in | ICU's own code, inside unicode.library, until step 7's second half replaces it |
 
 What the old libraries cost in today's engine, from its link map (MiB):
 
 | Library | Size | Goes when |
 | --- | --- | --- |
-| ICU (code 3.4 + data 5.2) | 8.6 | data: step 2; code: into unicode.library with `OB_ICU_DATA=library` (step 7, 3.9 MB less, 23 Oct); our own code: step 7 |
+| ICU (code 3.4 + data 5.2) | 8.6 | data: step 2; code: into unicode.library, the default build (step 7, 3.9 MB less, #113, 28 Oct); our own code: step 7 |
 | HarfBuzz | 1.16 | step 3 (gone, #94) |
 | FreeType | 0.50 | step 3 (gone, #94) |
 | fontconfig, with Expat | 0.45 | step 3 (gone, #94) |
@@ -264,9 +264,16 @@ is done when its "done when" holds on the lab instance.
 7. **unicode.library, then ICU out.** unicode.library is made (#90,
    #102, 23 October, `src/unicodelib/README.md`): one shared copy of
    ICU's data and its calls for every program; the engine links 6.8 KB of
-   stubs with `OB_ICU_DATA=library`. Left: make it the default build and
-   ship it (`LIBS:unicode.library`, `LIBS:Unicode/icudt78b.dat`), and
-   move JavaScriptEngine onto it (the same `OB_ICU_DIR`). Then replace
+   stubs with `OB_ICU_DATA=library`. Since #113 (28 October) that is the
+   default build, for the engine and JavaScriptEngine alike:
+   `build-webcore.sh` makes the library, `package-browser.sh` puts it in
+   the drawer's `Libs/`, and Install copies it to `LIBS:`. Before Install
+   the engine opens the drawer's copy (`PROGDIR:Libs/`), which needs
+   OS 3.2.3 or an open ROM with OpenRamlib from 26 October on (guest
+   13b3ec33). From launch to painted the dom page takes 3.42 s with it
+   and without it on a lab copy of Instance-14; opening the library and
+   its data costs about 0.07 s once, and the smaller engine loads 0.08 s
+   sooner. Left: replace
    ICU's code with our own, in unicode.library: line and word breaking,
    NFC, IDNA, Unicode properties, and the Intl services JavaScriptCore
    uses (collation, number, date and plural formatting, locales and time
@@ -278,9 +285,6 @@ Not in the order above, still open:
 
 - **#6, the visit cache (patch 0018).** Open since 7 October: finish it or
   close it.
-- **Two copies of ICU's code** while the browser runs on javascript.library
-  (about 3.4 MB each once step 2 has moved the data out), until both link
-  unicode.library (step 7).
 - **The inventory of 22 October 2026** (every repo, PR, design document and
   lab) is the evidence behind the "where each decision stands" table. It is
   kept outside the repositories, in INVENTORY-20261022.
