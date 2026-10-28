@@ -364,12 +364,16 @@ The patches, in order:
   `PROGDIR:/`, the drawer's `Libs/` above the engine's `Libs/WebBrowser/`.
   Before this it found no library there, so no face, and stopped at
   `lastResortFallbackFont`'s assert on most pages.
-- `0093-webcore-openfont-program-fonts.patch`: the package's fonts are
-  also looked for in `PROGDIR:Libs/WebBrowser/Fonts`, for a program with
-  the engine in it that runs from the browser's drawer (obcore-view). With
-  no TrueType fonts in `FONTS:`, as on Instance-32, it found no face and
-  stopped at the same assert. Adding the folder is tried again on the next
-  lookup when it was first asked from a plain task or the library refused.
+- `0093-webcore-openfont-program-fonts.patch`: 0092 was not enough. ramlib
+  resolves `OpenLibrary("PROGDIR:...")` in its own process, where the
+  engine's `PROGDIR:` means nothing, so the package's copy never opened. The
+  library is now opened by its full name, from `PROGDIR:/`, `PROGDIR:Libs/`
+  or `PROGDIR:Libs/WebBrowser/Libs/`. The package's fonts are looked for in
+  `PROGDIR:Fonts` and `PROGDIR:Libs/WebBrowser/Fonts`, for a program with
+  the engine in it that runs from the browser's drawer (obcore-view).
+  Adding them is tried again on the next lookup when it was first asked
+  from a plain task or the library refused. What isn't found is printed
+  on stderr.
 
 `0001-amiga-m68k-jsconly.patch` is one combined patch. It holds:
 
