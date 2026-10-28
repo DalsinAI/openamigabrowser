@@ -1,4 +1,4 @@
-From 427c724581ea0ce311d28db7a434ef383488a183 Mon Sep 17 00:00:00 2001
+From 8ec62988dce8a095430c53410f780ec6b0f0bdec Mon Sep 17 00:00:00 2001
 From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 00:46:19 +0000
 Subject: [PATCH] WebCore: openfont.library and the package's fonts found from
@@ -9,21 +9,31 @@ lastResortFallbackFont's RELEASE_ASSERT on Instance-32, with 0092.
 OpenLibrary("PROGDIR:...") is resolved by ramlib in its own process,
 where the engine's PROGDIR: means nothing, so the package's copy was
 never opened. The library is now opened by its full name, from
-PROGDIR:/, PROGDIR:Libs/ or PROGDIR:Libs/WebBrowser/Libs/.
+PROGDIR:/, PROGDIR:Libs/ or PROGDIR:Libs/WebBrowser/Libs/. By its name
+alone only when it is in memory or in LIBS:: a ramlib search that finds
+nothing took 65 ms of every cold start.
 
 The package's fonts are looked for in PROGDIR:Fonts and
 PROGDIR:Libs/WebBrowser/Fonts (obcore-view runs from the drawer), and
 adding them is tried again on the next lookup when it ran on a plain
 task or the library refused. What was not found goes to stderr.
 ---
- .../graphics/openfont/OpenFontLibrary.c       | 83 +++++++++++++++----
- 1 file changed, 66 insertions(+), 17 deletions(-)
+ .../graphics/openfont/OpenFontLibrary.c       | 97 +++++++++++++++----
+ 1 file changed, 80 insertions(+), 17 deletions(-)
 
 diff --git a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
-index f50110e4270..3193b984de1 100644
+index f50110e4270..0b1d131ced7 100644
 --- a/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
 +++ b/Source/WebCore/platform/graphics/openfont/OpenFontLibrary.c
-@@ -35,6 +35,7 @@
+@@ -27,6 +27,7 @@
+ 
+ #include <exec/types.h>
+ #include <exec/libraries.h>
++#include <exec/execbase.h>
+ #include <utility/tagitem.h>
+ #include <libraries/openfont.h>
+ #include <dos/dos.h>
+@@ -35,6 +36,7 @@
  #include <proto/openfont.h>
  
  #include <pthread.h>
@@ -31,7 +41,7 @@ index f50110e4270..3193b984de1 100644
  #include <stdlib.h>
  #include <string.h>
  
-@@ -57,6 +58,46 @@ static void closeOpenFont(void)
+@@ -57,6 +59,46 @@ static void closeOpenFont(void)
      }
  }
  
@@ -78,7 +88,7 @@ index f50110e4270..3193b984de1 100644
  static void openOpenFont(void)
  {
      /* Version 1 is a preview whose structures may change in version 2, so
-@@ -65,36 +106,44 @@ static void openOpenFont(void)
+@@ -65,36 +107,57 @@ static void openOpenFont(void)
       * engine runs from the drawer's Libs/WebBrowser/, so that one is in
       * the folder above (PROGDIR:/); a program in the drawer itself finds
       * it in PROGDIR:Libs/. */
@@ -93,7 +103,20 @@ index f50110e4270..3193b984de1 100644
 +         * where our PROGDIR: means nothing. */
 +        char path[256];
 +        const char* name = names[i];
-+        if (i) {
++        if (!i) {
++            /* By name only when it is in memory or in LIBS:: a search
++             * that finds nothing costs ramlib about 65 ms. */
++            BPTR lock;
++            int resident;
++            Forbid();
++            resident = FindName(&SysBase->LibList, (CONST_STRPTR)OPENFONTNAME) != NULL;
++            Permit();
++            if (!resident) {
++                if (!(lock = Lock((CONST_STRPTR)"LIBS:" OPENFONTNAME, SHARED_LOCK)))
++                    continue;
++                UnLock(lock);
++            }
++        } else {
 +            BPTR lock = Lock((CONST_STRPTR)names[i], SHARED_LOCK);
 +            if (!lock)
 +                continue;
