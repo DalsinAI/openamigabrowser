@@ -157,6 +157,11 @@
         (copyfiles (source "Extras/Libs/javascript.library") (dest "LIBS:") (nogauge))
         (makedir "LIBS:JavaScript")
         (copyfiles (source "Extras/Libs/JavaScript") (dest "LIBS:JavaScript") (all))
+        ; a browser engine that takes JavaScriptCore from JavaScriptEngine
+        ; looks in LIBS:JavaScript first: its own image goes there, so the
+        ; engine and javascript.library use one file
+        (if (exists "OpenBrowser/Libs/JavaScript/JavaScriptEngine")
+            (copyfiles (source "OpenBrowser/Libs/JavaScript/JavaScriptEngine") (dest "LIBS:JavaScript") (nogauge)))
         ; JavaScriptEngine reads ICU's data from LOCALE:Unicode, or else
         ; from its own drawer
         (if (not (exists "LOCALE:Unicode/icudt78b.dat"))
