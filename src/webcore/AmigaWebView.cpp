@@ -10,6 +10,7 @@
 #include "AmigaChromeClient.h"
 #include "AmigaEditorClient.h"
 #include "AmigaFrameLoaderClient.h"
+#include "AmigaSessionStorage.h"
 
 #include <WebCore/DocumentPage.h>
 #include <WebCore/DocumentView.h>
@@ -100,6 +101,7 @@ WebView::WebView(const OBWebViewCallbacks& callbacks, const IntSize& size)
         configuration.cookieJar = *jar;
     m_backForwardList = AmigaBackForwardList::create();
     configuration.backForwardClient = *m_backForwardList;
+    configuration.storageNamespaceProvider = createSessionStorageProvider();
     WebView* view = this;
     configuration.mainFrameCreationParameters = PageConfiguration::LocalMainFrameCreationParameters {
         CompletionHandler<UniqueRef<LocalFrameLoaderClient>(LocalFrame&, FrameLoader&)> { [view](auto&, auto& frameLoader) {
@@ -141,6 +143,9 @@ WebView::WebView(const OBWebViewCallbacks& callbacks, const IntSize& size)
     // No IndexedDB store yet: WebCore's empty database provider aborts the
     // moment a page opens one (youtube.com). Without the API, pages carry on.
     settings.setIndexedDBAPIEnabled(false);
+    // sessionStorage, in memory for the life of the view (AmigaSessionStorage):
+    // pages (reddit.com) read window.sessionStorage without checking for it.
+    settings.setSessionStorageEnabled(true);
 
     RefPtr frame = m_page->localMainFrame();
     frame->init();

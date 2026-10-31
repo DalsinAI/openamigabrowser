@@ -18,6 +18,7 @@ set(OB_CORE_SOURCES
     AmigaLoaderStrategy.cpp
     AmigaNetworkSetup.c
     AmigaPlatformStrategies.cpp
+    AmigaSessionStorage.cpp
     AmigaWebView.cpp
     ob_httpcache.c
     ob_webview.cpp

@@ -344,6 +344,11 @@ The patches, in order:
   keep the URL's leading "/", which AmigaDOS reads as the parent
   directory. One name stays relative to the current directory, and
   `dir/file` that exists relative to it is read there first.
+- `0062-amiga-media-error-without-video.patch`: `MediaError` is built
+  and exposed on `window` without `ENABLE_VIDEO` (it was
+  `Conditional=VIDEO`), so pages that test `instanceof MediaError` or
+  read its constants run instead of stopping with a ReferenceError.
+  VIDEO stays off; nothing makes a MediaError.
 - `0070-amiga-public-suffixes-without-libpsl.patch`: public suffixes
   (cookies, sites, `document.domain`) from our own reader of Mozilla's
   Public Suffix List (`PublicSuffixAmiga.c`) in place of libpsl, which is
