@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 18:00:00 +0000
+Subject: [PATCH] WebCore: MediaError exposed without VIDEO
+
+The Amiga port builds without ENABLE_VIDEO, and MediaError was
+Conditional=VIDEO, so window.MediaError did not exist. Pages that test
+"instanceof MediaError" or read MediaError.MEDIA_ERR_* (reddit.com's
+scripts do) stopped with "ReferenceError: Can't find variable:
+MediaError". The interface (four constants, code and message) is now
+built on the Amiga port as well. Nothing creates one, since there are
+no media elements; VIDEO stays off.
+
+---
+diff --git a/Source/WebCore/html/MediaError.h b/Source/WebCore/html/MediaError.h
+index 29b1d63..fb1ac01 100644
+--- a/Source/WebCore/html/MediaError.h
++++ b/Source/WebCore/html/MediaError.h
+@@ -25,7 +25,9 @@
+ 
+ #pragma once
+ 
+-#if ENABLE(VIDEO)
++// Built without VIDEO on the Amiga port as well: the interface is exposed
++// so that pages that test "instanceof MediaError" or read its constants run.
++#if ENABLE(VIDEO) || PLATFORM(AMIGA)
+ 
+ #include <wtf/RefCounted.h>
+ #include <wtf/text/WTFString.h>
+@@ -64,4 +66,4 @@ private:
+ 
+ } // namespace WebCore
+ 
+-#endif // ENABLE(VIDEO)
++#endif // ENABLE(VIDEO) || PLATFORM(AMIGA)
+diff --git a/Source/WebCore/html/MediaError.idl b/Source/WebCore/html/MediaError.idl
+index f3d20ab..31d89c2 100644
+--- a/Source/WebCore/html/MediaError.idl
++++ b/Source/WebCore/html/MediaError.idl
+@@ -24,7 +24,6 @@
+  */
+ 
+ [
+-    Conditional=VIDEO,
+     Exposed=Window
+ ] interface MediaError {
+       const unsigned short MEDIA_ERR_ABORTED = 1;
+-- 
+2.53.0
