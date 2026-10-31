@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 17:30:00 +0000
+Subject: [PATCH] WebCore: file: URLs read from their AmigaDOS paths
+
+The port's file loader (ResourceHandle::amigaLoadFile, 0002) read
+url.fileSystemPath(), the URL's path with its leading "/". AmigaDOS
+reads a leading "/" as the parent directory, so file:///DH1:dir/page.html
+and file:///Work/page.html were "The file does not exist." in the GUI.
+
+The path now goes to AmigaDOS form first:
+- file:///Volume:dir/file (PROGDIR:, any assign) is Volume:dir/file;
+- file:///Volume/dir/file is Volume:dir/file;
+- one name (file:///page.html, the base of a page loaded from memory)
+  stays relative to the current directory;
+- dir/file that exists relative to the current directory is read there
+  before it is taken as Volume/file. The check is relative, so a missing
+  volume never brings up an "insert volume" requester.
+The MIME type is taken from the same path.
+
+---
+diff --git a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+index 8461ff0..c402dc1 100644
+--- a/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
++++ b/Source/WebCore/platform/network/amiga/ResourceHandleAmiga.cpp
+@@ -200,6 +200,32 @@ void ResourceHandle::amigaStartCurlRequest(ResourceRequest&& request)
+     d->m_curlRequest->resume();
+ }
+ 
++// A file: URL's path in AmigaDOS form. URL::fileSystemPath() is the URL's
++// path with a leading "/", which AmigaDOS reads as the parent directory:
++// - file:///Volume:dir/file (and PROGDIR:, or any assign) is Volume:dir/file;
++// - file:///Volume/dir/file, the Unix form, is Volume:dir/file;
++// - a path of one name (file:///page.html) stays relative: page.html in the
++//   current directory, as before;
++// - dir/file that exists relative to the current directory is read there
++//   (a page under file:///page.html asking for "pages/x.html"), before it is
++//   taken as Volume/file. That check is relative, so it never brings up an
++//   "insert volume" requester.
++static String amigaFileSystemPath(const URL& url)
++{
++    String path = url.fileSystemPath();
++    while (path.startsWith('/'))
++        path = path.substring(1);
++    size_t slash = path.find('/');
++    size_t colon = path.find(':');
++    if (colon != notFound && (slash == notFound || colon < slash))
++        return path;
++    if (slash == notFound || !slash)
++        return path;
++    if (FileSystem::fileExists(path))
++        return path;
++    return makeString(StringView { path }.left(slash), ':', StringView { path }.substring(slash + 1));
++}
++
+ // file: URLs: curl is built for http and https only, so files are read here
+ // and handed over from the run loop, as a network load would be.
+ void ResourceHandle::amigaLoadFile()
+@@ -210,12 +236,13 @@ void ResourceHandle::amigaLoadFile()
+         auto* client = handle.client();
+         if (!client)
+             return;
+-        auto contents = FileSystem::readEntireFile(url.fileSystemPath());
++        auto path = amigaFileSystemPath(url);
++        auto contents = FileSystem::readEntireFile(path);
+         if (!contents) {
+             client->didFail(&handle, ResourceError("NSURLErrorDomain"_s, -1100, url, "The file does not exist."_s));
+             return;
+         }
+-        auto mimeType = MIMETypeRegistry::mimeTypeForPath(url.fileSystemPath());
++        auto mimeType = MIMETypeRegistry::mimeTypeForPath(path);
+         if (mimeType.isEmpty())
+             mimeType = "application/octet-stream"_s;
+         ResourceResponse response(URL { url }, String { mimeType }, contents->size(), String());
+-- 
+2.53.0
