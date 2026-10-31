@@ -121,23 +121,50 @@
     (copylib (source "OpenBrowser/Libs/unicode.library") (dest "LIBS:") (nogauge)
         (prompt "Installing unicode.library") (help @copylib-help) (confirm "expert")))
 
-; 3. The Unicode data, for every program that reads it, when System: has room
-;    (it keeps 20 MB free); the engine in the drawer carries its own copy as
-;    well (Libs/WebBrowser/Unicode, which it reads when LOCALE:Unicode has
-;    none). One of another size is renamed icudt78b.dat.before-<stamp>.
+; 3. The Unicode data, for every program that reads it, when LOCALE: has room
+;    for it and 2,000,000 bytes more; the engine in the drawer carries its own
+;    copy as well (Libs/WebBrowser/Unicode, which it reads when LOCALE:Unicode
+;    has none). One of another size is renamed icudt78b.dat.before-<stamp>.
+;    No free space for LOCALE: (0, as a folder drive past its stated size
+;    gives, or -1, not readable) is not known room: the copy is tried, and a
+;    failure is reported, not the end of the installation.
 (set #icu "LOCALE:Unicode/icudt78b.dat")
 (set #icunew "OpenBrowser/Libs/WebBrowser/Unicode/icudt78b.dat")
-(if (and (exists #icu) (<> (getsize #icu) (getsize #icunew)))
-    (if (exists (cat #icu ".before-" #stamp))
-        (abort (cat "LOCALE:Unicode has both icudt78b.dat and icudt78b.dat.before-" #stamp
-                    ". Move one of them away and run the Installer again."))
-        (if (= 0 (rename #icu (cat #icu ".before-" #stamp)))
-            (abort "Could not rename LOCALE:Unicode/icudt78b.dat."))))
-(if (and (not (exists #icu))
-         (> (getdiskspace "LOCALE:") 25000000))
+(set #icufree (getdiskspace "LOCALE:"))
+(set #icuneed (+ (getsize #icunew) 2000000))
+(set #icumoved 0)
+(if (and (not (and (exists #icu) (= (getsize #icu) (getsize #icunew))))
+         (> #icufree 0) (<= #icufree #icuneed))
+    (message (cat "LOCALE: has " #icufree " bytes free, and the Unicode data needs " #icuneed
+                  " (the file and 2,000,000 bytes more), so it is not copied to LOCALE:Unicode. "
+                  "OpenBrowser reads the drawer's copy; other programs that use unicode.library "
+                  "need LOCALE:Unicode/icudt78b.dat.") (all))
     (
-        (makedir "LOCALE:Unicode")
-        (copyfiles (source "OpenBrowser/Libs/WebBrowser/Unicode") (dest "LOCALE:Unicode") (all) (nogauge))))
+        (if (and (exists #icu) (<> (getsize #icu) (getsize #icunew)))
+            (if (exists (cat #icu ".before-" #stamp))
+                (abort (cat "LOCALE:Unicode has both icudt78b.dat and icudt78b.dat.before-" #stamp
+                            ". Move one of them away and run the Installer again."))
+                (if (= 0 (rename #icu (cat #icu ".before-" #stamp)))
+                    (abort "Could not rename LOCALE:Unicode/icudt78b.dat.")
+                    (set #icumoved 1))))
+        (if (not (exists #icu))
+            (
+                (makedir "LOCALE:Unicode")
+                (copyfiles (source "OpenBrowser/Libs/WebBrowser/Unicode") (dest "LOCALE:Unicode") (all) (nogauge)
+                    (optional "nofail"))
+                (if (or (not (exists #icu)) (<> (getsize #icu) (getsize #icunew)))
+                    (
+                        ; a part-written file would break every program that reads
+                        ; it: renamed out of the way (not deleted), and the file
+                        ; renamed above goes back
+                        (if (exists #icu)
+                            (rename #icu (cat #icu ".incomplete-" #stamp)))
+                        (if (= #icumoved 1)
+                            (rename (cat #icu ".before-" #stamp) #icu))
+                        (message (cat "Could not copy the Unicode data to LOCALE:Unicode (is System: full?). "
+                                      "OpenBrowser reads the drawer's copy; other programs that use "
+                                      "unicode.library need LOCALE:Unicode/icudt78b.dat.") (all))
+                        (transcript "LOCALE:Unicode/icudt78b.dat: copy failed")))))))
 
 ; 4. One engine: WebBrowserEngine stays in the drawer, off System:.
 ;    webbrowser.library runs LIBS:WebBrowser/WebBrowserEngine when there is
