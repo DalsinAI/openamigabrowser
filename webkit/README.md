@@ -337,6 +337,13 @@ The patches, in order:
   the few functions code outside the dropped folders names but never
   reaches. `DataTransferItem.webkitGetAsEntry()` goes; nothing else pages
   could reach changes. The stripped engine is 4,309,716 bytes smaller.
+- `0061-amiga-file-urls-amigados-paths.patch`: the port's file loader
+  (`ResourceHandle::amigaLoadFile`, 0002) reads a file: URL from its
+  AmigaDOS path: `file:///Volume:dir/file` and `file:///Volume/dir/file`
+  are `Volume:dir/file` (PROGDIR: and assigns as well), where it used to
+  keep the URL's leading "/", which AmigaDOS reads as the parent
+  directory. One name stays relative to the current directory, and
+  `dir/file` that exists relative to it is read there first.
 - `0070-amiga-public-suffixes-without-libpsl.patch`: public suffixes
   (cookies, sites, `document.domain`) from our own reader of Mozilla's
   Public Suffix List (`PublicSuffixAmiga.c`) in place of libpsl, which is
