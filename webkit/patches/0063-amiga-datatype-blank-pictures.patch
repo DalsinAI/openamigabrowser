@@ -1,0 +1,222 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SacredTrees <121399723+SacredTrees@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 19:00:00 +0000
+Subject: [PATCH] WebCore: pictures the datatypes drew blank
+
+Two kinds of picture came out blank through the datatypes:
+
+- An animated PNG whose acTL chunk comes straight after IHDR matches
+  the animation datatypes' descriptor (DEVS:DataTypes/APNG, group anim),
+  so NewDTObject() with GID_PICTURE finds no picture. The file goes to
+  the datatype without its animation chunks (acTL, fcTL, fdAT): a plain
+  PNG of its default image, the frame other PNG readers show.
+- A GIF whose first frame does not cover the logical screen (offset or
+  smaller, common in animated advertisements): gif.datatype 47.1 drew
+  nothing. The first frame goes to the datatype on its own (the screen
+  set to its size, the frame at 0,0), and is put back in a screen-sized
+  picture at its place, transparent around it.
+
+Only the bytes handed to the datatype change, in memory; every other
+picture goes as before. The engine still shows the first frame only.
+
+---
+diff --git a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+index 8041f4d..606c98a 100644
+--- a/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
++++ b/Source/WebCore/platform/image-decoders/amiga/DatatypesDecode.c
+@@ -78,6 +78,151 @@ static void disposePicture(Object* object, const char* fileName)
+     resetFPCR();
+ }
+ 
++/* An animated PNG (APNG) whose acTL chunk comes straight after IHDR is
++ * claimed by the animation datatypes' descriptor (Devs/DataTypes/APNG, group
++ * anim), so NewDTObject() with GID_PICTURE finds no picture and the image
++ * stayed blank. Without its animation chunks (acTL, fcTL, fdAT) the file is
++ * a plain PNG of its default image, the frame other PNG readers show: that
++ * goes to the PNG datatype. Each chunk carries its own CRC, so leaving some
++ * out keeps the rest valid. */
++static int isAnimationChunk(const unsigned char* type)
++{
++    return !memcmp(type, "acTL", 4) || !memcmp(type, "fcTL", 4) || !memcmp(type, "fdAT", 4);
++}
++
++static int isAnimatedPNG(const unsigned char* data, unsigned long size)
++{
++    static const unsigned char signature[8] = { 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a };
++    unsigned long at = 8;
++
++    if (size < 8 || memcmp(data, signature, 8))
++        return 0;
++    while (at + 12 <= size) {
++        unsigned long length = (unsigned long)data[at] << 24 | (unsigned long)data[at + 1] << 16 | (unsigned long)data[at + 2] << 8 | data[at + 3];
++        if (!memcmp(data + at + 4, "acTL", 4))
++            return 1;
++        if (!memcmp(data + at + 4, "IDAT", 4) || length > size - at - 12)
++            return 0;
++        at += 12 + length;
++    }
++    return 0;
++}
++
++/* The file without its animation chunks, from malloc, or NULL. */
++static unsigned char* stillPNG(const unsigned char* data, unsigned long size, unsigned long* stillSize)
++{
++    unsigned char* still = (unsigned char*)malloc(size);
++    unsigned long at = 8, length;
++
++    if (!still)
++        return NULL;
++    memcpy(still, data, 8);
++    *stillSize = 8;
++    while (at + 12 <= size) {
++        length = (unsigned long)data[at] << 24 | (unsigned long)data[at + 1] << 16 | (unsigned long)data[at + 2] << 8 | data[at + 3];
++        if (length > size - at - 12)
++            break;
++        if (!isAnimationChunk(data + at + 4)) {
++            memcpy(still + *stillSize, data + at, 12 + length);
++            *stillSize += 12 + length;
++        }
++        at += 12 + length;
++    }
++    return still;
++}
++
++/* A GIF whose first frame does not cover its logical screen (an offset or
++ * smaller first frame, common in animated advertisements) came out blank
++ * from gif.datatype 47.1. Such a GIF goes to the datatype as its first
++ * frame alone: the screen set to the frame's size and the frame moved to
++ * 0,0 (a copy; two header fields change). The frame is then put back in a
++ * screen-sized picture at its place, transparent around it, as browsers
++ * show the area outside the first frame. */
++typedef struct {
++    unsigned screenWidth, screenHeight;
++    unsigned left, top, width, height;
++    unsigned long descriptor;       /* offset of the first image descriptor */
++} GIFFirstFrame;
++
++static int gifFirstFrame(const unsigned char* d, unsigned long size, GIFFirstFrame* f)
++{
++    unsigned long at = 13;
++
++    if (size < 13 || memcmp(d, "GIF8", 4))
++        return 0;
++    f->screenWidth = d[6] | d[7] << 8;
++    f->screenHeight = d[8] | d[9] << 8;
++    if (d[10] & 0x80)
++        at += 3UL << ((d[10] & 7) + 1);
++    while (at < size) {
++        if (d[at] == 0x2c) {
++            if (at + 10 > size)
++                return 0;
++            f->descriptor = at;
++            f->left = d[at + 1] | d[at + 2] << 8;
++            f->top = d[at + 3] | d[at + 4] << 8;
++            f->width = d[at + 5] | d[at + 6] << 8;
++            f->height = d[at + 7] | d[at + 8] << 8;
++            return f->width && f->height;
++        }
++        if (d[at] != 0x21 || at + 2 >= size)
++            return 0;
++        at += 2;                                /* extension: introducer, label, then sub-blocks */
++        while (at < size && d[at])
++            at += d[at] + 1;
++        at++;
++    }
++    return 0;
++}
++
++static int gifFirstFramePartial(const GIFFirstFrame* f)
++{
++    return f->left || f->top || f->width != f->screenWidth || f->height != f->screenHeight;
++}
++
++/* Into a screen-sized picture: the decoded frame at its place, the rest
++ * transparent. Returns 0 if out of memory (the frame is left as it was). */
++static int gifPlaceFrame(const GIFFirstFrame* f, OBDTImage* out)
++{
++    unsigned long count = (unsigned long)f->screenWidth * f->screenHeight;
++    unsigned char* screen;
++    unsigned y, rows, columns;
++
++    if (!f->screenWidth || !f->screenHeight || out->width != f->width || out->height != f->height)
++        return 1;
++    screen = (unsigned char*)calloc(count, 4);
++    if (!screen)
++        return 0;
++    columns = f->left >= f->screenWidth ? 0 : (f->width < f->screenWidth - f->left ? f->width : f->screenWidth - f->left);
++    rows = f->top >= f->screenHeight ? 0 : (f->height < f->screenHeight - f->top ? f->height : f->screenHeight - f->top);
++    for (y = 0; y < rows; y++)
++        memcpy(screen + ((unsigned long)(f->top + y) * f->screenWidth + f->left) * 4,
++            out->pixels + (unsigned long)y * f->width * 4, (size_t)columns * 4);
++    free(out->pixels);
++    out->pixels = screen;
++    out->width = f->screenWidth;
++    out->height = f->screenHeight;
++    out->hasAlpha = 1;
++    return 1;
++}
++
++/* A copy with the screen set to the first frame's size and the frame at
++ * 0,0, from malloc, or NULL. */
++static unsigned char* firstFrameGIF(const unsigned char* data, unsigned long size, const GIFFirstFrame* f)
++{
++    unsigned char* copy = (unsigned char*)malloc(size);
++
++    if (!copy)
++        return NULL;
++    memcpy(copy, data, size);
++    copy[6] = f->width & 0xff;
++    copy[7] = f->width >> 8;
++    copy[8] = f->height & 0xff;
++    copy[9] = f->height >> 8;
++    memset(copy + f->descriptor + 1, 0, 4);
++    return copy;
++}
++
+ /* OS 3.2's picture datatypes read files, not memory (DTST_MEMORY gives
+  * ERROR_OBJECT_WRONG_TYPE), so the picture goes through a file in T:. */
+ static int writeTemporaryFile(const void* data, unsigned long size, char* name, size_t nameSize)
+@@ -133,13 +278,29 @@ static int obdt_decode_datatypes(const void* data, unsigned long size, OBDTImage
+     ULONG alphaChannel = FALSE;
+     ULONG width, height, count, i;
+     unsigned char* pixels;
++    unsigned char* changed = NULL;
++    unsigned long changedSize = 0;
++    GIFFirstFrame gif;
++    int hasGIFFrame = 0, written;
+ 
+     memset(out, 0, sizeof *out);
+     pthread_once(&s_openOnce, openDataTypes);
+     if (!DataTypesBase || !data || !size)
+         return 0;
+ 
+-    if (!writeTemporaryFile(data, size, fileName, sizeof fileName))
++    /* What goes to the datatype: an APNG without its animation chunks, a
++     * GIF's partial first frame on its own (see above); else the file. */
++    if (isAnimatedPNG((const unsigned char*)data, size))
++        changed = stillPNG((const unsigned char*)data, size, &changedSize);
++    else if (gifFirstFrame((const unsigned char*)data, size, &gif) && gifFirstFramePartial(&gif)) {
++        changed = firstFrameGIF((const unsigned char*)data, size, &gif);
++        changedSize = size;
++        hasGIFFrame = changed != NULL;
++    }
++    written = changed ? writeTemporaryFile(changed, changedSize, fileName, sizeof fileName)
++                      : writeTemporaryFile(data, size, fileName, sizeof fileName);
++    free(changed);
++    if (!written)
+         return 0;
+     object = NewDTObject((APTR)fileName,
+         DTA_GroupID, GID_PICTURE,
+@@ -221,6 +382,10 @@ static int obdt_decode_datatypes(const void* data, unsigned long size, OBDTImage
+     out->width = width;
+     out->height = height;
+     out->pixels = pixels;
++    if (hasGIFFrame && !gifPlaceFrame(&gif, out)) {
++        obdt_free(out);
++        return 0;
++    }
+     return 1;
+ }
+ 
+-- 
+2.53.0
