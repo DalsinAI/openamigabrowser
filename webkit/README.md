@@ -349,6 +349,12 @@ The patches, in order:
   `Conditional=VIDEO`), so pages that test `instanceof MediaError` or
   read its constants run instead of stopping with a ReferenceError.
   VIDEO stays off; nothing makes a MediaError.
+- `0063-amiga-datatype-blank-pictures.patch`: two kinds of picture the
+  datatypes drew blank. An APNG with acTL straight after IHDR (claimed by
+  the animation descriptor) goes to the datatype without its animation
+  chunks, as the PNG of its default image. A GIF whose first frame does not
+  cover the screen goes as that frame alone and is put back in a
+  screen-sized picture, transparent around it.
 - `0070-amiga-public-suffixes-without-libpsl.patch`: public suffixes
   (cookies, sites, `document.domain`) from our own reader of Mozilla's
   Public Suffix List (`PublicSuffixAmiga.c`) in place of libpsl, which is
