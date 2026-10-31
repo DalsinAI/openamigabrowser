@@ -305,6 +305,19 @@ The patches, in order:
   `LIBS:json.library` (version 1) must be installed; without it
   `JSON.parse` throws an Error that says so. Also checks the stack in the
   fast `JSON.stringify` on the 68k (no guard page below the stack).
+- `0059-amiga-cold-code-for-size.patch`: code pages seldom run is built
+  for size. JavaScriptCore's Intl, Temporal and typed array prototype
+  functions, C API, debugger, profilers, tools, the inspector's console
+  part, the builtins' executables and the bytecode dumper get -Os and a
+  plain inline (`WTF_AMIGA_PLAIN_INLINE`, set per source by
+  JavaScriptCore's `PlatformAmiga.cmake`) while the rest of
+  JavaScriptCore keeps -O2; WebCore's `rendering/svg/`,
+  `rendering/mathml/` and `css/typedom/` lose the forced inlining 0056
+  keeps for style, layout and DOM code. The cold objects go last in the
+  JavaScriptCore library, so an inline function both kinds of code use out
+  of line keeps its -O2 copy. On main 71d58e6 the stripped engine is
+  1,858,488 bytes smaller and the JavaScriptEngine image 1,843,036 bytes;
+  page times are unchanged.
 - `0060-amiga-unused-features-not-built.patch`: Web platform features
   the browser switches off at run time are not built: accessibility,
   IndexedDB, service workers (with the Push and Cache APIs), shared
